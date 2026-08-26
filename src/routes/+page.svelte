@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { incidents as initialIncidents } from '$lib/data/incidents';
-	import type { IncidentPriority } from '$lib/types/incident';
+	import type { IncidentPriority, IncidentStatus } from '$lib/types/incident';
 	import { onMount } from 'svelte';
 
 	let incidentList = $state([...initialIncidents]);
@@ -8,6 +8,21 @@
 	let client = $state('');
 	let priority = $state<IncidentPriority>('medium');
 	const STORAGE_KEY = 'soporteflow-incidents';
+
+	let selectedStatus = $state<'all' | IncidentStatus>('all');
+
+	const statusFilters = [
+		{ value: 'all', label: 'Todas' },
+		{ value: 'open', label: 'Abiertas' },
+		{ value: 'pending', label: 'Pendientes' },
+		{ value: 'resolved', label: 'Resueltas' }
+	] satisfies { value: 'all' | IncidentStatus; label: string }[];
+
+	const filteredIncidents = $derived(
+		selectedStatus === 'all'
+			? incidentList
+			: incidentList.filter((incident) => incident.status === selectedStatus)
+	);
 
 	onMount(() => {
 		const storedIncidents = localStorage.getItem(STORAGE_KEY);
@@ -134,7 +149,25 @@
 		<section class="mt-8 rounded-xl border border-slate-800 bg-slate-900">
 			<div class="border-b border-slate-800 px-6 py-5">
 				<h2 class="text-lg font-semibold">Incidencias recientes</h2>
+
 				<p class="text-sm text-slate-400">Aquí aparecerán los últimos casos registrados.</p>
+
+				<div class="mt-4 flex flex-wrap gap-2">
+					{#each statusFilters as filter (filter.value)}
+						<button
+							type="button"
+							onclick={() => (selectedStatus = filter.value)}
+							aria-pressed={selectedStatus === filter.value}
+							class={`rounded-lg px-3 py-2 text-sm font-medium transition ${
+								selectedStatus === filter.value
+									? 'bg-cyan-500 text-slate-950'
+									: 'bg-slate-800 text-slate-400 hover:text-white'
+							}`}
+						>
+							{filter.label}
+						</button>
+					{/each}
+				</div>
 			</div>
 
 			<div class="overflow-x-auto">
@@ -150,7 +183,7 @@
 					</thead>
 
 					<tbody>
-						{#each incidentList as incident (incident.id)}
+						{#each filteredIncidents as incident (incident.id)}
 							<tr class="border-b border-slate-800/70 last:border-0 hover:bg-slate-800/30">
 								<td class="px-6 py-4">
 									<p class="font-medium text-slate-200">{incident.title}</p>
