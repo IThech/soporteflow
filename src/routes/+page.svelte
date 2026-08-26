@@ -1,9 +1,47 @@
 <script lang="ts">
+	import { incidents } from '$lib/data/incidents';
+
 	const summary = [
-		{ label: 'Incidencias abiertas', value: 8, color: 'text-cyan-400' },
-		{ label: 'Pendientes', value: 5, color: 'text-amber-400' },
-		{ label: 'Resueltas', value: 24, color: 'text-emerald-400' }
+		{
+			label: 'Incidencias abiertas',
+			value: incidents.filter((incident) => incident.status === 'open').length,
+			color: 'text-cyan-400'
+		},
+		{
+			label: 'Pendientes',
+			value: incidents.filter((incident) => incident.status === 'pending').length,
+			color: 'text-amber-400'
+		},
+		{
+			label: 'Resueltas',
+			value: incidents.filter((incident) => incident.status === 'resolved').length,
+			color: 'text-emerald-400'
+		}
 	];
+
+	const statusLabels = {
+		open: 'Abierta',
+		pending: 'Pendiente',
+		resolved: 'Resuelta'
+	};
+
+	const statusClasses = {
+		open: 'bg-cyan-400/10 text-cyan-400',
+		pending: 'bg-amber-400/10 text-amber-400',
+		resolved: 'bg-emerald-400/10 text-emerald-400'
+	};
+
+	const priorityLabels = {
+		low: 'Baja',
+		medium: 'Media',
+		high: 'Alta'
+	};
+
+	const priorityClasses = {
+		low: 'text-slate-400',
+		medium: 'text-amber-400',
+		high: 'text-rose-400'
+	};
 </script>
 
 <svelte:head>
@@ -50,8 +88,49 @@
 				<p class="text-sm text-slate-400">Aquí aparecerán los últimos casos registrados.</p>
 			</div>
 
-			<div class="px-6 py-12 text-center text-slate-500">
-				Todavía no hay incidencias disponibles.
+			<div class="overflow-x-auto">
+				<table class="w-full text-left">
+					<thead class="text-xs text-slate-500 uppercase">
+						<tr class="border-b border-slate-800">
+							<th class="px-6 py-4 font-medium">Incidencia</th>
+							<th class="px-6 py-4 font-medium">Cliente</th>
+							<th class="px-6 py-4 font-medium">Prioridad</th>
+							<th class="px-6 py-4 font-medium">Estado</th>
+							<th class="px-6 py-4 font-medium">Fecha</th>
+						</tr>
+					</thead>
+
+					<tbody>
+						{#each incidents as incident (incident.id)}
+							<tr class="border-b border-slate-800/70 last:border-0 hover:bg-slate-800/30">
+								<td class="px-6 py-4">
+									<p class="font-medium text-slate-200">{incident.title}</p>
+									<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
+								</td>
+
+								<td class="px-6 py-4 text-sm text-slate-400">
+									{incident.client}
+								</td>
+
+								<td class={`px-6 py-4 text-sm font-medium ${priorityClasses[incident.priority]}`}>
+									{priorityLabels[incident.priority]}
+								</td>
+
+								<td class="px-6 py-4">
+									<span
+										class={`rounded-full px-3 py-1 text-xs font-semibold ${statusClasses[incident.status]}`}
+									>
+										{statusLabels[incident.status]}
+									</span>
+								</td>
+
+								<td class="px-6 py-4 text-sm text-slate-500">
+									{new Date(incident.createdAt).toLocaleDateString('es-ES')}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
 			</div>
 		</section>
 	</main>
