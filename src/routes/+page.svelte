@@ -74,6 +74,23 @@
 		incidentList = incidentList.map((incident) =>
 			incident.id === id ? { ...incident, status } : incident
 		);
+
+		saveIncidents();
+	}
+
+	function deleteIncident(id: number) {
+		const incident = incidentList.find((item) => item.id === id);
+
+		if (!incident) return;
+
+		const confirmed = window.confirm(
+			`¿Seguro que quieres eliminar la incidencia "${incident.title}"?`
+		);
+
+		if (!confirmed) return;
+
+		incidentList = incidentList.filter((item) => item.id !== id);
+		saveIncidents();
 	}
 
 	function createIncident(event: SubmitEvent) {
@@ -204,6 +221,14 @@
 										<option value="pending">Pendiente</option>
 										<option value="resolved">Resuelta</option>
 									</select>
+
+									<button
+										type="button"
+										onclick={() => deleteIncident(incident.id)}
+										class="mt-2 block text-xs font-medium text-red-400 transition hover:text-red-300"
+									>
+										Eliminar
+									</button>
 								</td>
 
 								<td class="px-6 py-4 text-sm text-slate-500">
