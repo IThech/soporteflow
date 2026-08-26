@@ -4,11 +4,27 @@
 	import { onMount } from 'svelte';
 
 	let incidentList = $state([...initialIncidents]);
+	const summary = $derived([
+		{
+			label: 'Incidencias abiertas',
+			value: incidentList.filter((incident) => incident.status === 'open').length,
+			color: 'text-cyan-400'
+		},
+		{
+			label: 'Pendientes',
+			value: incidentList.filter((incident) => incident.status === 'pending').length,
+			color: 'text-amber-400'
+		},
+		{
+			label: 'Resueltas',
+			value: incidentList.filter((incident) => incident.status === 'resolved').length,
+			color: 'text-emerald-400'
+		}
+	]);
 	let title = $state('');
 	let client = $state('');
 	let priority = $state<IncidentPriority>('medium');
 	const STORAGE_KEY = 'soporteflow-incidents';
-
 	let selectedStatus = $state<'all' | IncidentStatus>('all');
 
 	const statusFilters = [
@@ -40,37 +56,7 @@
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(incidentList));
 	}
 
-	const summary = $derived([
-		{
-			label: 'Incidencias abiertas',
-			value: incidentList.filter((incident) => incident.status === 'open').length,
-			color: 'text-cyan-400'
-		},
-		{
-			label: 'Pendientes',
-			value: incidentList.filter((incident) => incident.status === 'pending').length,
-			color: 'text-amber-400'
-		},
-		{
-			label: 'Resueltas',
-			value: incidentList.filter((incident) => incident.status === 'resolved').length,
-			color: 'text-emerald-400'
-		}
-	]);
-
 	let isFormOpen = $state(false);
-
-	const statusLabels = {
-		open: 'Abierta',
-		pending: 'Pendiente',
-		resolved: 'Resuelta'
-	};
-
-	const statusClasses = {
-		open: 'bg-cyan-400/10 text-cyan-400',
-		pending: 'bg-amber-400/10 text-amber-400',
-		resolved: 'bg-emerald-400/10 text-emerald-400'
-	};
 
 	const priorityLabels = {
 		low: 'Baja',
@@ -83,6 +69,12 @@
 		medium: 'text-amber-400',
 		high: 'text-rose-400'
 	};
+
+	function updateIncidentStatus(id: number, status: IncidentStatus) {
+		incidentList = incidentList.map((incident) =>
+			incident.id === id ? { ...incident, status } : incident
+		);
+	}
 
 	function createIncident(event: SubmitEvent) {
 		event.preventDefault();
@@ -197,13 +189,21 @@
 								<td class={`px-6 py-4 text-sm font-medium ${priorityClasses[incident.priority]}`}>
 									{priorityLabels[incident.priority]}
 								</td>
-
 								<td class="px-6 py-4">
-									<span
-										class={`rounded-full px-3 py-1 text-xs font-semibold ${statusClasses[incident.status]}`}
+									<select
+										value={incident.status}
+										onchange={(event) =>
+											updateIncidentStatus(
+												incident.id,
+												(event.currentTarget as HTMLSelectElement).value as IncidentStatus
+											)}
+										class="rounded-full border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
+										aria-label={`Cambiar estado de ${incident.title}`}
 									>
-										{statusLabels[incident.status]}
-									</span>
+										<option value="open">Abierta</option>
+										<option value="pending">Pendiente</option>
+										<option value="resolved">Resuelta</option>
+									</select>
 								</td>
 
 								<td class="px-6 py-4 text-sm text-slate-500">
