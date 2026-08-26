@@ -1,11 +1,29 @@
 <script lang="ts">
 	import { incidents as initialIncidents } from '$lib/data/incidents';
 	import type { IncidentPriority } from '$lib/types/incident';
+	import { onMount } from 'svelte';
 
 	let incidentList = $state([...initialIncidents]);
 	let title = $state('');
 	let client = $state('');
 	let priority = $state<IncidentPriority>('medium');
+	const STORAGE_KEY = 'soporteflow-incidents';
+
+	onMount(() => {
+		const storedIncidents = localStorage.getItem(STORAGE_KEY);
+
+		if (storedIncidents) {
+			try {
+				incidentList = JSON.parse(storedIncidents);
+			} catch {
+				localStorage.removeItem(STORAGE_KEY);
+			}
+		}
+	});
+
+	function saveIncidents() {
+		localStorage.setItem(STORAGE_KEY, JSON.stringify(incidentList));
+	}
 
 	const summary = $derived([
 		{
@@ -65,6 +83,7 @@
 			priority,
 			createdAt: new Date().toISOString().slice(0, 10)
 		});
+		saveIncidents();
 
 		title = '';
 		client = '';
