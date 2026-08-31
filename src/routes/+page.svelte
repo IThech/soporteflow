@@ -2,6 +2,9 @@
 	import { incidents as initialIncidents } from '$lib/data/incidents';
 	import type { Incident, IncidentPriority, IncidentStatus } from '$lib/types/incident';
 	import { onMount } from 'svelte';
+	import { initialCategories } from '$lib/data/categories';
+	import type { IncidentCategory } from '$lib/types/category';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	let incidentList = $state<Incident[]>([...initialIncidents]);
 	const summary = $derived([
@@ -219,6 +222,61 @@
 		saveIncidents();
 		editingIncident = null;
 	}
+
+	const CATEGORY_STORAGE_KEY = 'soporteflow-categories';
+
+	let categoryList = $state<IncidentCategory[]>(
+		initialCategories.map((category) => ({ ...category }))
+	);
+
+	let categoryLoadError = $state('');
+
+	function isCategoryList(value: unknown): value is IncidentCategory[] {
+		if (!Array.isArray(value)) return false;
+
+		const ids = new SvelteSet<string>();
+
+		return value.every((item: unknown) => {
+			if (typeof item !== 'object' || item === null) return false;
+
+			const category = item as Record<string, unknown>;
+
+			if (
+				typeof category.id !== 'string' ||
+				!category.id.trim() ||
+				typeof category.name !== 'string' ||
+				!category.name.trim() ||
+				typeof category.description !== 'string' ||
+				typeof category.active !== 'boolean'
+			) {
+				return false;
+			}
+
+			if (ids.has(category.id)) return false;
+
+			ids.add(category.id);
+			return true;
+		});
+	}
+
+	onMount(() => {
+		try {
+			const storedCategories = localStorage.getItem(CATEGORY_STORAGE_KEY);
+
+			if (storedCategories !== null) {
+				const parsedCategories: unknown = JSON.parse(storedCategories);
+
+				if (!isCategoryList(parsedCategories)) {
+					throw new Error('El catálogo guardado no tiene un formato válido.');
+				}
+
+				categoryList = parsedCategories;
+			}
+		} catch {
+			categoryLoadError =
+				'No se pudo cargar el catálogo. No se han modificado los datos guardados.';
+		}
+	});
 </script>
 
 <svelte:head>
@@ -371,6 +429,43 @@
 				</table>
 			</div>
 		</section>
+
+		<section
+			aria-labelledby="categories-title"
+			class="mt-8 rounded-xl border border-slate-800 bg-slate-900 p-6"
+		>
+			<h2 id="categories-title" class="text-lg font-semibold">Categorías de incidencias</h2>
+
+			<p class="mt-1 text-sm text-slate-400">
+				Catálogo de categorías para clasificar los casos de soporte.
+			</p>
+
+			{#if categoryLoadError}
+				<p role="alert" class="mt-4 text-sm text-red-400">
+					{categoryLoadError}
+				</p>
+			{:else}
+				<ul class="mt-5 grid gap-3 sm:grid-cols-2">
+					{#each categoryList as category (category.id)}
+						<li class="rounded-lg border border-slate-700 bg-slate-950 p-4">
+							<div class="flex items-center justify-between gap-3">
+								<h3 class="font-medium text-slate-200">{category.name}</h3>
+
+								<span class={`text-xs ${category.active ? 'text-emerald-400' : 'text-slate-500'}`}>
+									{category.active ? 'Activa' : 'Inactiva'}
+								</span>
+							</div>
+
+							<p class="mt-2 text-sm text-slate-400">
+								{category.description}
+							</p>
+						</li>
+					{:else}
+						<li class="text-sm text-slate-400">Todavía no hay categorías configuradas.</li>
+					{/each}
+				</ul>
+			{/if}
+		</section>
 	</main>
 	{#if isFormOpen}
 		<dialog
@@ -397,20 +492,6 @@
 
 			<form class="mt-6 space-y-5" onsubmit={createIncident}>
 				<div>
-					<label for="new-description" class="mb-2 block text-sm font-medium text-slate-300">
-						Descripción del problema (obligatoria)
-					</label>
-
-					<textarea
-						id="new-description"
-						bind:value={description}
-						required
-						rows="3"
-						placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
-						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
-					></textarea>
-				</div>
-				<div>
 					<label for="title" class="mb-2 block text-sm font-medium text-slate-300"> Título </label>
 					<input
 						id="title"
@@ -432,6 +513,21 @@
 						placeholder="Nombre del cliente"
 						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
 					/>
+				</div>
+
+				<div>
+					<label for="new-description" class="mb-2 block text-sm font-medium text-slate-300">
+						Descripción del problema (obligatoria)
+					</label>
+
+					<textarea
+						id="new-description"
+						bind:value={description}
+						required
+						rows="3"
+						placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
+						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+					></textarea>
 				</div>
 
 				<div>

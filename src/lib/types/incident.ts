@@ -11,4 +11,5 @@ export interface Incident {
 	createdAt: string;
 	description?: string;
 	solution?: string;
+	categoryId?: string;
 }
