@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { incidents as initialIncidents } from '$lib/data/incidents';
-	import type { IncidentPriority, IncidentStatus } from '$lib/types/incident';
+	import type { Incident, IncidentPriority, IncidentStatus } from '$lib/types/incident';
 	import { onMount } from 'svelte';
 
-	let incidentList = $state([...initialIncidents]);
+	let incidentList = $state<Incident[]>([...initialIncidents]);
 	const summary = $derived([
 		{
 			label: 'Incidencias abiertas',
@@ -125,7 +125,7 @@
 		isFormOpen = false;
 	}
 
-	type EditableIncident = (typeof initialIncidents)[number];
+	type EditableIncident = Incident;
 
 	let editingIncident = $state<EditableIncident | null>(null);
 
@@ -134,7 +134,11 @@
 
 		if (!incident) return;
 
-		editingIncident = { ...incident };
+		editingIncident = {
+			...incident,
+			description: incident.description ?? '',
+			solution: incident.solution ?? ''
+		};
 	}
 
 	function showEditDialog(dialog: HTMLDialogElement) {
@@ -322,90 +326,86 @@
 		</section>
 	</main>
 	{#if isFormOpen}
-		<div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4">
-			<section
-				role="dialog"
-				aria-modal="true"
-				aria-labelledby="new-incident-title"
-				class="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl"
-			>
-				<div class="flex items-start justify-between">
-					<div>
-						<p class="text-sm font-medium text-cyan-400">Soporte técnico</p>
-						<h2 id="new-incident-title" class="mt-1 text-2xl font-bold">Nueva incidencia</h2>
-					</div>
+		<dialog
+			use:showEditDialog
+			onclose={() => (isFormOpen = false)}
+			aria-labelledby="new-incident-title"
+			class="fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-slate-950/80"
+		>
+			<div class="flex items-start justify-between">
+				<div>
+					<p class="text-sm font-medium text-cyan-400">Soporte técnico</p>
+					<h2 id="new-incident-title" class="mt-1 text-2xl font-bold">Nueva incidencia</h2>
+				</div>
 
+				<button
+					type="button"
+					onclick={() => (isFormOpen = false)}
+					aria-label="Cerrar formulario"
+					class="rounded-lg px-3 py-2 text-slate-400 hover:bg-slate-800 hover:text-white"
+				>
+					✕
+				</button>
+			</div>
+
+			<form class="mt-6 space-y-5" onsubmit={createIncident}>
+				<div>
+					<label for="title" class="mb-2 block text-sm font-medium text-slate-300"> Título </label>
+					<input
+						id="title"
+						bind:value={title}
+						required
+						placeholder="Ej.: El portátil no se conecta a la red"
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
+					/>
+				</div>
+
+				<div>
+					<label for="client" class="mb-2 block text-sm font-medium text-slate-300">
+						Cliente
+					</label>
+					<input
+						id="client"
+						bind:value={client}
+						required
+						placeholder="Nombre del cliente"
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
+					/>
+				</div>
+
+				<div>
+					<label for="priority" class="mb-2 block text-sm font-medium text-slate-300">
+						Prioridad
+					</label>
+					<select
+						id="priority"
+						bind:value={priority}
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+					>
+						<option value="low">Baja</option>
+						<option value="medium">Media</option>
+						<option value="high">Alta</option>
+					</select>
+				</div>
+
+				<div class="flex justify-end gap-3 pt-2">
 					<button
 						type="button"
 						onclick={() => (isFormOpen = false)}
-						aria-label="Cerrar formulario"
-						class="rounded-lg px-3 py-2 text-slate-400 hover:bg-slate-800 hover:text-white"
+						class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
 					>
-						✕
+						Cancelar
+					</button>
+
+					<button
+						type="submit"
+						class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+					>
+						Crear incidencia
 					</button>
 				</div>
-
-				<form class="mt-6 space-y-5" onsubmit={createIncident}>
-					<div>
-						<label for="title" class="mb-2 block text-sm font-medium text-slate-300">
-							Título
-						</label>
-						<input
-							id="title"
-							bind:value={title}
-							required
-							placeholder="Ej.: El portátil no se conecta a la red"
-							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
-						/>
-					</div>
-
-					<div>
-						<label for="client" class="mb-2 block text-sm font-medium text-slate-300">
-							Cliente
-						</label>
-						<input
-							id="client"
-							bind:value={client}
-							required
-							placeholder="Nombre del cliente"
-							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
-						/>
-					</div>
-
-					<div>
-						<label for="priority" class="mb-2 block text-sm font-medium text-slate-300">
-							Prioridad
-						</label>
-						<select
-							id="priority"
-							bind:value={priority}
-							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-						>
-							<option value="low">Baja</option>
-							<option value="medium">Media</option>
-							<option value="high">Alta</option>
-						</select>
-					</div>
-
-					<div class="flex justify-end gap-3 pt-2">
-						<button
-							type="button"
-							onclick={() => (isFormOpen = false)}
-							class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
-						>
-							Cancelar
-						</button>
-
-						<button
-							type="submit"
-							class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
-						>
-							Crear incidencia
-						</button>
-					</div>
-				</form>
-			</section>
-		</div>
+			</form>
+		</dialog>
 	{/if}
 	{#if editingIncident}
 		<dialog
@@ -433,6 +433,31 @@
 			</div>
 
 			<form class="mt-6 space-y-5" onsubmit={saveEditedIncident}>
+				<div>
+					<label for="edit-description" class="mb-2 block text-sm font-medium text-slate-300">
+						Descripción del problema
+					</label>
+					<textarea
+						id="edit-description"
+						bind:value={editingIncident.description}
+						rows="3"
+						placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
+						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+					></textarea>
+				</div>
+
+				<div>
+					<label for="edit-solution" class="mb-2 block text-sm font-medium text-slate-300">
+						Solución aplicada
+					</label>
+					<textarea
+						id="edit-solution"
+						bind:value={editingIncident.solution}
+						rows="3"
+						placeholder="Describe las acciones realizadas y el resultado."
+						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+					></textarea>
+				</div>
 				<div>
 					<label for="edit-title" class="mb-2 block text-sm font-medium text-slate-300">
 						Título

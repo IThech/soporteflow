@@ -9,4 +9,6 @@ export interface Incident {
 	status: IncidentStatus;
 	priority: IncidentPriority;
 	createdAt: string;
+	description?: string;
+	solution?: string;
 }
