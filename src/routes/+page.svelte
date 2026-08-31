@@ -34,11 +34,21 @@
 		{ value: 'resolved', label: 'Resueltas' }
 	] satisfies { value: 'all' | IncidentStatus; label: string }[];
 
-	const filteredIncidents = $derived(
-		selectedStatus === 'all'
-			? incidentList
-			: incidentList.filter((incident) => incident.status === selectedStatus)
-	);
+	let searchQuery = $state('');
+
+	const filteredIncidents = $derived.by(() => {
+		const query = searchQuery.trim().toLocaleLowerCase('es');
+
+		return incidentList.filter((incident) => {
+			const matchesStatus = selectedStatus === 'all' || incident.status === selectedStatus;
+
+			const matchesSearch =
+				incident.title.toLocaleLowerCase('es').includes(query) ||
+				incident.client.toLocaleLowerCase('es').includes(query);
+
+			return matchesStatus && matchesSearch;
+		});
+	});
 
 	onMount(() => {
 		const storedIncidents = localStorage.getItem(STORAGE_KEY);
@@ -200,6 +210,23 @@
 				<h2 class="text-lg font-semibold">Incidencias recientes</h2>
 
 				<p class="text-sm text-slate-400">Aquí aparecerán los últimos casos registrados.</p>
+				<div class="mt-4">
+					<label for="incident-search" class="mb-2 block text-sm font-medium text-slate-300">
+						Buscar incidencias
+					</label>
+
+					<input
+						id="incident-search"
+						type="search"
+						bind:value={searchQuery}
+						placeholder="Escribe un título o cliente..."
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+					/>
+
+					<p class="mt-2 text-xs text-slate-400" role="status">
+						Resultados: {filteredIncidents.length} de {incidentList.length}
+					</p>
+				</div>
 
 				<div class="mt-4 flex flex-wrap gap-2">
 					{#each statusFilters as filter (filter.value)}
@@ -280,6 +307,12 @@
 
 								<td class="px-6 py-4 text-sm text-slate-500">
 									{new Date(incident.createdAt).toLocaleDateString('es-ES')}
+								</td>
+							</tr>
+						{:else}
+							<tr>
+								<td colspan="5" class="px-6 py-10 text-center text-sm text-slate-400">
+									No hay incidencias que coincidan con los filtros actuales.
 								</td>
 							</tr>
 						{/each}
