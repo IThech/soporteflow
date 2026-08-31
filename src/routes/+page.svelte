@@ -495,31 +495,6 @@
 
 			<form class="mt-6 space-y-5" onsubmit={saveEditedIncident}>
 				<div>
-					<label for="edit-description" class="mb-2 block text-sm font-medium text-slate-300">
-						Descripción del problema
-					</label>
-					<textarea
-						id="edit-description"
-						bind:value={editingIncident.description}
-						rows="3"
-						placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
-						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
-						required={editingIncident.status === 'resolved'}></textarea>
-				</div>
-
-				<div>
-					<label for="edit-solution" class="mb-2 block text-sm font-medium text-slate-300">
-						Solución aplicada
-					</label>
-					<textarea
-						id="edit-solution"
-						bind:value={editingIncident.solution}
-						rows="3"
-						placeholder="Describe las acciones realizadas y el resultado."
-						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
-					></textarea>
-				</div>
-				<div>
 					<label for="edit-title" class="mb-2 block text-sm font-medium text-slate-300">
 						Título
 					</label>
@@ -544,33 +519,69 @@
 				</div>
 
 				<div>
-					<label for="edit-priority" class="mb-2 block text-sm font-medium text-slate-300">
-						Prioridad
+					<label for="edit-description" class="mb-2 block text-sm font-medium text-slate-300">
+						Descripción del problema (obligatoria)
 					</label>
-					<select
-						id="edit-priority"
-						bind:value={editingIncident.priority}
-						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-					>
-						<option value="low">Baja</option>
-						<option value="medium">Media</option>
-						<option value="high">Alta</option>
-					</select>
+					<textarea
+						id="edit-description"
+						bind:value={editingIncident.description}
+						required
+						rows="3"
+						placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
+						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+					></textarea>
+				</div>
+
+				<div class="grid gap-5 sm:grid-cols-2">
+					<div>
+						<label for="edit-priority" class="mb-2 block text-sm font-medium text-slate-300">
+							Prioridad
+						</label>
+						<select
+							id="edit-priority"
+							bind:value={editingIncident.priority}
+							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+						>
+							<option value="low">Baja</option>
+							<option value="medium">Media</option>
+							<option value="high">Alta</option>
+						</select>
+					</div>
+
+					<div>
+						<label for="edit-status" class="mb-2 block text-sm font-medium text-slate-300">
+							Estado
+						</label>
+						<select
+							id="edit-status"
+							bind:value={editingIncident.status}
+							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+						>
+							<option value="open">Abierta</option>
+							<option value="pending">Pendiente</option>
+							<option value="resolved">Resuelta</option>
+						</select>
+					</div>
 				</div>
 
 				<div>
-					<label for="edit-status" class="mb-2 block text-sm font-medium text-slate-300">
-						Estado
+					<label for="edit-solution" class="mb-2 block text-sm font-medium text-slate-300">
+						Solución aplicada
+						{editingIncident.status === 'resolved' ? '(obligatoria)' : '(opcional)'}
 					</label>
-					<select
-						id="edit-status"
-						bind:value={editingIncident.status}
-						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-					>
-						<option value="open">Abierta</option>
-						<option value="pending">Pendiente</option>
-						<option value="resolved">Resuelta</option>
-					</select>
+					<textarea
+						id="edit-solution"
+						bind:value={editingIncident.solution}
+						required={editingIncident.status === 'resolved'}
+						aria-describedby="edit-solution-help"
+						rows="3"
+						placeholder="Describe las acciones realizadas y el resultado."
+						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+					></textarea>
+					<p id="edit-solution-help" class="mt-2 text-xs text-slate-400">
+						Para marcar la incidencia como resuelta debes documentar la solución. No incluyas
+						contraseñas ni credenciales.
+					</p>
 				</div>
 
 				<div class="flex justify-end gap-3 pt-2">
