@@ -23,6 +23,7 @@
 	]);
 	let title = $state('');
 	let client = $state('');
+	let description = $state('');
 	let priority = $state<IncidentPriority>('medium');
 	const STORAGE_KEY = 'soporteflow-incidents';
 	let selectedStatus = $state<'all' | IncidentStatus>('all');
@@ -80,10 +81,35 @@
 		high: 'text-rose-400'
 	};
 
-	function updateIncidentStatus(id: number, status: IncidentStatus) {
-		incidentList = incidentList.map((incident) =>
-			incident.id === id ? { ...incident, status } : incident
-		);
+	function updateIncidentStatus(id: number, event: Event) {
+		const select = event.currentTarget as HTMLSelectElement;
+		const status = select.value as IncidentStatus;
+		const incident = incidentList.find((item) => item.id === id);
+
+		if (!incident) return;
+
+		const missingDescription = !incident.description?.trim();
+		const missingSolution = status === 'resolved' && !incident.solution?.trim();
+
+		if (missingDescription || missingSolution) {
+			select.value = incident.status;
+
+			window.alert(
+				missingDescription
+					? 'Completa la descripción del problema antes de cambiar el estado.'
+					: 'Para resolver esta incidencia, indica la solución aplicada.'
+			);
+
+			openEditIncident(id);
+
+			if (editingIncident) {
+				editingIncident.status = status;
+			}
+
+			return;
+		}
+
+		incidentList = incidentList.map((item) => (item.id === id ? { ...item, status } : item));
 
 		saveIncidents();
 	}
@@ -106,21 +132,34 @@
 	function createIncident(event: SubmitEvent) {
 		event.preventDefault();
 
+		const cleanTitle = title.trim();
+		const cleanClient = client.trim();
+		const cleanDescription = description.trim();
+
+		if (!cleanTitle || !cleanClient || !cleanDescription) {
+			window.alert('Completa el título, el cliente y la descripción del problema.');
+			return;
+		}
+
 		const nextId =
 			incidentList.length > 0 ? Math.max(...incidentList.map((incident) => incident.id)) + 1 : 1;
 
 		incidentList.unshift({
 			id: nextId,
-			title,
-			client,
+			title: cleanTitle,
+			client: cleanClient,
+			description: cleanDescription,
+			solution: '',
 			status: 'open',
 			priority,
 			createdAt: new Date().toISOString().slice(0, 10)
 		});
+
 		saveIncidents();
 
 		title = '';
 		client = '';
+		description = '';
 		priority = 'medium';
 		isFormOpen = false;
 	}
@@ -150,14 +189,26 @@
 
 		if (!editingIncident) return;
 
-		const updatedIncident = {
+		const updatedIncident: Incident = {
 			...editingIncident,
 			title: editingIncident.title.trim(),
-			client: editingIncident.client.trim()
+			client: editingIncident.client.trim(),
+			description: (editingIncident.description ?? '').trim(),
+			solution: (editingIncident.solution ?? '').trim()
 		};
 
 		if (!updatedIncident.title || !updatedIncident.client) {
-			window.alert('Escribe un título y un cliente; no pueden contener solo espacios.');
+			window.alert('Completa el título y el cliente.');
+			return;
+		}
+
+		if (!updatedIncident.description) {
+			window.alert('Describe el problema antes de guardar la incidencia.');
+			return;
+		}
+
+		if (updatedIncident.status === 'resolved' && !updatedIncident.solution) {
+			window.alert('Para resolver esta incidencia, indica qué hiciste y cuál fue el resultado.');
 			return;
 		}
 
@@ -287,11 +338,7 @@
 								<td class="px-6 py-4">
 									<select
 										value={incident.status}
-										onchange={(event) =>
-											updateIncidentStatus(
-												incident.id,
-												(event.currentTarget as HTMLSelectElement).value as IncidentStatus
-											)}
+										onchange={(event) => updateIncidentStatus(incident.id, event)}
 										class="rounded-full border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
 										aria-label={`Cambiar estado de ${incident.title}`}
 									>
@@ -349,6 +396,20 @@
 			</div>
 
 			<form class="mt-6 space-y-5" onsubmit={createIncident}>
+				<div>
+					<label for="new-description" class="mb-2 block text-sm font-medium text-slate-300">
+						Descripción del problema (obligatoria)
+					</label>
+
+					<textarea
+						id="new-description"
+						bind:value={description}
+						required
+						rows="3"
+						placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
+						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+					></textarea>
+				</div>
 				<div>
 					<label for="title" class="mb-2 block text-sm font-medium text-slate-300"> Título </label>
 					<input
@@ -443,7 +504,7 @@
 						rows="3"
 						placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
 						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
-					></textarea>
+						required={editingIncident.status === 'resolved'}></textarea>
 				</div>
 
 				<div>
