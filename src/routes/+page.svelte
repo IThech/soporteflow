@@ -114,6 +114,46 @@
 		priority = 'medium';
 		isFormOpen = false;
 	}
+
+	type EditableIncident = (typeof initialIncidents)[number];
+
+	let editingIncident = $state<EditableIncident | null>(null);
+
+	function openEditIncident(id: number) {
+		const incident = incidentList.find((item) => item.id === id);
+
+		if (!incident) return;
+
+		editingIncident = { ...incident };
+	}
+
+	function showEditDialog(dialog: HTMLDialogElement) {
+		dialog.showModal();
+	}
+
+	function saveEditedIncident(event: SubmitEvent) {
+		event.preventDefault();
+
+		if (!editingIncident) return;
+
+		const updatedIncident = {
+			...editingIncident,
+			title: editingIncident.title.trim(),
+			client: editingIncident.client.trim()
+		};
+
+		if (!updatedIncident.title || !updatedIncident.client) {
+			window.alert('Escribe un título y un cliente; no pueden contener solo espacios.');
+			return;
+		}
+
+		incidentList = incidentList.map((incident) =>
+			incident.id === updatedIncident.id ? updatedIncident : incident
+		);
+
+		saveIncidents();
+		editingIncident = null;
+	}
 </script>
 
 <svelte:head>
@@ -195,7 +235,14 @@
 						{#each filteredIncidents as incident (incident.id)}
 							<tr class="border-b border-slate-800/70 last:border-0 hover:bg-slate-800/30">
 								<td class="px-6 py-4">
-									<p class="font-medium text-slate-200">{incident.title}</p>
+									<button
+										type="button"
+										onclick={() => openEditIncident(incident.id)}
+										aria-label={`Editar incidencia ${incident.id}: ${incident.title}`}
+										class="rounded text-left font-medium text-cyan-400 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-400"
+									>
+										{incident.title}
+									</button>
 									<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
 								</td>
 
@@ -326,5 +373,104 @@
 				</form>
 			</section>
 		</div>
+	{/if}
+	{#if editingIncident}
+		<dialog
+			use:showEditDialog
+			onclose={() => (editingIncident = null)}
+			aria-labelledby="edit-incident-title"
+			class="fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-slate-950/80"
+		>
+			<div class="flex items-start justify-between gap-4">
+				<div>
+					<p class="text-sm font-medium text-cyan-400">
+						Incidencia #{editingIncident.id}
+					</p>
+					<h2 id="edit-incident-title" class="mt-1 text-2xl font-bold">Editar incidencia</h2>
+				</div>
+
+				<button
+					type="button"
+					onclick={() => (editingIncident = null)}
+					aria-label="Cerrar edición"
+					class="rounded-lg px-3 py-2 text-slate-400 hover:bg-slate-800 hover:text-white"
+				>
+					✕
+				</button>
+			</div>
+
+			<form class="mt-6 space-y-5" onsubmit={saveEditedIncident}>
+				<div>
+					<label for="edit-title" class="mb-2 block text-sm font-medium text-slate-300">
+						Título
+					</label>
+					<input
+						id="edit-title"
+						bind:value={editingIncident.title}
+						required
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+					/>
+				</div>
+
+				<div>
+					<label for="edit-client" class="mb-2 block text-sm font-medium text-slate-300">
+						Cliente
+					</label>
+					<input
+						id="edit-client"
+						bind:value={editingIncident.client}
+						required
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+					/>
+				</div>
+
+				<div>
+					<label for="edit-priority" class="mb-2 block text-sm font-medium text-slate-300">
+						Prioridad
+					</label>
+					<select
+						id="edit-priority"
+						bind:value={editingIncident.priority}
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+					>
+						<option value="low">Baja</option>
+						<option value="medium">Media</option>
+						<option value="high">Alta</option>
+					</select>
+				</div>
+
+				<div>
+					<label for="edit-status" class="mb-2 block text-sm font-medium text-slate-300">
+						Estado
+					</label>
+					<select
+						id="edit-status"
+						bind:value={editingIncident.status}
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+					>
+						<option value="open">Abierta</option>
+						<option value="pending">Pendiente</option>
+						<option value="resolved">Resuelta</option>
+					</select>
+				</div>
+
+				<div class="flex justify-end gap-3 pt-2">
+					<button
+						type="button"
+						onclick={() => (editingIncident = null)}
+						class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
+					>
+						Cancelar
+					</button>
+
+					<button
+						type="submit"
+						class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+					>
+						Guardar cambios
+					</button>
+				</div>
+			</form>
+		</dialog>
 	{/if}
 </div>
