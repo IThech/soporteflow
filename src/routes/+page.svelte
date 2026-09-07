@@ -4,9 +4,9 @@
 	import { onMount } from 'svelte';
 	import { initialCategories } from '$lib/data/categories';
 	import type { IncidentCategory } from '$lib/types/category';
-	import { SvelteSet } from 'svelte/reactivity';
 
 	let incidentList = $state<Incident[]>([...initialIncidents]);
+
 	const summary = $derived([
 		{
 			label: 'Incidencias abiertas',
@@ -24,11 +24,14 @@
 			color: 'text-emerald-400'
 		}
 	]);
+
 	let title = $state('');
 	let client = $state('');
 	let description = $state('');
 	let priority = $state<IncidentPriority>('medium');
+
 	const STORAGE_KEY = 'soporteflow-incidents';
+
 	let selectedStatus = $state<'all' | IncidentStatus>('all');
 
 	const statusFilters = [
@@ -39,9 +42,16 @@
 	] satisfies { value: 'all' | IncidentStatus; label: string }[];
 
 	let searchQuery = $state('');
-
-const filteredIncidents = $derived.by(() => {
-	const query = searchQuery.trim().toLocaleLowerCase('es');
+		function normalizeSearchText(value: string): string {
+	return value
+		.trim()
+		.toLocaleLowerCase('es')
+		.normalize('NFD')
+		.replace(/[\u0300-\u036f]/g, '')
+		.normalize('NFC');
+}
+	const filteredIncidents = $derived.by(() => {
+	const query = normalizeSearchText(searchQuery);
 	const idQuery = query.startsWith('#') ? query.slice(1) : query;
 
 	return incidentList.filter((incident) => {
@@ -53,12 +63,13 @@ const filteredIncidents = $derived.by(() => {
 
 		const matchesSearch =
 			matchesId ||
-			incident.title.toLocaleLowerCase('es').includes(query) ||
-			incident.client.toLocaleLowerCase('es').includes(query);
+			normalizeSearchText(incident.title).includes(query) ||
+			normalizeSearchText(incident.client).includes(query);
 
 		return matchesStatus && matchesSearch;
 	});
 });
+
 	onMount(() => {
 		const storedIncidents = localStorage.getItem(STORAGE_KEY);
 
@@ -149,15 +160,6 @@ const filteredIncidents = $derived.by(() => {
 			return;
 		}
 
-		if (
-			categoryLoadError ||
-			!newIncidentCategoryId ||
-			!categoryList.some((category) => category.id === newIncidentCategoryId && category.active)
-		) {
-			window.alert('Debes seleccionar una categoría activa para crear la incidencia.');
-			return;
-		}
-
 		const nextId =
 			incidentList.length > 0 ? Math.max(...incidentList.map((incident) => incident.id)) + 1 : 1;
 
@@ -166,7 +168,6 @@ const filteredIncidents = $derived.by(() => {
 			title: cleanTitle,
 			client: cleanClient,
 			description: cleanDescription,
-			categoryId: newIncidentCategoryId,
 			solution: '',
 			status: 'open',
 			priority,
@@ -178,7 +179,6 @@ const filteredIncidents = $derived.by(() => {
 		title = '';
 		client = '';
 		description = '';
-		newIncidentCategoryId = '';
 		priority = 'medium';
 		isFormOpen = false;
 	}
@@ -195,8 +195,7 @@ const filteredIncidents = $derived.by(() => {
 		editingIncident = {
 			...incident,
 			description: incident.description ?? '',
-			solution: incident.solution ?? '',
-			categoryId: incident.categoryId ?? ''
+			solution: incident.solution ?? ''
 		};
 	}
 
@@ -227,26 +226,6 @@ const filteredIncidents = $derived.by(() => {
 			return;
 		}
 
-		const originalIncident = incidentList.find((incident) => incident.id === updatedIncident.id);
-
-		const selectedCategory = updatedIncident.categoryId
-			? categoryList.find((category) => category.id === updatedIncident.categoryId)
-			: undefined;
-
-		const keepsAssignedInactiveCategory =
-			!!selectedCategory &&
-			!selectedCategory.active &&
-			originalIncident?.categoryId === selectedCategory.id;
-
-		if (
-			categoryLoadError ||
-			!selectedCategory ||
-			(!selectedCategory.active && !keepsAssignedInactiveCategory)
-		) {
-			window.alert('Debes seleccionar una categoría activa antes de guardar.');
-			return;
-		}
-
 		if (updatedIncident.status === 'resolved' && !updatedIncident.solution) {
 			window.alert('Para resolver esta incidencia, indica qué hiciste y cuál fue el resultado.');
 			return;
@@ -271,7 +250,7 @@ const filteredIncidents = $derived.by(() => {
 	function isCategoryList(value: unknown): value is IncidentCategory[] {
 		if (!Array.isArray(value)) return false;
 
-		const ids = new SvelteSet<string>();
+		const ids = new Set<string>();
 
 		return value.every((item: unknown) => {
 			if (typeof item !== 'object' || item === null) return false;
@@ -314,184 +293,6 @@ const filteredIncidents = $derived.by(() => {
 				'No se pudo cargar el catálogo. No se han modificado los datos guardados.';
 		}
 	});
-
-	let newCategoryName = $state('');
-	let newCategoryDescription = $state('');
-	let categorySaveError = $state('');
-
-	function normalizeCategoryName(name: string) {
-		return name
-			.trim()
-			.replace(/\s+/g, ' ')
-			.toLocaleLowerCase('es')
-			.normalize('NFD')
-			.replace(/[\u0300-\u0301\u0308]/g, '')
-			.normalize('NFC');
-	}
-
-	function persistCategories(nextCategories: IncidentCategory[]): boolean {
-		if (categoryLoadError) {
-			categorySaveError = 'No podemos modificar las categorías mientras haya un error de carga.';
-			return false;
-		}
-
-		if (!isCategoryList(nextCategories)) {
-			categorySaveError = 'El catálogo contiene datos incorrectos.';
-			return false;
-		}
-
-		try {
-			localStorage.setItem(CATEGORY_STORAGE_KEY, JSON.stringify(nextCategories));
-			categoryList = nextCategories;
-			categorySaveError = '';
-			return true;
-		} catch {
-			categorySaveError =
-				'No se pudieron guardar los cambios en este navegador. Inténtalo de nuevo.';
-			return false;
-		}
-	}
-
-	function createCategory(event: SubmitEvent) {
-		event.preventDefault();
-		categorySaveError = '';
-
-		const name = newCategoryName.trim().replace(/\s+/g, ' ');
-		const description = newCategoryDescription.trim();
-
-		if (!name) {
-			categorySaveError = 'Escribe un nombre para la categoría.';
-			return;
-		}
-
-		const duplicate = categoryList.some(
-			(category) => normalizeCategoryName(category.name) === normalizeCategoryName(name)
-		);
-
-		if (duplicate) {
-			categorySaveError = 'Ya existe una categoría con ese nombre, activa o inactiva.';
-			return;
-		}
-
-		const newCategory: IncidentCategory = {
-			id: crypto.randomUUID(),
-			name,
-			description,
-			active: true
-		};
-
-		if (persistCategories([...categoryList, newCategory])) {
-			newCategoryName = '';
-			newCategoryDescription = '';
-		}
-	}
-
-	function toggleCategoryActive(id: string) {
-		categorySaveError = '';
-
-		const category = categoryList.find((item) => item.id === id);
-
-		if (!category) return;
-
-		if (!category.active) {
-			const duplicateActive = categoryList.some(
-				(item) =>
-					item.id !== id &&
-					item.active &&
-					normalizeCategoryName(item.name) === normalizeCategoryName(category.name)
-			);
-
-			if (duplicateActive) {
-				window.alert(
-					'Ya hay una categoría activa con ese nombre. Renombra esta categoría antes de reactivarla.'
-				);
-				return;
-			}
-		}
-
-		if (
-			category.active &&
-			!window.confirm(
-				`¿Desactivar la categoría "${category.name}"? Se conservará en el catálogo y no se borrarán las incidencias.`
-			)
-		) {
-			return;
-		}
-
-		const nextCategories = categoryList.map((item) =>
-			item.id === id ? { ...item, active: !item.active } : item
-		);
-
-		if (!persistCategories(nextCategories)) {
-			window.alert(categorySaveError);
-		}
-	}
-	let editingCategory = $state<IncidentCategory | null>(null);
-	let categoryEditError = $state('');
-
-	function openEditCategory(id: string) {
-		const category = categoryList.find((item) => item.id === id);
-
-		if (!category || categoryLoadError) return;
-
-		categoryEditError = '';
-		editingCategory = { ...category };
-	}
-
-	function saveEditedCategory(event: SubmitEvent) {
-		event.preventDefault();
-
-		if (!editingCategory) return;
-
-		categoryEditError = '';
-
-		const draft = editingCategory;
-		const name = draft.name.trim().replace(/\s+/g, ' ');
-		const description = draft.description.trim();
-
-		if (!name) {
-			categoryEditError = 'Escribe un nombre para la categoría.';
-			return;
-		}
-
-		const duplicate = categoryList.some(
-			(category) =>
-				category.id !== draft.id &&
-				normalizeCategoryName(category.name) === normalizeCategoryName(name)
-		);
-
-		if (duplicate) {
-			categoryEditError = 'Ya existe otra categoría con ese nombre, activa o inactiva.';
-			return;
-		}
-
-		const updatedCategory = { ...draft, name, description };
-
-		const nextCategories = categoryList.map((category) =>
-			category.id === updatedCategory.id ? updatedCategory : category
-		);
-
-		if (persistCategories(nextCategories)) {
-			editingCategory = null;
-		} else {
-			categoryEditError = categorySaveError;
-		}
-	}
-
-	let newIncidentCategoryId = $state('');
-
-	const activeCategories = $derived(categoryList.filter((category) => category.active));
-
-	function getCategoryLabel(categoryId?: string): string {
-		if (!categoryId) return 'Sin categoría';
-		if (categoryLoadError) return 'Categoría no disponible';
-
-		const category = categoryList.find((item) => item.id === categoryId);
-
-		if (!category) return 'Categoría no disponible';
-
-		return category.active ? category.name : `${category.name} (inactiva)`;
-	}
 </script>
 
 <svelte:head>
@@ -538,6 +339,7 @@ const filteredIncidents = $derived.by(() => {
 				<h2 class="text-lg font-semibold">Incidencias recientes</h2>
 
 				<p class="text-sm text-slate-400">Aquí aparecerán los últimos casos registrados.</p>
+
 				<div class="mt-4">
 					<label for="incident-search" class="mb-2 block text-sm font-medium text-slate-300">
 						Buscar incidencias
@@ -599,9 +401,6 @@ const filteredIncidents = $derived.by(() => {
 										{incident.title}
 									</button>
 									<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
-									<p class="mt-1 text-sm text-slate-400">
-										{getCategoryLabel(incident.categoryId)}
-									</p>
 								</td>
 
 								<td class="px-6 py-4 text-sm text-slate-400">
@@ -611,6 +410,7 @@ const filteredIncidents = $derived.by(() => {
 								<td class={`px-6 py-4 text-sm font-medium ${priorityClasses[incident.priority]}`}>
 									{priorityLabels[incident.priority]}
 								</td>
+
 								<td class="px-6 py-4">
 									<select
 										value={incident.status}
@@ -663,63 +463,17 @@ const filteredIncidents = $derived.by(() => {
 					{categoryLoadError}
 				</p>
 			{:else}
-				<form
-					onsubmit={createCategory}
-					class="mt-5 space-y-4 rounded-lg border border-slate-700 p-4"
-				>
-					<h3 class="font-medium text-slate-200">Nueva categoría</h3>
-
-					<div>
-						<label for="new-category-name" class="mb-2 block text-sm font-medium text-slate-300">
-							Nombre (obligatorio)
-						</label>
-						<input
-							id="new-category-name"
-							bind:value={newCategoryName}
-							required
-							maxlength="80"
-							placeholder="Ej.: Telefonía"
-							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
-						/>
-					</div>
-
-					<div>
-						<label
-							for="new-category-description"
-							class="mb-2 block text-sm font-medium text-slate-300"
-						>
-							Descripción (opcional)
-						</label>
-						<input
-							id="new-category-description"
-							bind:value={newCategoryDescription}
-							maxlength="300"
-							placeholder="Qué incidencias deben clasificarse aquí."
-							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
-						/>
-					</div>
-
-					{#if categorySaveError}
-						<p role="alert" class="text-sm text-red-400">
-							{categorySaveError}
-						</p>
-					{/if}
-
-					<button
-						type="submit"
-						class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
-					>
-						Crear categoría
-					</button>
-				</form>
-
 				<ul class="mt-5 grid gap-3 sm:grid-cols-2">
 					{#each categoryList as category (category.id)}
 						<li class="rounded-lg border border-slate-700 bg-slate-950 p-4">
 							<div class="flex items-center justify-between gap-3">
 								<h3 class="font-medium text-slate-200">{category.name}</h3>
 
-								<span class={`text-xs ${category.active ? 'text-emerald-400' : 'text-slate-500'}`}>
+								<span
+									class={`text-xs ${
+										category.active ? 'text-emerald-400' : 'text-slate-500'
+									}`}
+								>
 									{category.active ? 'Activa' : 'Inactiva'}
 								</span>
 							</div>
@@ -727,22 +481,6 @@ const filteredIncidents = $derived.by(() => {
 							<p class="mt-2 text-sm text-slate-400">
 								{category.description}
 							</p>
-							<button
-								type="button"
-								onclick={() => openEditCategory(category.id)}
-								aria-label={`Editar categoría ${category.name}`}
-								class="mt-4 mr-2 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-cyan-400 hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
-							>
-								Editar
-							</button>
-							<button
-								type="button"
-								onclick={() => toggleCategoryActive(category.id)}
-								aria-label={`${category.active ? 'Desactivar' : 'Reactivar'} categoría ${category.name}`}
-								class="mt-4 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
-							>
-								{category.active ? 'Desactivar' : 'Reactivar'}
-							</button>
 						</li>
 					{:else}
 						<li class="text-sm text-slate-400">Todavía no hay categorías configuradas.</li>
@@ -751,6 +489,7 @@ const filteredIncidents = $derived.by(() => {
 			{/if}
 		</section>
 	</main>
+
 	{#if isFormOpen}
 		<dialog
 			use:showEditDialog
@@ -776,7 +515,7 @@ const filteredIncidents = $derived.by(() => {
 
 			<form class="mt-6 space-y-5" onsubmit={createIncident}>
 				<div>
-					<label for="title" class="mb-2 block text-sm font-medium text-slate-300"> Título </label>
+					<label for="title" class="mb-2 block text-sm font-medium text-slate-300">Título</label>
 					<input
 						id="title"
 						bind:value={title}
@@ -815,35 +554,6 @@ const filteredIncidents = $derived.by(() => {
 				</div>
 
 				<div>
-					<label for="new-incident-category" class="mb-2 block text-sm font-medium text-slate-300">
-						Categoría (obligatoria)
-					</label>
-
-					<select
-						id="new-incident-category"
-						bind:value={newIncidentCategoryId}
-						required
-						disabled={!!categoryLoadError || activeCategories.length === 0}
-						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white"
-					>
-						<option value="" disabled>Selecciona una categoría</option>
-
-						{#each activeCategories as category (category.id)}
-							<option value={category.id}>{category.name}</option>
-						{/each}
-					</select>
-
-					{#if categoryLoadError}
-						<p role="alert" class="mt-2 text-sm text-amber-400">
-							No se pueden crear incidencias hasta recuperar el catálogo de categorías.
-						</p>
-					{:else if activeCategories.length === 0}
-						<p role="alert" class="mt-2 text-sm text-amber-400">
-							Crea o reactiva una categoría antes de registrar incidencias.
-						</p>
-					{/if}
-				</div>
-				<div>
 					<label for="priority" class="mb-2 block text-sm font-medium text-slate-300">
 						Prioridad
 					</label>
@@ -877,6 +587,7 @@ const filteredIncidents = $derived.by(() => {
 			</form>
 		</dialog>
 	{/if}
+
 	{#if editingIncident}
 		<dialog
 			use:showEditDialog
@@ -900,38 +611,6 @@ const filteredIncidents = $derived.by(() => {
 				>
 					✕
 				</button>
-			</div>
-
-			<div>
-				<label for="edit-incident-category" class="mb-2 block text-sm font-medium text-slate-300">
-					Categoría (obligatoria)
-				</label>
-
-				<select
-					id="edit-incident-category"
-					bind:value={editingIncident.categoryId}
-					required
-					disabled={!!categoryLoadError || activeCategories.length === 0}
-					class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white"
-				>
-					<option value="" disabled>Selecciona una categoría</option>
-
-					{#each categoryList.filter((category) => category.active || category.id === editingIncident?.categoryId) as category (category.id)}
-						<option value={category.id}>
-							{category.name}{category.active ? '' : ' (inactiva)'}
-						</option>
-					{/each}
-				</select>
-
-				{#if categoryLoadError}
-					<p role="alert" class="mt-2 text-sm text-amber-400">
-						No se puede modificar la categoría porque el catálogo no está disponible.
-					</p>
-				{:else if activeCategories.length === 0}
-					<p role="alert" class="mt-2 text-sm text-amber-400">
-						No hay categorías activas disponibles.
-					</p>
-				{/if}
 			</div>
 
 			<form class="mt-6 space-y-5" onsubmit={saveEditedIncident}>
@@ -1045,67 +724,3 @@ const filteredIncidents = $derived.by(() => {
 		</dialog>
 	{/if}
 </div>
-{#if editingCategory}
-	<dialog
-		use:showEditDialog
-		onclose={() => (editingCategory = null)}
-		aria-labelledby="edit-category-title"
-		class="fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-slate-950/80"
-	>
-		<h2 id="edit-category-title" class="text-2xl font-bold">Editar categoría</h2>
-
-		<form class="mt-6 space-y-5" onsubmit={saveEditedCategory}>
-			<div>
-				<label for="edit-category-name" class="mb-2 block text-sm font-medium text-slate-300">
-					Nombre (obligatorio)
-				</label>
-				<input
-					id="edit-category-name"
-					bind:value={editingCategory.name}
-					required
-					maxlength="80"
-					class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-				/>
-			</div>
-
-			<div>
-				<label
-					for="edit-category-description"
-					class="mb-2 block text-sm font-medium text-slate-300"
-				>
-					Descripción (opcional)
-				</label>
-				<textarea
-					id="edit-category-description"
-					bind:value={editingCategory.description}
-					maxlength="300"
-					rows="3"
-					class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-				></textarea>
-			</div>
-
-			{#if categoryEditError}
-				<p role="alert" class="text-sm text-red-400">
-					{categoryEditError}
-				</p>
-			{/if}
-
-			<div class="flex justify-end gap-3">
-				<button
-					type="button"
-					onclick={() => (editingCategory = null)}
-					class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
-				>
-					Cancelar
-				</button>
-
-				<button
-					type="submit"
-					class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
-				>
-					Guardar cambios
-				</button>
-			</div>
-		</form>
-	</dialog>
-{/if}
