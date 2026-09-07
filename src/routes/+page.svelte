@@ -6,22 +6,57 @@
 	import type { IncidentCategory } from '$lib/types/category';
 	import { SvelteSet } from 'svelte/reactivity';
 
+	import DemoSessionSelector from '$lib/components/DemoSessionSelector.svelte';
+	import { defaultDemoUser, demoSessionUsers } from '$lib/auth/demo-session';
+	import { hasPermission, canAccessOrganization } from '$lib/auth/permissions';
+	import { canViewIncident, canActOnIncident, canAccessRecord } from '$lib/auth/record-access';
+	import type { AppUser } from '$lib/types/user';
+
 	let incidentList = $state<Incident[]>([...initialIncidents]);
+	let categoryList = $state<IncidentCategory[]>(
+		initialCategories.map((category) => ({ ...category }))
+	);
+	let activeUser = $state<AppUser>(defaultDemoUser);
+	const visibleIncidents = $derived(
+		incidentList.filter((incident) => canViewIncident(activeUser, incident))
+	);
+	const visibleCategories = $derived(
+		categoryList.filter((category) => canAccessRecord(activeUser, category))
+	);
+	const canEdit = $derived(hasPermission(activeUser, 'incidents:edit'));
+	const canDelete = $derived(hasPermission(activeUser, 'incidents:delete'));
+	const canCreate = $derived(hasPermission(activeUser, 'incidents:create'));
+	const canManageCategories = $derived(hasPermission(activeUser, 'categories:manage'));
+
+	function changeDemoUser(user: AppUser) {
+		if (!demoSessionUsers.includes(user)) return;
+		editingIncident = null;
+		categoryDraft = null;
+		categorySaveError = '';
+		isFormOpen = false;
+		title = '';
+		client = '';
+		description = '';
+		priority = 'medium';
+		searchQuery = '';
+		selectedStatus = 'all';
+		activeUser = user;
+	}
 
 	const summary = $derived([
 		{
 			label: 'Incidencias abiertas',
-			value: incidentList.filter((incident) => incident.status === 'open').length,
+			value: visibleIncidents.filter((incident) => incident.status === 'open').length,
 			color: 'text-cyan-400'
 		},
 		{
 			label: 'Pendientes',
-			value: incidentList.filter((incident) => incident.status === 'pending').length,
+			value: visibleIncidents.filter((incident) => incident.status === 'pending').length,
 			color: 'text-amber-400'
 		},
 		{
 			label: 'Resueltas',
-			value: incidentList.filter((incident) => incident.status === 'resolved').length,
+			value: visibleIncidents.filter((incident) => incident.status === 'resolved').length,
 			color: 'text-emerald-400'
 		}
 	]);
@@ -55,7 +90,7 @@
 		const query = normalizeSearchText(searchQuery);
 		const idQuery = query.startsWith('#') ? query.slice(1) : query;
 
-		return incidentList.filter((incident) => {
+		return visibleIncidents.filter((incident) => {
 			const matchesStatus = selectedStatus === 'all' || incident.status === selectedStatus;
 
 			const matchesId = /^\d+$/.test(idQuery) && incident.id === Number(idQuery);
@@ -69,20 +104,52 @@
 		});
 	});
 
+	let incidentLoadError = $state('');
 	onMount(() => {
-		const storedIncidents = localStorage.getItem(STORAGE_KEY);
-
-		if (storedIncidents) {
-			try {
-				incidentList = JSON.parse(storedIncidents);
-			} catch {
-				localStorage.removeItem(STORAGE_KEY);
+		try {
+			const stored = localStorage.getItem(STORAGE_KEY);
+			if (stored !== null) {
+				const parsed: unknown = JSON.parse(stored);
+				if (
+					!Array.isArray(parsed) ||
+					!parsed.every(
+						(item) =>
+							item &&
+							typeof item === 'object' &&
+							Number.isSafeInteger(item.id) &&
+							['title', 'client', 'createdAt'].every((key) => typeof item[key] === 'string') &&
+							['open', 'pending', 'resolved'].includes(item.status) &&
+							['low', 'medium', 'high'].includes(item.priority) &&
+							[
+								'organizationId',
+								'clientUserId',
+								'createdByUserId',
+								'assignedToUserId',
+								'description',
+								'solution',
+								'categoryId'
+							].every((key) => item[key] === undefined || typeof item[key] === 'string')
+					) ||
+					new SvelteSet(parsed.map((item) => item.id)).size !== parsed.length
+				) {
+					throw new Error('Formato de incidencias no válido');
+				}
+				incidentList = parsed;
 			}
+		} catch {
+			incidentLoadError =
+				'No se pudieron cargar las incidencias. Se ha bloqueado la edición para conservar los datos guardados.';
+			incidentList = [];
 		}
 	});
 
 	function saveIncidents() {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(incidentList));
+		if (incidentLoadError) return;
+		try {
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(incidentList));
+		} catch {
+			window.alert('No se pudieron guardar los cambios. Permanecen solo en memoria.');
+		}
 	}
 
 	let isFormOpen = $state(false);
@@ -104,7 +171,8 @@
 		const status = select.value as IncidentStatus;
 		const incident = incidentList.find((item) => item.id === id);
 
-		if (!incident) return;
+		if (!incident || incidentLoadError || !canActOnIncident(activeUser, incident, 'incidents:edit'))
+			return;
 
 		const missingDescription = !incident.description?.trim();
 		const missingSolution = status === 'resolved' && !incident.solution?.trim();
@@ -135,7 +203,12 @@
 	function deleteIncident(id: number) {
 		const incident = incidentList.find((item) => item.id === id);
 
-		if (!incident) return;
+		if (
+			!incident ||
+			incidentLoadError ||
+			!canActOnIncident(activeUser, incident, 'incidents:delete')
+		)
+			return;
 
 		const confirmed = window.confirm(
 			`¿Seguro que quieres eliminar la incidencia "${incident.title}"?`
@@ -150,8 +223,15 @@
 	function createIncident(event: SubmitEvent) {
 		event.preventDefault();
 
+		if (
+			incidentLoadError ||
+			!hasPermission(activeUser, 'incidents:create') ||
+			!activeUser.organizationId ||
+			!canAccessOrganization(activeUser, activeUser.organizationId)
+		)
+			return;
 		const cleanTitle = title.trim();
-		const cleanClient = client.trim();
+		const cleanClient = activeUser.role === 'client' ? activeUser.name : client.trim();
 		const cleanDescription = description.trim();
 
 		if (!cleanTitle || !cleanClient || !cleanDescription) {
@@ -164,6 +244,9 @@
 
 		incidentList.unshift({
 			id: nextId,
+			organizationId: activeUser.organizationId,
+			createdByUserId: activeUser.id,
+			...(activeUser.role === 'client' ? { clientUserId: activeUser.id } : {}),
 			title: cleanTitle,
 			client: cleanClient,
 			description: cleanDescription,
@@ -189,7 +272,8 @@
 	function openEditIncident(id: number) {
 		const incident = incidentList.find((item) => item.id === id);
 
-		if (!incident) return;
+		if (!incident || incidentLoadError || !canActOnIncident(activeUser, incident, 'incidents:edit'))
+			return;
 
 		editingIncident = {
 			...incident,
@@ -205,10 +289,15 @@
 	function saveEditedIncident(event: SubmitEvent) {
 		event.preventDefault();
 
-		if (!editingIncident) return;
+		if (!editingIncident || incidentLoadError) return;
+		const editingId = editingIncident.id;
+		const original = incidentList.find((item) => item.id === editingId);
+		if (!original || !canActOnIncident(activeUser, original, 'incidents:edit')) return;
 
 		const updatedIncident: Incident = {
-			...editingIncident,
+			...original,
+			priority: editingIncident.priority,
+			status: editingIncident.status,
 			title: editingIncident.title.trim(),
 			client: editingIncident.client.trim(),
 			description: (editingIncident.description ?? '').trim(),
@@ -240,11 +329,94 @@
 
 	const CATEGORY_STORAGE_KEY = 'soporteflow-categories';
 
-	let categoryList = $state<IncidentCategory[]>(
-		initialCategories.map((category) => ({ ...category }))
-	);
-
+	let categoryLoaded = $state(false);
 	let categoryLoadError = $state('');
+	let categorySaveError = $state('');
+	let categoryDraft = $state<{ id?: string; name: string; description: string } | null>(null);
+
+	function mayManageCategory(category?: IncidentCategory): boolean {
+		return (
+			categoryLoaded &&
+			!categoryLoadError &&
+			hasPermission(activeUser, 'categories:manage') &&
+			(category
+				? canAccessRecord(activeUser, category)
+				: !!activeUser.organizationId &&
+					canAccessOrganization(activeUser, activeUser.organizationId))
+		);
+	}
+
+	function openCategoryForm(id?: string) {
+		const category = id === undefined ? undefined : categoryList.find((item) => item.id === id);
+		if ((id !== undefined && !category) || !mayManageCategory(category)) return;
+		categorySaveError = '';
+		categoryDraft = category
+			? { id: category.id, name: category.name, description: category.description }
+			: { name: '', description: '' };
+	}
+
+	function persistCategories(next: IncidentCategory[]): boolean {
+		if (!categoryLoaded || categoryLoadError || !hasPermission(activeUser, 'categories:manage'))
+			return false;
+		try {
+			localStorage.setItem(CATEGORY_STORAGE_KEY, JSON.stringify(next));
+			categoryList = next;
+			categorySaveError = '';
+			return true;
+		} catch {
+			categorySaveError =
+				'No se pudieron guardar los cambios. El catálogo no se ha modificado. Inténtalo de nuevo.';
+			return false;
+		}
+	}
+
+	function saveCategory(event: SubmitEvent) {
+		event.preventDefault();
+		if (!categoryDraft) return;
+		const draft = categoryDraft;
+		const original =
+			draft.id === undefined ? undefined : categoryList.find((item) => item.id === draft.id);
+		if ((draft.id !== undefined && !original) || !mayManageCategory(original)) return;
+		const name = draft.name.trim();
+		const description = draft.description.trim();
+		if (!name) {
+			categorySaveError = 'Escribe un nombre para la categoría.';
+			return;
+		}
+		// Compare only within the target organization, including legacy Nodhouses data.
+		if (
+			categoryList.some(
+				(item) =>
+					item.id !== original?.id &&
+					canAccessRecord(activeUser, item) &&
+					normalizeSearchText(item.name) === normalizeSearchText(name)
+			)
+		) {
+			categorySaveError = 'Ya existe una categoría con ese nombre, activa o inactiva.';
+			return;
+		}
+		const category: IncidentCategory = original
+			? { ...original, name, description }
+			: {
+					id: crypto.randomUUID(),
+					organizationId: activeUser.organizationId,
+					name,
+					description,
+					active: true
+				};
+		const next = original
+			? categoryList.map((item) => (item.id === original.id ? category : item))
+			: [...categoryList, category];
+		if (persistCategories(next)) categoryDraft = null;
+	}
+
+	function toggleCategory(id: string) {
+		const category = categoryList.find((item) => item.id === id);
+		if (!category || !mayManageCategory(category)) return;
+		persistCategories(
+			categoryList.map((item) => (item.id === id ? { ...item, active: !item.active } : item))
+		);
+	}
 
 	function isCategoryList(value: unknown): value is IncidentCategory[] {
 		if (!Array.isArray(value)) return false;
@@ -262,7 +434,8 @@
 				typeof category.name !== 'string' ||
 				!category.name.trim() ||
 				typeof category.description !== 'string' ||
-				typeof category.active !== 'boolean'
+				typeof category.active !== 'boolean' ||
+				(category.organizationId !== undefined && typeof category.organizationId !== 'string')
 			) {
 				return false;
 			}
@@ -290,6 +463,8 @@
 		} catch {
 			categoryLoadError =
 				'No se pudo cargar el catálogo. No se han modificado los datos guardados.';
+		} finally {
+			categoryLoaded = true;
 		}
 	});
 </script>
@@ -300,6 +475,7 @@
 </svelte:head>
 
 <div class="min-h-screen bg-slate-950 text-white">
+	<DemoSessionSelector user={activeUser} onchange={changeDemoUser} />
 	<header class="border-b border-slate-800 bg-slate-900">
 		<div class="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
 			<div>
@@ -307,17 +483,23 @@
 				<p class="text-xs text-slate-400">Gestión de soporte técnico</p>
 			</div>
 
-			<button
-				type="button"
-				onclick={() => (isFormOpen = true)}
-				class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
-			>
-				Nueva incidencia
-			</button>
+			{#if canCreate && !incidentLoadError}
+				<button
+					type="button"
+					onclick={() => (isFormOpen = true)}
+					class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+				>
+					Nueva incidencia
+				</button>
+			{/if}
 		</div>
 	</header>
 
 	<main class="mx-auto max-w-7xl px-6 py-10">
+		{#if incidentLoadError}<p role="alert" class="mb-6 text-red-400">{incidentLoadError}</p>{/if}
+		{#if activeUser.role === 'client'}<p class="mb-6 text-sm text-cyan-300">
+				Solo se muestran tus incidencias. Las antiguas sin un cliente vinculado no se incluyen.
+			</p>{/if}
 		<section>
 			<p class="text-sm font-medium text-cyan-400">Panel principal</p>
 			<h1 class="mt-1 text-3xl font-bold">Resumen de incidencias</h1>
@@ -353,7 +535,7 @@
 					/>
 
 					<p class="mt-2 text-xs text-slate-400" role="status">
-						Resultados: {filteredIncidents.length} de {incidentList.length}
+						Resultados: {filteredIncidents.length} de {visibleIncidents.length}
 					</p>
 				</div>
 
@@ -391,14 +573,22 @@
 						{#each filteredIncidents as incident (incident.id)}
 							<tr class="border-b border-slate-800/70 last:border-0 hover:bg-slate-800/30">
 								<td class="px-6 py-4">
-									<button
-										type="button"
-										onclick={() => openEditIncident(incident.id)}
-										aria-label={`Editar incidencia ${incident.id}: ${incident.title}`}
-										class="rounded text-left font-medium text-cyan-400 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-400"
-									>
-										{incident.title}
-									</button>
+									{#if canEdit}
+										<button
+											type="button"
+											onclick={() => openEditIncident(incident.id)}
+											aria-label={`Editar incidencia ${incident.id}: ${incident.title}`}
+											class="rounded text-left font-medium text-cyan-400 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-400"
+										>
+											{incident.title}
+										</button>
+									{:else}<p class="font-medium">{incident.title}</p>
+										<p class="mt-2 text-sm text-slate-400">
+											{incident.description ?? 'Sin descripción'}
+										</p>
+										{#if incident.solution}<p class="mt-1 text-sm text-slate-400">
+												Solución: {incident.solution}
+											</p>{/if}{/if}
 									<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
 								</td>
 
@@ -411,24 +601,31 @@
 								</td>
 
 								<td class="px-6 py-4">
-									<select
-										value={incident.status}
-										onchange={(event) => updateIncidentStatus(incident.id, event)}
-										class="rounded-full border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
-										aria-label={`Cambiar estado de ${incident.title}`}
-									>
-										<option value="open">Abierta</option>
-										<option value="pending">Pendiente</option>
-										<option value="resolved">Resuelta</option>
-									</select>
+									{#if canEdit}
+										<select
+											value={incident.status}
+											onchange={(event) => updateIncidentStatus(incident.id, event)}
+											class="rounded-full border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
+											aria-label={`Cambiar estado de ${incident.title}`}
+										>
+											<option value="open">Abierta</option>
+											<option value="pending">Pendiente</option>
+											<option value="resolved">Resuelta</option>
+										</select>
+									{:else}<span class="text-sm text-slate-300"
+											>{statusFilters.find((filter) => filter.value === incident.status)
+												?.label}</span
+										>{/if}
 
-									<button
-										type="button"
-										onclick={() => deleteIncident(incident.id)}
-										class="mt-2 block text-xs font-medium text-red-400 transition hover:text-red-300"
-									>
-										Eliminar
-									</button>
+									{#if canDelete}
+										<button
+											type="button"
+											onclick={() => deleteIncident(incident.id)}
+											class="mt-2 block text-xs font-medium text-red-400 transition hover:text-red-300"
+										>
+											Eliminar
+										</button>
+									{/if}
 								</td>
 
 								<td class="px-6 py-4 text-sm text-slate-500">
@@ -447,45 +644,127 @@
 			</div>
 		</section>
 
-		<section
-			aria-labelledby="categories-title"
-			class="mt-8 rounded-xl border border-slate-800 bg-slate-900 p-6"
-		>
-			<h2 id="categories-title" class="text-lg font-semibold">Categorías de incidencias</h2>
+		{#if canManageCategories}
+			<section
+				aria-labelledby="categories-title"
+				class="mt-8 rounded-xl border border-slate-800 bg-slate-900 p-6"
+			>
+				<h2 id="categories-title" class="text-lg font-semibold">Categorías de incidencias</h2>
 
-			<p class="mt-1 text-sm text-slate-400">
-				Catálogo de categorías para clasificar los casos de soporte.
-			</p>
-
-			{#if categoryLoadError}
-				<p role="alert" class="mt-4 text-sm text-red-400">
-					{categoryLoadError}
+				<p class="mt-1 text-sm text-slate-400">
+					Catálogo de categorías para clasificar los casos de soporte.
 				</p>
-			{:else}
-				<ul class="mt-5 grid gap-3 sm:grid-cols-2">
-					{#each categoryList as category (category.id)}
-						<li class="rounded-lg border border-slate-700 bg-slate-950 p-4">
-							<div class="flex items-center justify-between gap-3">
-								<h3 class="font-medium text-slate-200">{category.name}</h3>
 
-								<span class={`text-xs ${category.active ? 'text-emerald-400' : 'text-slate-500'}`}>
-									{category.active ? 'Activa' : 'Inactiva'}
-								</span>
-							</div>
+				{#if categoryLoaded && !categoryLoadError}
+					<button
+						type="button"
+						onclick={() => openCategoryForm()}
+						class="mt-4 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+						>Nueva categoría</button
+					>
+				{/if}
+				{#if categorySaveError}<p role="alert" class="mt-4 text-sm text-red-400">
+						{categorySaveError}
+					</p>{/if}
+				{#if categoryDraft && categoryLoaded && !categoryLoadError}
+					<form
+						onsubmit={saveCategory}
+						class="mt-4 space-y-4 rounded-lg border border-slate-700 bg-slate-950 p-4"
+						aria-labelledby="category-form-title"
+					>
+						<h3 id="category-form-title" class="font-semibold">
+							{categoryDraft.id ? 'Editar categoría' : 'Nueva categoría'}
+						</h3>
+						<div>
+							<label for="category-name" class="mb-2 block text-sm text-slate-300"
+								>Nombre (obligatorio)</label
+							>
+							<input
+								id="category-name"
+								bind:value={categoryDraft.name}
+								required
+								class="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-white outline-none focus:border-cyan-400"
+							/>
+						</div>
+						<div>
+							<label for="category-description" class="mb-2 block text-sm text-slate-300"
+								>Descripción (opcional)</label
+							>
+							<textarea
+								id="category-description"
+								bind:value={categoryDraft.description}
+								rows="3"
+								class="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-white outline-none focus:border-cyan-400"
+							></textarea>
+						</div>
+						<div class="flex gap-3">
+							<button
+								type="submit"
+								class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+								>Guardar categoría</button
+							>
+							<button
+								type="button"
+								onclick={() => {
+									categoryDraft = null;
+									categorySaveError = '';
+								}}
+								class="rounded-lg px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
+								>Cancelar</button
+							>
+						</div>
+					</form>
+				{/if}
+				{#if categoryLoadError}
+					<p role="alert" class="mt-4 text-sm text-red-400">
+						{categoryLoadError}
+					</p>
+				{:else}
+					<ul class="mt-5 grid gap-3 sm:grid-cols-2">
+						{#each visibleCategories as category (category.id)}
+							<li class="rounded-lg border border-slate-700 bg-slate-950 p-4">
+								<div class="flex items-center justify-between gap-3">
+									<h3 class="font-medium text-slate-200">{category.name}</h3>
 
-							<p class="mt-2 text-sm text-slate-400">
-								{category.description}
-							</p>
-						</li>
-					{:else}
-						<li class="text-sm text-slate-400">Todavía no hay categorías configuradas.</li>
-					{/each}
-				</ul>
-			{/if}
-		</section>
+									<span
+										class={`text-xs ${category.active ? 'text-emerald-400' : 'text-slate-500'}`}
+									>
+										{category.active ? 'Activa' : 'Inactiva'}
+									</span>
+								</div>
+
+								<p class="mt-2 text-sm text-slate-400">
+									{category.description}
+								</p>
+								{#if categoryLoaded}
+									<div class="mt-4 flex flex-wrap gap-3">
+										<button
+											type="button"
+											onclick={() => openCategoryForm(category.id)}
+											aria-label={`Editar categoría ${category.name}`}
+											class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-cyan-400 hover:bg-slate-800"
+											>Editar</button
+										>
+										<button
+											type="button"
+											onclick={() => toggleCategory(category.id)}
+											aria-label={`${category.active ? 'Desactivar' : 'Reactivar'} categoría ${category.name}`}
+											class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+											>{category.active ? 'Desactivar' : 'Reactivar'}</button
+										>
+									</div>
+								{/if}
+							</li>
+						{:else}
+							<li class="text-sm text-slate-400">Todavía no hay categorías configuradas.</li>
+						{/each}
+					</ul>
+				{/if}
+			</section>
+		{/if}
 	</main>
 
-	{#if isFormOpen}
+	{#if isFormOpen && canCreate && !incidentLoadError}
 		<dialog
 			use:showEditDialog
 			onclose={() => (isFormOpen = false)}
@@ -527,8 +806,9 @@
 					<input
 						id="client"
 						bind:value={client}
+						disabled={activeUser.role === 'client'}
+						placeholder={activeUser.role === 'client' ? activeUser.name : 'Nombre del cliente'}
 						required
-						placeholder="Nombre del cliente"
 						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-cyan-400"
 					/>
 				</div>
@@ -583,7 +863,7 @@
 		</dialog>
 	{/if}
 
-	{#if editingIncident}
+	{#if editingIncident && canEdit}
 		<dialog
 			use:showEditDialog
 			onclose={() => (editingIncident = null)}

@@ -35,19 +35,11 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 		'incidents:assign',
 		'incidents:delete'
 	],
-	technician: [
-		'incidents:view_all',
-		'incidents:create',
-		'incidents:edit',
-		'incidents:assign'
-	],
+	technician: ['incidents:view_all', 'incidents:create', 'incidents:edit', 'incidents:assign'],
 	client: ['incidents:view_own', 'incidents:create']
 };
 
-export function hasPermission(
-	user: AppUser | null | undefined,
-	permission: Permission
-): boolean {
+export function hasPermission(user: AppUser | null | undefined, permission: Permission): boolean {
 	return !!user?.active && rolePermissions[user.role].includes(permission);
 }
 
