@@ -4,6 +4,7 @@
 	import { onMount } from 'svelte';
 	import { initialCategories } from '$lib/data/categories';
 	import type { IncidentCategory } from '$lib/types/category';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	let incidentList = $state<Incident[]>([...initialIncidents]);
 
@@ -42,33 +43,31 @@
 	] satisfies { value: 'all' | IncidentStatus; label: string }[];
 
 	let searchQuery = $state('');
-		function normalizeSearchText(value: string): string {
-	return value
-		.trim()
-		.toLocaleLowerCase('es')
-		.normalize('NFD')
-		.replace(/[\u0300-\u036f]/g, '')
-		.normalize('NFC');
-}
+	function normalizeSearchText(value: string): string {
+		return value
+			.trim()
+			.toLocaleLowerCase('es')
+			.normalize('NFD')
+			.replace(/[\u0300-\u036f]/g, '')
+			.normalize('NFC');
+	}
 	const filteredIncidents = $derived.by(() => {
-	const query = normalizeSearchText(searchQuery);
-	const idQuery = query.startsWith('#') ? query.slice(1) : query;
+		const query = normalizeSearchText(searchQuery);
+		const idQuery = query.startsWith('#') ? query.slice(1) : query;
 
-	return incidentList.filter((incident) => {
-		const matchesStatus =
-			selectedStatus === 'all' || incident.status === selectedStatus;
+		return incidentList.filter((incident) => {
+			const matchesStatus = selectedStatus === 'all' || incident.status === selectedStatus;
 
-		const matchesId =
-			/^\d+$/.test(idQuery) && incident.id === Number(idQuery);
+			const matchesId = /^\d+$/.test(idQuery) && incident.id === Number(idQuery);
 
-		const matchesSearch =
-			matchesId ||
-			normalizeSearchText(incident.title).includes(query) ||
-			normalizeSearchText(incident.client).includes(query);
+			const matchesSearch =
+				matchesId ||
+				normalizeSearchText(incident.title).includes(query) ||
+				normalizeSearchText(incident.client).includes(query);
 
-		return matchesStatus && matchesSearch;
+			return matchesStatus && matchesSearch;
+		});
 	});
-});
 
 	onMount(() => {
 		const storedIncidents = localStorage.getItem(STORAGE_KEY);
@@ -250,7 +249,7 @@
 	function isCategoryList(value: unknown): value is IncidentCategory[] {
 		if (!Array.isArray(value)) return false;
 
-		const ids = new Set<string>();
+		const ids = new SvelteSet<string>();
 
 		return value.every((item: unknown) => {
 			if (typeof item !== 'object' || item === null) return false;
@@ -469,11 +468,7 @@
 							<div class="flex items-center justify-between gap-3">
 								<h3 class="font-medium text-slate-200">{category.name}</h3>
 
-								<span
-									class={`text-xs ${
-										category.active ? 'text-emerald-400' : 'text-slate-500'
-									}`}
-								>
+								<span class={`text-xs ${category.active ? 'text-emerald-400' : 'text-slate-500'}`}>
 									{category.active ? 'Activa' : 'Inactiva'}
 								</span>
 							</div>
