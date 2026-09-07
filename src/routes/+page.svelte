@@ -40,20 +40,25 @@
 
 	let searchQuery = $state('');
 
-	const filteredIncidents = $derived.by(() => {
-		const query = searchQuery.trim().toLocaleLowerCase('es');
+const filteredIncidents = $derived.by(() => {
+	const query = searchQuery.trim().toLocaleLowerCase('es');
+	const idQuery = query.startsWith('#') ? query.slice(1) : query;
 
-		return incidentList.filter((incident) => {
-			const matchesStatus = selectedStatus === 'all' || incident.status === selectedStatus;
+	return incidentList.filter((incident) => {
+		const matchesStatus =
+			selectedStatus === 'all' || incident.status === selectedStatus;
 
-			const matchesSearch =
-				incident.title.toLocaleLowerCase('es').includes(query) ||
-				incident.client.toLocaleLowerCase('es').includes(query);
+		const matchesId =
+			/^\d+$/.test(idQuery) && incident.id === Number(idQuery);
 
-			return matchesStatus && matchesSearch;
-		});
+		const matchesSearch =
+			matchesId ||
+			incident.title.toLocaleLowerCase('es').includes(query) ||
+			incident.client.toLocaleLowerCase('es').includes(query);
+
+		return matchesStatus && matchesSearch;
 	});
-
+});
 	onMount(() => {
 		const storedIncidents = localStorage.getItem(STORAGE_KEY);
 
@@ -542,7 +547,7 @@
 						id="incident-search"
 						type="search"
 						bind:value={searchQuery}
-						placeholder="Escribe un título o cliente..."
+						placeholder="Buscar por ID, título o cliente..."
 						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
 					/>
 
