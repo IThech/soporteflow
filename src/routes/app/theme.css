@@ -1,0 +1,57 @@
+/* Palette overrides are inherited only by the internal app, including its dialogs.
+   Existing Tailwind utilities continue to share one palette across all components. */
+html[data-app-theme='light'] {
+	background: #f1f5f9;
+	color-scheme: light;
+}
+html[data-app-theme='dark'] {
+	background: #020617;
+	color-scheme: dark;
+}
+.support-app {
+	--color-slate-500: #94a3b8;
+	--color-slate-600: #94a3b8;
+}
+html[data-app-theme='light'] .support-app {
+	--color-white: #0f172a;
+	--color-slate-950: #f1f5f9;
+	--color-slate-900: #ffffff;
+	--color-slate-800: #e2e8f0;
+	--color-slate-700: #cbd5e1;
+	--color-slate-600: #64748b;
+	--color-slate-500: #475569;
+	--color-slate-400: #475569;
+	--color-slate-300: #334155;
+	--color-slate-200: #1e293b;
+	--color-cyan-300: #0e7490;
+	--color-cyan-400: #0e7490;
+	--color-cyan-500: #0891b2;
+	--color-amber-300: #92400e;
+	--color-amber-400: #92400e;
+	--color-emerald-300: #047857;
+	--color-emerald-400: #047857;
+	--color-red-300: #b91c1c;
+	--color-red-400: #b91c1c;
+}
+/* Filled accent controls need their own foreground, independent of the page background. */
+.support-app .bg-cyan-500 {
+	color: #083344;
+}
+html[data-app-theme='light'] .support-app .bg-cyan-500 {
+	background: #0e7490;
+	color: #ffffff;
+}
+html[data-app-theme='light'] .support-app .bg-cyan-500:hover {
+	background: #155e75;
+}
+.support-app :is(input, select, textarea, button):focus-visible {
+	outline: 2px solid #0891b2;
+	outline-offset: 3px;
+}
+.support-app :is(input, select, textarea, button):disabled {
+	cursor: not-allowed;
+	opacity: 0.6;
+}
+.support-app dialog::backdrop {
+	background: rgb(2 6 23 / 75%);
+}

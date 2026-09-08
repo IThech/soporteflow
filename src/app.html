@@ -4,6 +4,23 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="text-scale" content="scale" />
+		<script>
+			// Resolve before first paint; the public landing never receives this attribute.
+			if (location.pathname === '/app' || location.pathname.startsWith('/app/')) {
+				let preference = 'system';
+				try {
+					preference = localStorage.getItem('soporteflow-theme');
+				} catch {
+					/* Storage may be unavailable. */
+				}
+				document.documentElement.dataset.appTheme =
+					preference === 'light' || preference === 'dark'
+						? preference
+						: matchMedia('(prefers-color-scheme: dark)').matches
+							? 'dark'
+							: 'light';
+			}
+		</script>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

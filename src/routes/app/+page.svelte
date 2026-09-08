@@ -1,4 +1,6 @@
 <script lang="ts">
+	import ThemeSelector from '$lib/components/ThemeSelector.svelte';
+	import './theme.css';
 	import EscalationDialog from '$lib/components/EscalationDialog.svelte';
 	import { canEscalate, prepareEscalation, type EscalationInput } from '$lib/incidents/escalation';
 	import ReassignmentReasons from '$lib/components/ReassignmentReasons.svelte';
@@ -670,15 +672,16 @@
 	<meta name="description" content="Gestor de incidencias de soporte técnico" />
 </svelte:head>
 
-<div class="min-h-screen bg-slate-950 text-white">
+<div class="support-app min-h-screen bg-slate-950 text-white">
 	<DemoSessionSelector user={activeUser} onchange={changeDemoUser} />
 	<header class="border-b border-slate-800 bg-slate-900">
-		<div class="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+		<div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-4">
 			<div>
 				<p class="text-xl font-bold">Soporte<span class="text-cyan-400">Flow</span></p>
 				<p class="text-xs text-slate-400">Gestión de soporte técnico</p>
 			</div>
 
+			<ThemeSelector />
 			{#if canCreate && !incidentLoadError}
 				<button
 					type="button"
