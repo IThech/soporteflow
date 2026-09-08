@@ -58,7 +58,9 @@ export function describeHistoryEvent(
 				: teams.find(
 						(item) => item.id === value.teamId && item.organizationId === entry.organizationId
 					)?.name || 'Equipo no disponible';
-		return `${level} / ${team}`;
+		const assignee =
+			value.assignedToUserId === null ? 'Sin asignar' : userName(value.assignedToUserId);
+		return `${level} · ${team} (responsable: ${assignee})`;
 	};
 	switch (entry.eventType) {
 		case 'created':

@@ -17,15 +17,15 @@ candidato activo con rol `technician` en la organización de la incidencia.
 Platform admin conserva exactamente el acceso definido en la matriz.
 Asignar a un administrador de organización no está permitido como destino.
 
-La primera asignación genera `assigned` (anterior `null`, nuevo identificador). Un técnico que asigna a otro técnico debe indicar motivo incluso en la asignación inicial. La autoasignación inicial y la asignación inicial por administrador no requieren motivo.
+La primera asignación genera `assigned` (anterior `null`, nuevo identificador). Un técnico solo puede autoasignarse una incidencia libre; no puede asignarla a otro técnico. La autoasignación inicial y la asignación inicial por administrador no requieren motivo.
 Cambiar responsable genera `reassigned` con ambos identificadores y motivo
 obligatorio después de `trim()`. El mismo responsable no produce cambios ni evento.
-La autoasignación sigue esas mismas reglas. El comentario es opcional.
+La autoasignación solo se permite en incidencias libres. El comentario es opcional.
 El motivo «Escalado técnico» no cambia nivel/equipo ni genera `escalated`.
 
 Cada evento utiliza `IncidentHistoryEntry`: id, incidencia, organización, actor,
 fecha UTC con hora y milisegundos, valores anterior/nuevo y motivo/comentario.
-Solo se generan `assigned` y `reassigned` en este bloque. Los otros tipos existentes
+Se generan `assigned`, `reassigned` y `escalated` en los flujos operativos. Los otros tipos existentes
 se validan y conservan, pero no se generan automáticamente. No se inventa historial
 para los registros antiguos. Los eventos se añaden al final sin modificar anteriores.
 
@@ -51,9 +51,8 @@ el historial para no reutilizar el id de una incidencia eliminada con eventos.
 
 ## Pendiente
 
-Escalado real, historial de otras acciones, SLA, notificaciones y validación
-en servidor. Usuarios y equipos siguen siendo datos demo estáticos. Al implementar
-escalado habrá que validar el equipo de destino y guardar su instantánea anterior/nueva.
+Historial de otras acciones, SLA, notificaciones y validación
+en servidor. Usuarios y equipos siguen siendo datos demo estáticos.
 
 ## Pruebas
 
@@ -116,3 +115,76 @@ con otra pestaña requieren recargar. Se mantienen las limitaciones de localStor
 
 Pruebas del catálogo y regresión:
 `node --test --test-concurrency=1 tests/reasons.test.mjs tests/queue.test.mjs tests/assignment.test.mjs`.
+
+## Escalado operativo
+
+Role ≠ SupportLevel ≠ SupportTeam ≠ Assignment. Reasignación = solo responsable.
+Escalado = cambio de nivel y/o equipo; puede incluir cambio de responsable y genera
+un único evento `escalated`, nunca otro `reassigned` simultáneo. Sin cambios no se
+guarda ni se genera historial. El helper delega los cambios de solo responsable a
+las reglas de asignación existentes; la UI dirige ese caso a Asignar/Reasignar,
+conservando el catálogo de motivos y sus validaciones.
+
+La acción Escalar incidencia abre un diálogo con valores actuales, nuevo nivel,
+nuevo equipo, responsable opcional, motivo obligatorio y comentario opcional.
+N1/N2/N3 permiten todos los sentidos de cambio. Nivel y equipo son independientes.
+Los nuevos equipos deben estar activos y pertenecer a la organización de la
+incidencia. Un nuevo responsable debe ser técnico activo de esa organización;
+no se exige coincidencia de su nivel o equipo con el destino. Mantener valores
+históricos inactivos o ausentes no bloquea otro cambio válido. No se añade retirada
+de nivel, equipo o responsable.
+
+La lógica vuelve a validar permisos `incidents:edit` y `incidents:assign`, incluido
+el acceso a la organización. Técnicos y administradores operan en incidencias
+accesibles; clientes no pueden escalar y platform_admin conserva la política
+existente. La matriz no cambia.
+
+El motivo de escalado es texto libre independiente del catálogo de reasignación:
+se exige contenido después de `trim()`. Esta separación mínima evita atribuir al
+catálogo una semántica distinta y no introduce otro CRUD. El comentario opcional
+también se recorta. Ambos se conservan como texto en el evento.
+
+Solo se actualizan los campos de destino que cambian y `updatedAt`; el resto de
+Incident permanece intacto. El evento conserva id, incidencia, organización,
+actor, timestamp, motivo y comentario, con `previousValue` y `newValue` conteniendo
+supportLevel, teamId y assignedToUserId (null si faltaban). Se reutiliza el guardado
+con copia de recuperación de incidencia e historial; la UI cambia tras el éxito.
+El timeline representa antes/después de nivel, equipo y responsable, con nombres
+de la organización y fallbacks comprensibles si faltan registros históricos.
+
+Mis incidencias reacciona al responsable actualizado: sale de la cola del anterior
+y entra en la del nuevo, o permanece si se mantiene. No cambia la ordenación.
+Se añade el equipo demo ficticio Operaciones Nodhouses, junto a Soporte Nodhouses.
+
+**Un escalado o una reasignación NO reiniciará el SLA original de la incidencia.**
+Es una regla futura: este bloque no añade campos SLA, temporizadores ni avisos.
+
+Pruebas completas: `node --test --test-concurrency=1 tests/*.test.mjs`.
+Incluyen combinaciones de destino, permisos, aislamiento, motivos, compatibilidad,
+timeline, cola, persistencia y rollback, además de las regresiones anteriores.
+
+## Responsabilidad operativa y ubicación de acciones
+
+Panel = localizar, priorizar y coger trabajo. Detalle = gestionar la incidencia.
+Historial = trazabilidad cronológica. En las tarjetas solo queda Asignarme para
+el técnico ante una incidencia libre; los administradores gestionan desde el detalle.
+
+El técnico conserva consulta y edición según los permisos existentes sobre las
+incidencias accesibles de su organización. Puede coger una libre con Asignarme,
+sin motivo, pero no asignarla a otro ni escalarla antes de ser responsable.
+Solo el responsable actual puede reasignar o escalar. No puede coger ni reasignar
+arbitrariamente tickets ajenos. `canAssignTo` y `canManageAssignment` centralizan
+estas restricciones y se aplican tanto a la UI como a las operaciones de guardado.
+`canEscalate` añade el permiso de edición a la autorización de gestión.
+
+Organization_admin coordina asignaciones, reasignaciones y escalados dentro de
+su organización. Asignar técnico en una incidencia libre no exige motivo;
+reasignar y escalar sí. Platform_admin conserva los permisos y el acceso existentes.
+Las validaciones de candidatos, catálogo, equipos e historial no cambian.
+
+Gestión de la incidencia aparece después del formulario y sus botones de guardado,
+antes del historial. Muestra responsable, nivel y equipo con fallbacks comprensibles.
+Sus acciones reutilizan los diálogos existentes. Los datos de gestión se derivan
+de la incidencia guardada: al transferirla desaparecen inmediatamente los controles
+del técnico anterior, sin borrar su borrador de título, descripción o solución.
+El guardado de ese borrador conserva el destino operativo más reciente.

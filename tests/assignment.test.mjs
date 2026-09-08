@@ -76,13 +76,15 @@ test('Asignaciones, permisos, historial y recuperación de localStorage', async 
 			assert.equal(requiresAssignmentReason(tech, ticket, tech.id), false);
 			assert.equal(requiresAssignmentReason(admin, ticket, tech.id), false);
 			assert.equal(requiresAssignmentReason(tech, ticket, other.id), true);
-			for (const reason of ['', '   ', '\n\t'])
-				assert.throws(() => prepareAssignment(tech, ticket, demoUsers, other.id, reason), /motivo/);
-			const initialOther = prepareAssignment(tech, ticket, demoUsers, other.id, '  Fin de turno  ');
+			for (const reason of ['', '   ', 'Fin de turno'])
+				assert.throws(
+					() => prepareAssignment(tech, ticket, demoUsers, other.id, reason),
+					/permiso/
+				);
+			const initialOther = prepareAssignment(admin, ticket, demoUsers, other.id);
 			assert.equal(initialOther.event.eventType, 'assigned');
-			assert.equal(initialOther.event.reason, 'Fin de turno');
-			assert.equal(initialOther.event.previousValue, null);
-			for (const actor of [admin, tech, other]) {
+			assert.equal(initialOther.event.reason, undefined);
+			for (const actor of [admin, tech]) {
 				assert.equal(requiresAssignmentReason(actor, assigned.incident, other.id), true);
 				assert.throws(
 					() => prepareAssignment(actor, assigned.incident, demoUsers, other.id),
@@ -98,7 +100,7 @@ test('Asignaciones, permisos, historial y recuperación de localStorage', async 
 			}
 			const storage = store();
 			commitAssignment(storage, [initialOther.incident], [initialOther.event], null, null);
-			assert.equal(loadHistory(storage.getItem(HISTORY_KEY))[0].reason, 'Fin de turno');
+			assert.equal(loadHistory(storage.getItem(HISTORY_KEY))[0].eventType, 'assigned');
 		});
 		await t.test('timeline: vacío, orden natural, organización y exclusión del cliente', () => {
 			assert.deepEqual(visibleIncidentHistory(admin, ticket, []), []);
@@ -220,16 +222,17 @@ test('Asignaciones, permisos, historial y recuperación de localStorage', async 
 			assert.equal(ticket.assignedToUserId, undefined);
 			assert.equal(assigned.incident.supportLevel, 'N1');
 		});
-		await t.test('autoasignación inicial y toma de incidencia de otro técnico', () => {
+		await t.test('Autoasignacion libre; tickets ajenos protegidos', () => {
 			const self = prepareAssignment(tech, ticket, demoUsers, tech.id);
-			assert.equal(self.event.actorUserId, self.event.newValue);
 			assert.equal(self.event.eventType, 'assigned');
-			assert.throws(
-				() => prepareAssignment(other, assigned.incident, demoUsers, other.id),
-				/motivo/
-			);
+			assert.equal(self.event.reason, undefined);
+			for (const target of [tech.id, other.id])
+				assert.throws(
+					() => prepareAssignment(other, assigned.incident, demoUsers, target, 'Carga'),
+					/permiso/
+				);
 			assert.equal(
-				prepareAssignment(other, assigned.incident, demoUsers, other.id, 'Carga de trabajo').event
+				prepareAssignment(admin, assigned.incident, demoUsers, other.id, 'Ausencia').event
 					.eventType,
 				'reassigned'
 			);

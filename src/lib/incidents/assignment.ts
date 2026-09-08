@@ -18,6 +18,21 @@ export function assignmentCandidates(incident: Incident, users: AppUser[]): AppU
 	);
 }
 
+export function canManageAssignment(actor: AppUser, incident: Incident): boolean {
+	return (
+		canActOnIncident(actor, incident, 'incidents:assign') &&
+		(actor.role !== 'technician' || incident.assignedToUserId === actor.id)
+	);
+}
+
+export function canAssignTo(actor: AppUser, incident: Incident, targetId: string): boolean {
+	return (
+		canActOnIncident(actor, incident, 'incidents:assign') &&
+		(actor.role !== 'technician' ||
+			(incident.assignedToUserId ? incident.assignedToUserId === actor.id : targetId === actor.id))
+	);
+}
+
 export function requiresAssignmentReason(
 	actor: AppUser,
 	incident: Incident,
@@ -35,7 +50,7 @@ export function prepareAssignment(
 	reason = '',
 	comment = ''
 ): { incident: Incident; event: IncidentHistoryEntry } | null {
-	if (!canActOnIncident(actor, incident, 'incidents:assign'))
+	if (!canAssignTo(actor, incident, targetId))
 		throw new Error('No tienes permiso para asignar esta incidencia.');
 	const target = assignmentCandidates(incident, users).find((user) => user.id === targetId);
 	if (!target) throw new Error('Selecciona un técnico activo de la organización de la incidencia.');

@@ -96,15 +96,32 @@ test('Catálogo de motivos por organización', async (t) => {
 			for (const value of ['', '   ', '\n\t'])
 				assert.throws(() => resolveReason([], admin.organizationId, OTHER_REASON, value), /vacío/);
 		});
-		await t.test('assigned guarda texto y renombrar/desactivar no cambia evento', () => {
-			const event = prepareCatalogAssignment(tech, ticket, demoUsers, other.id, list, id, '').event;
-			assert.equal(event.eventType, 'assigned');
+		await t.test('reassigned guarda texto y renombrar/desactivar no cambia evento', () => {
+			const event = prepareCatalogAssignment(
+				tech,
+				{ ...ticket, assignedToUserId: tech.id },
+				demoUsers,
+				other.id,
+				list,
+				id,
+				''
+			).event;
+			assert.equal(event.eventType, 'reassigned');
 			assert.equal(event.reason, 'Revisión comercial');
 			const renamed = changeReason(admin, list, { ...create, id, name: 'Cambio posterior' });
 			const off = changeReason(admin, renamed, { type: 'toggle', id });
 			assert.equal(event.reason, 'Revisión comercial');
 			assert.throws(
-				() => prepareCatalogAssignment(tech, ticket, demoUsers, other.id, off, id, ''),
+				() =>
+					prepareCatalogAssignment(
+						tech,
+						{ ...ticket, assignedToUserId: tech.id },
+						demoUsers,
+						other.id,
+						off,
+						id,
+						''
+					),
 				/activo/
 			);
 			assert.equal(loadHistory(JSON.stringify([event]))[0].reason, 'Revisión comercial');

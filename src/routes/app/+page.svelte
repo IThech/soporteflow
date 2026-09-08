@@ -1,4 +1,6 @@
 <script lang="ts">
+	import EscalationDialog from '$lib/components/EscalationDialog.svelte';
+	import { canEscalate, prepareEscalation, type EscalationInput } from '$lib/incidents/escalation';
 	import ReassignmentReasons from '$lib/components/ReassignmentReasons.svelte';
 	import {
 		loadReasons,
@@ -46,6 +48,8 @@
 	import { isIncidentList } from '$lib/incidents/validation';
 	import {
 		assignmentCandidates,
+		canManageAssignment,
+		canAssignTo,
 		prepareCatalogAssignment,
 		incidentOrganizationId
 	} from '$lib/incidents/assignment';
@@ -121,6 +125,8 @@
 		if (!demoSessionUsers.includes(user)) return;
 		editingIncident = null;
 		assignmentIncident = null;
+		escalationIncident = null;
+		escalationError = '';
 		assignmentError = '';
 		categoryDraft = null;
 		categorySaveError = '';
@@ -177,6 +183,46 @@
 	let incidentLoadError = $state('');
 	let history = $state<IncidentHistoryEntry[]>([]);
 	let assignmentReady = $state(false);
+	let escalationIncident = $state<Incident | null>(null);
+	let escalationError = $state('');
+	function openEscalation(incident: Incident) {
+		if (!assignmentReady || incidentLoadError || !canEscalate(activeUser, incident)) return;
+		escalationError = '';
+		escalationIncident = incident;
+	}
+	function confirmEscalation(input: EscalationInput) {
+		if (!assignmentReady || incidentLoadError || !escalationIncident) return;
+		try {
+			const id = escalationIncident.id;
+			const original = incidentList.find((item) => item.id === id);
+			if (!original) throw new Error('La incidencia ya no existe.');
+			const change = prepareEscalation(activeUser, original, demoUsers, demoSupportTeams, input);
+			if (!change) {
+				escalationIncident = null;
+				return;
+			}
+			// Responsible-only changes belong in the existing assignment dialog/catalog.
+			if (change.event.eventType !== 'escalated')
+				throw new Error('Utiliza Asignar/Reasignar para cambiar únicamente el responsable.');
+			const next = incidentList.map((item) => (item.id === id ? change.incident : item));
+			const nextHistory = [...history, change.event];
+			commitAssignment(
+				localStorage,
+				next,
+				nextHistory,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+			incidentList = next;
+			history = nextHistory;
+			storedIncidentSnapshot = JSON.stringify(next);
+			storedHistorySnapshot = JSON.stringify(nextHistory);
+			escalationIncident = null;
+		} catch (error) {
+			escalationError = error instanceof Error ? error.message : 'No se pudo guardar el escalado.';
+		}
+	}
+
 	let assignmentError = $state('');
 	let assignmentIncident = $state<Incident | null>(null);
 	let assignmentTarget = $state('');
@@ -191,12 +237,24 @@
 		);
 		return user ? user.name + (user.active ? '' : ' (inactivo)') : 'Técnico no disponible';
 	}
+	function teamName(incident: Incident): string {
+		if (!incident.teamId) return 'Sin equipo';
+		return (
+			demoSupportTeams.find(
+				(team) =>
+					team.id === incident.teamId && team.organizationId === incidentOrganizationId(incident)
+			)?.name ?? 'Equipo no disponible'
+		);
+	}
+
 	function openAssignment(incident: Incident, self = false) {
 		if (
 			!assignmentReady ||
 			!reasonsReady ||
 			incidentLoadError ||
-			!canActOnIncident(activeUser, incident, 'incidents:assign')
+			!(self
+				? canAssignTo(activeUser, incident, activeUser.id)
+				: canManageAssignment(activeUser, incident))
 		)
 			return;
 		assignmentError = '';
@@ -405,6 +463,7 @@
 	type EditableIncident = Incident;
 
 	let editingIncident = $state<EditableIncident | null>(null);
+	const managedIncident = $derived(incidentList.find((item) => item.id === editingIncident?.id));
 
 	function openEditIncident(id: number) {
 		const incident = incidentList.find((item) => item.id === id);
@@ -758,27 +817,18 @@
 												Solución: {incident.solution}
 											</p>{/if}{/if}
 									<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
+
 									<p class="mt-2 text-sm text-slate-400">Categoría: {categoryName(incident)}</p>
 									<p class="mt-2 text-sm text-slate-300">
 										{incident.assignedToUserId ? 'Asignado a: ' : ''}{assigneeName(incident)}
 									</p>
-									{#if assignmentReady && reasonsReady && !incidentLoadError && canActOnIncident(activeUser, incident, 'incidents:assign')}
-										<div class="mt-2 flex flex-wrap gap-3">
-											<button
-												type="button"
-												onclick={() => openAssignment(incident)}
-												class="rounded border border-slate-700 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-												>{incident.assignedToUserId ? 'Reasignar' : 'Asignar'}</button
-											>
-											{#if activeUser.role === 'technician' && activeUser.id !== incident.assignedToUserId && assignmentCandidates(incident, demoUsers).some((user) => user.id === activeUser.id)}
-												<button
-													type="button"
-													onclick={() => openAssignment(incident, true)}
-													class="rounded border border-slate-700 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-													>Asignarme</button
-												>
-											{/if}
-										</div>
+									{#if assignmentReady && reasonsReady && !incidentLoadError && activeUser.role === 'technician' && !incident.assignedToUserId && canAssignTo(activeUser, incident, activeUser.id)}
+										<button
+											type="button"
+											onclick={() => openAssignment(incident, true)}
+											class="mt-2 rounded border border-slate-700 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+											>Asignarme</button
+										>
 									{/if}
 								</td>
 
@@ -960,13 +1010,30 @@
 				onchange={updateReason}
 			/>{/key}
 	</main>
+	{#if escalationIncident && assignmentReady && !incidentLoadError && canEscalate(activeUser, escalationIncident)}
+		<EscalationDialog
+			incident={escalationIncident}
+			teams={demoSupportTeams}
+			users={demoUsers}
+			currentAssignee={assigneeName(escalationIncident)}
+			error={escalationError}
+			onconfirm={confirmEscalation}
+			oncancel={() => {
+				escalationIncident = null;
+				escalationError = '';
+			}}
+		/>
+	{/if}
 
 	{#if assignmentIncident && assignmentReady && !incidentLoadError && canActOnIncident(activeUser, assignmentIncident, 'incidents:assign')}
 		<AssignmentDialog
 			reasons={reasonList}
 			actor={activeUser}
 			incident={assignmentIncident}
-			candidates={assignmentCandidates(assignmentIncident, demoUsers)}
+			candidates={assignmentCandidates(assignmentIncident, demoUsers).filter(
+				(user) =>
+					assignmentIncident !== null && canAssignTo(activeUser, assignmentIncident, user.id)
+			)}
 			currentName={assigneeName(assignmentIncident)}
 			initialTarget={assignmentTarget}
 			error={assignmentError}
@@ -1209,6 +1276,57 @@
 					</button>
 				</div>
 			</form>
+			{#if managedIncident}
+				<section
+					aria-labelledby="incident-management-title"
+					class="mt-6 rounded-xl border border-slate-700 p-4"
+				>
+					<h3 id="incident-management-title" class="text-lg font-semibold">
+						Gesti�n de la incidencia
+					</h3>
+					<dl class="mt-3 grid gap-3 text-sm sm:grid-cols-3">
+						<div>
+							<dt class="text-slate-400">Responsable</dt>
+							<dd class="mt-1">{assigneeName(managedIncident)}</dd>
+						</div>
+						<div>
+							<dt class="text-slate-400">Nivel</dt>
+							<dd class="mt-1">{managedIncident.supportLevel ?? 'Sin nivel'}</dd>
+						</div>
+						<div>
+							<dt class="text-slate-400">Equipo</dt>
+							<dd class="mt-1">{teamName(managedIncident)}</dd>
+						</div>
+					</dl>
+					<div class="mt-4 flex flex-wrap gap-3">
+						{#if assignmentReady && reasonsReady && !incidentLoadError}
+							{#if canManageAssignment(activeUser, managedIncident)}
+								<button
+									type="button"
+									onclick={() => openAssignment(managedIncident)}
+									class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+									>{managedIncident.assignedToUserId ? 'Reasignar' : 'Asignar t�cnico'}</button
+								>
+							{:else if activeUser.role === 'technician' && !managedIncident.assignedToUserId && canAssignTo(activeUser, managedIncident, activeUser.id)}
+								<button
+									type="button"
+									onclick={() => openAssignment(managedIncident, true)}
+									class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+									>Asignarme</button
+								>
+							{/if}
+						{/if}
+						{#if assignmentReady && !incidentLoadError && canEscalate(activeUser, managedIncident)}
+							<button
+								type="button"
+								onclick={() => openEscalation(managedIncident)}
+								class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+								>Escalar incidencia</button
+							>
+						{/if}
+					</div>
+				</section>
+			{/if}
 			<IncidentTimeline
 				incident={editingIncident}
 				viewer={activeUser}
