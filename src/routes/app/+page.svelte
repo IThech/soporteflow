@@ -1282,7 +1282,7 @@
 					class="mt-6 rounded-xl border border-slate-700 p-4"
 				>
 					<h3 id="incident-management-title" class="text-lg font-semibold">
-						Gesti�n de la incidencia
+						Gestión de la incidencia
 					</h3>
 					<dl class="mt-3 grid gap-3 text-sm sm:grid-cols-3">
 						<div>
@@ -1305,7 +1305,7 @@
 									type="button"
 									onclick={() => openAssignment(managedIncident)}
 									class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-									>{managedIncident.assignedToUserId ? 'Reasignar' : 'Asignar t�cnico'}</button
+									>{managedIncident.assignedToUserId ? 'Reasignar' : 'Asignar técnico'}</button
 								>
 							{:else if activeUser.role === 'technician' && !managedIncident.assignedToUserId && canAssignTo(activeUser, managedIncident, activeUser.id)}
 								<button
