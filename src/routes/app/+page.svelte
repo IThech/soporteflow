@@ -1,4 +1,11 @@
 <script lang="ts">
+	import {
+		queueIncidents,
+		filterIncidentQueue,
+		normalizeSearchText,
+		validQueue,
+		type IncidentQueue
+	} from '$lib/incidents/queue';
 	import { isIncidentList } from '$lib/incidents/validation';
 	import {
 		assignmentCandidates,
@@ -13,6 +20,7 @@
 		HISTORY_KEY,
 		RECOVERY_KEY
 	} from '$lib/storage/assignment';
+	import { demoOrganization } from '$lib/data/organizations';
 	import { demoUsers } from '$lib/data/users';
 	import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 	import IncidentTimeline from '$lib/components/IncidentTimeline.svelte';
@@ -42,6 +50,31 @@
 	const visibleCategories = $derived(
 		categoryList.filter((category) => canAccessRecord(activeUser, category))
 	);
+	let selectedQueue = $state<IncidentQueue>('all');
+	const queueOptions = [
+		{ value: 'all', label: 'Todas' },
+		{ value: 'mine', label: 'Mis incidencias' },
+		{ value: 'unassigned', label: 'Sin asignar' }
+	] satisfies { value: IncidentQueue; label: string }[];
+	const currentQueue = $derived(queueIncidents(activeUser, incidentList, selectedQueue));
+	const mineCount = $derived(
+		activeUser.role === 'technician' ? queueIncidents(activeUser, incidentList, 'mine').length : 0
+	);
+	const unassignedCount = $derived(
+		activeUser.role === 'technician'
+			? queueIncidents(activeUser, incidentList, 'unassigned').length
+			: 0
+	);
+	function categoryName(incident: Incident): string {
+		if (!incident.categoryId) return 'Sin categoría';
+		return (
+			categoryList.find(
+				(category) =>
+					category.id === incident.categoryId &&
+					(category.organizationId ?? demoOrganization.id) === incidentOrganizationId(incident)
+			)?.name ?? 'Categoría no disponible'
+		);
+	}
 	const canEdit = $derived(hasPermission(activeUser, 'incidents:edit'));
 	const canDelete = $derived(hasPermission(activeUser, 'incidents:delete'));
 	const canCreate = $derived(hasPermission(activeUser, 'incidents:create'));
@@ -61,6 +94,7 @@
 		priority = 'medium';
 		searchQuery = '';
 		selectedStatus = 'all';
+		selectedQueue = validQueue(user, 'all');
 		activeUser = user;
 	}
 
@@ -99,31 +133,9 @@
 	] satisfies { value: 'all' | IncidentStatus; label: string }[];
 
 	let searchQuery = $state('');
-	function normalizeSearchText(value: string): string {
-		return value
-			.trim()
-			.toLocaleLowerCase('es')
-			.normalize('NFD')
-			.replace(/[\u0300-\u036f]/g, '')
-			.normalize('NFC');
-	}
-	const filteredIncidents = $derived.by(() => {
-		const query = normalizeSearchText(searchQuery);
-		const idQuery = query.startsWith('#') ? query.slice(1) : query;
-
-		return visibleIncidents.filter((incident) => {
-			const matchesStatus = selectedStatus === 'all' || incident.status === selectedStatus;
-
-			const matchesId = /^\d+$/.test(idQuery) && incident.id === Number(idQuery);
-
-			const matchesSearch =
-				matchesId ||
-				normalizeSearchText(incident.title).includes(query) ||
-				normalizeSearchText(incident.client).includes(query);
-
-			return matchesStatus && matchesSearch;
-		});
-	});
+	const filteredIncidents = $derived(
+		filterIncidentQueue(activeUser, incidentList, selectedQueue, selectedStatus, searchQuery)
+	);
 
 	let incidentLoadError = $state('');
 	let history = $state<IncidentHistoryEntry[]>([]);
@@ -593,7 +605,32 @@
 
 		<section class="mt-8 rounded-xl border border-slate-800 bg-slate-900">
 			<div class="border-b border-slate-800 px-6 py-5">
-				<h2 class="text-lg font-semibold">Incidencias recientes</h2>
+				<h2 class="text-lg font-semibold">
+					{activeUser.role === 'technician'
+						? queueOptions.find((option) => option.value === selectedQueue)?.label
+						: 'Incidencias recientes'}
+				</h2>
+				{#if activeUser.role === 'technician'}
+					<div class="mt-4 flex flex-wrap gap-2" role="group" aria-label="Cola de trabajo">
+						{#each queueOptions as option (option.value)}<button
+								type="button"
+								aria-pressed={selectedQueue === option.value}
+								onclick={() => (selectedQueue = option.value)}
+								class={`rounded-lg border px-4 py-2 text-sm font-semibold ${selectedQueue === option.value ? 'border-cyan-400 bg-cyan-500 text-slate-950' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+								>{option.label}</button
+							>{/each}
+					</div>
+					<p class="mt-3 text-sm text-slate-300" role="status">
+						Asignadas a mí: {mineCount} · Sin asignar: {unassignedCount}
+					</p>
+					<p class="mt-1 text-xs text-slate-400">
+						Totales de tu organización, sin aplicar búsqueda ni estado.
+					</p>
+					{#if selectedQueue === 'mine'}<p class="mt-2 text-sm text-slate-400">
+							Primero abiertas y pendientes, después resueltas. En cada grupo: prioridad alta
+							primero y las más antiguas antes.
+						</p>{/if}
+				{/if}
 
 				<p class="text-sm text-slate-400">Aquí aparecerán los últimos casos registrados.</p>
 
@@ -611,11 +648,11 @@
 					/>
 
 					<p class="mt-2 text-xs text-slate-400" role="status">
-						Resultados: {filteredIncidents.length} de {visibleIncidents.length}
+						Resultados: {filteredIncidents.length} de {currentQueue.length}
 					</p>
 				</div>
 
-				<div class="mt-4 flex flex-wrap gap-2">
+				<div class="mt-4 flex flex-wrap gap-2" role="group" aria-label="Estado de la incidencia">
 					{#each statusFilters as filter (filter.value)}
 						<button
 							type="button"
@@ -666,6 +703,7 @@
 												Solución: {incident.solution}
 											</p>{/if}{/if}
 									<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
+									<p class="mt-2 text-sm text-slate-400">Categoría: {categoryName(incident)}</p>
 									<p class="mt-2 text-sm text-slate-300">
 										{incident.assignedToUserId ? 'Asignado a: ' : ''}{assigneeName(incident)}
 									</p>

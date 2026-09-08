@@ -15,7 +15,7 @@ export interface Incident {
 	createdAt: string;
 	updatedAt?: string;
 	createdByUserId?: string;
-	assignedToUserId?: string;
+	assignedToUserId?: string | null;
 	// Current operational destination, independent of the assigned user's profile.
 	supportLevel?: SupportLevel;
 	teamId?: string;

@@ -8,6 +8,7 @@ export function isIncidentList(parsed: unknown): parsed is Incident[] {
 				item &&
 				typeof item === 'object' &&
 				Number.isSafeInteger(item.id) &&
+				(item.assignedToUserId == null || typeof item.assignedToUserId === 'string') &&
 				['title', 'client', 'createdAt'].every((key) => typeof item[key] === 'string') &&
 				['open', 'pending', 'resolved'].includes(item.status) &&
 				['low', 'medium', 'high'].includes(item.priority) &&
@@ -16,7 +17,6 @@ export function isIncidentList(parsed: unknown): parsed is Incident[] {
 					'organizationId',
 					'clientUserId',
 					'createdByUserId',
-					'assignedToUserId',
 					'teamId',
 					'description',
 					'solution',

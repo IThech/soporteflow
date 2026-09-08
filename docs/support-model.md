@@ -65,3 +65,25 @@ conflictos, datos corruptos y fallos en cada fase del guardado y recuperación.
 ## Historial visual por incidencia
 
 El componente IncidentTimeline aparece debajo del formulario de edición. Muestra los eventos existentes del más antiguo al más reciente, con fecha y hora local, actor, descripción, motivo y comentario. Filtra por incidencia, organización y acceso del usuario, y excluye clientes. Los nombres se resuelven dentro de la organización; los actores de plataforma son reconocidos como tales. Los usuarios ausentes se muestran como Usuario no disponible, sin identificadores internos. Se representan los ocho tipos existentes sin generar nuevos eventos ni duplicar almacenamiento.
+
+## Cola personal del técnico
+
+En `/app`, solo el técnico dispone de Todas / Mis incidencias / Sin asignar.
+Las tres vistas filtran primero por el acceso existente a la organización y se
+combinan con búsqueda normalizada y estado. Mis incidencias compara el responsable
+con el usuario activo; Sin asignar acepta ausencia, null y cadena vacía.
+
+Mis incidencias ordena abiertas y pendientes juntas antes de resueltas; dentro de
+cada grupo, prioridad alta/media/baja y fecha de creación ascendente (ID como
+último desempate). Las fechas no interpretables quedan al final de su prioridad.
+Todas y Sin asignar conservan el orden de la lista original.
+Los contadores de asignadas a mí y sin asignar ignoran búsqueda y estado, pero
+siempre respetan organización y acceso. Se recalculan al asignar/reasignar.
+
+Cambiar usuario demo reinicia la vista a Todas y limpia búsqueda y estado.
+La vista no se guarda en localStorage: recargar conserva los datos de incidencias,
+pero restablece la sesión demo y la vista inicial existentes.
+La categoría se muestra en la fila, con nombre de la organización o un texto
+seguro si falta. No cambia permisos, modelos de equipos ni reglas de asignación.
+
+Pruebas: `node --test --test-concurrency=1 tests/queue.test.mjs tests/assignment.test.mjs`.
