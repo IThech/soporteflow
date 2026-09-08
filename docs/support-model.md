@@ -87,3 +87,32 @@ La categoría se muestra en la fila, con nombre de la organización o un texto
 seguro si falta. No cambia permisos, modelos de equipos ni reglas de asignación.
 
 Pruebas: `node --test --test-concurrency=1 tests/queue.test.mjs tests/assignment.test.mjs`.
+
+## Catálogo de motivos por organización
+
+`ReassignmentReason` tiene id, organizationId, name, description opcional, active,
+createdAt y updatedAt opcional. Es independiente de las categorías. Se guarda en
+`soporteflow-reassignment-reasons`. Una clave ausente usa los motivos demo de
+Nodhouses; una lista guardada vacía se respeta. No se escribe al cargar.
+
+La administración reutiliza `organization:manage` y `canAccessOrganization`:
+administradores de organización gestionan sus motivos y el administrador de
+plataforma conserva su acceso existente. Técnicos y clientes no administran.
+Se crea, edita y desactiva/reactiva, sin borrar. Los duplicados se comprueban en la
+organización ignorando mayúsculas, acentos y espacios, incluyendo motivos inactivos.
+«Otro» es una opción especial de texto libre, por lo que su nombre está reservado.
+
+AssignmentDialog muestra solo los motivos activos de la organización de la
+incidencia. Antes de asignar se vuelve a validar el catálogo y su versión guardada.
+«Otro» exige texto después de trim y funciona sin motivos activos. Las reglas de
+cuándo exigir motivo no cambian. El evento conserva el nombre efectivo como texto
+en `reason`, nunca solo una referencia: renombrar/desactivar no modifica eventos.
+La selección ya no depende de etiquetas técnicas fijas y no ejecuta escalados.
+
+Un catálogo corrupto se conserva y bloquea su administración y las asignaciones
+hasta resolver la carga; las demás funciones no se migran ni se reemplazan.
+Si falla el guardado, la lista en memoria no se actualiza. Los conflictos detectados
+con otra pestaña requieren recargar. Se mantienen las limitaciones de localStorage.
+
+Pruebas del catálogo y regresión:
+`node --test --test-concurrency=1 tests/reasons.test.mjs tests/queue.test.mjs tests/assignment.test.mjs`.

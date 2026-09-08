@@ -1,4 +1,41 @@
 <script lang="ts">
+	import ReassignmentReasons from '$lib/components/ReassignmentReasons.svelte';
+	import {
+		loadReasons,
+		changeReason,
+		saveReasons,
+		REASONS_KEY,
+		type ReasonChange
+	} from '$lib/reasons/catalog';
+	import type { ReassignmentReason } from '$lib/types/reassignment-reason';
+	let reasonList = $state<ReassignmentReason[]>([]);
+	let reasonsReady = $state(false);
+	let reasonError = $state('');
+	let reasonSnapshot: string | null = null;
+	onMount(() => {
+		try {
+			reasonSnapshot = localStorage.getItem(REASONS_KEY);
+			reasonList = loadReasons(reasonSnapshot);
+			reasonsReady = true;
+		} catch {
+			reasonError =
+				'No se pudo cargar el catálogo de motivos. Los datos guardados se han conservado; las asignaciones están bloqueadas.';
+		}
+	});
+	function updateReason(change: ReasonChange): boolean {
+		if (!reasonsReady) return false;
+		try {
+			const next = changeReason(activeUser, reasonList, change);
+			reasonSnapshot = saveReasons(localStorage, next, reasonSnapshot);
+			reasonList = next;
+			reasonError = '';
+			return true;
+		} catch (error) {
+			reasonError = error instanceof Error ? error.message : 'No se pudo guardar el catálogo.';
+			return false;
+		}
+	}
+
 	import {
 		queueIncidents,
 		filterIncidentQueue,
@@ -9,7 +46,7 @@
 	import { isIncidentList } from '$lib/incidents/validation';
 	import {
 		assignmentCandidates,
-		prepareAssignment,
+		prepareCatalogAssignment,
 		incidentOrganizationId
 	} from '$lib/incidents/assignment';
 	import {
@@ -157,6 +194,7 @@
 	function openAssignment(incident: Incident, self = false) {
 		if (
 			!assignmentReady ||
+			!reasonsReady ||
 			incidentLoadError ||
 			!canActOnIncident(activeUser, incident, 'incidents:assign')
 		)
@@ -165,13 +203,24 @@
 		assignmentTarget = self ? activeUser.id : (incident.assignedToUserId ?? '');
 		assignmentIncident = incident;
 	}
-	function confirmAssignment(targetId: string, reason: string, comment: string) {
-		if (!assignmentReady || incidentLoadError || !assignmentIncident) return;
+	function confirmAssignment(targetId: string, selection: string, manual: string, comment: string) {
+		if (!assignmentReady || !reasonsReady || incidentLoadError || !assignmentIncident) return;
 		try {
 			const id = assignmentIncident.id;
 			const original = incidentList.find((item) => item.id === id);
 			if (!original) throw new Error('La incidencia ya no existe.');
-			const change = prepareAssignment(activeUser, original, demoUsers, targetId, reason, comment);
+			if (localStorage.getItem(REASONS_KEY) !== reasonSnapshot)
+				throw new Error('El catálogo ha cambiado. Recarga antes de asignar.');
+			const change = prepareCatalogAssignment(
+				activeUser,
+				original,
+				demoUsers,
+				targetId,
+				reasonList,
+				selection,
+				manual,
+				comment
+			);
 			if (!change) {
 				assignmentIncident = null;
 				return;
@@ -584,6 +633,12 @@
 	</header>
 
 	<main class="mx-auto max-w-7xl px-6 py-10">
+		{#if !reasonsReady && reasonError && activeUser.role !== 'client'}<p
+				role="alert"
+				class="mb-4 text-sm text-red-300"
+			>
+				{reasonError}
+			</p>{/if}
 		{#if incidentLoadError}<p role="alert" class="mb-6 text-red-400">{incidentLoadError}</p>{/if}
 		{#if activeUser.role === 'client'}<p class="mb-6 text-sm text-cyan-300">
 				Solo se muestran tus incidencias. Las antiguas sin un cliente vinculado no se incluyen.
@@ -707,7 +762,7 @@
 									<p class="mt-2 text-sm text-slate-300">
 										{incident.assignedToUserId ? 'Asignado a: ' : ''}{assigneeName(incident)}
 									</p>
-									{#if assignmentReady && !incidentLoadError && canActOnIncident(activeUser, incident, 'incidents:assign')}
+									{#if assignmentReady && reasonsReady && !incidentLoadError && canActOnIncident(activeUser, incident, 'incidents:assign')}
 										<div class="mt-2 flex flex-wrap gap-3">
 											<button
 												type="button"
@@ -897,10 +952,18 @@
 				{/if}
 			</section>
 		{/if}
+		{#key activeUser.id}<ReassignmentReasons
+				actor={activeUser}
+				reasons={reasonList}
+				ready={reasonsReady}
+				error={reasonError}
+				onchange={updateReason}
+			/>{/key}
 	</main>
 
 	{#if assignmentIncident && assignmentReady && !incidentLoadError && canActOnIncident(activeUser, assignmentIncident, 'incidents:assign')}
 		<AssignmentDialog
+			reasons={reasonList}
 			actor={activeUser}
 			incident={assignmentIncident}
 			candidates={assignmentCandidates(assignmentIncident, demoUsers)}

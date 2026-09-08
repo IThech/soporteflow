@@ -1,11 +1,14 @@
 <script lang="ts">
 	import type { Incident } from '$lib/types/incident';
 	import type { AppUser } from '$lib/types/user';
-	import { reassignmentReasons, requiresAssignmentReason } from '$lib/incidents/assignment';
+	import { requiresAssignmentReason, incidentOrganizationId } from '$lib/incidents/assignment';
+	import { activeReasons, OTHER_REASON } from '$lib/reasons/catalog';
+	import type { ReassignmentReason } from '$lib/types/reassignment-reason';
 	let {
 		incident,
 		actor,
 		candidates,
+		reasons,
 		currentName,
 		initialTarget,
 		error,
@@ -15,16 +18,18 @@
 		incident: Incident;
 		actor: AppUser;
 		candidates: AppUser[];
+		reasons: ReassignmentReason[];
 		currentName: string;
 		initialTarget: string;
 		error: string;
-		onconfirm: (target: string, reason: string, comment: string) => void;
+		onconfirm: (target: string, selection: string, manual: string, comment: string) => void;
 		oncancel: () => void;
 	} = $props();
 	let target = $state('');
 	let reason = $state('');
 	let manualReason = $state('');
 	let comment = $state('');
+	const options = $derived(activeReasons(reasons, incidentOrganizationId(incident)));
 	const reassigning = $derived(!!incident.assignedToUserId);
 	const needsReason = $derived(requiresAssignmentReason(actor, incident, target));
 	function show(dialog: HTMLDialogElement) {
@@ -35,7 +40,8 @@
 		event.preventDefault();
 		onconfirm(
 			target,
-			needsReason ? (reason === 'Otro' ? manualReason.trim() : reason.trim()) : '',
+			needsReason ? reason : '',
+			needsReason ? manualReason.trim() : '',
 			comment.trim()
 		);
 	}
@@ -78,6 +84,9 @@
 				No hay técnicos activos disponibles en esta organización.
 			</p>{/if}
 		{#if needsReason}
+			{#if options.length === 0}<p class="text-sm text-slate-400">
+					No hay motivos activos disponibles. Selecciona Otro y describe el motivo.
+				</p>{/if}
 			<div>
 				<label for="assignment-reason" class="mb-2 block text-sm">Motivo (obligatorio)</label>
 				<select
@@ -86,10 +95,11 @@
 					required
 					class="w-full rounded-lg border border-slate-700 bg-slate-950 p-3"
 					><option value="" disabled>Selecciona un motivo</option
-					>{#each reassignmentReasons as item (item)}<option>{item}</option>{/each}</select
+					>{#each options as item (item.id)}<option value={item.id}>{item.name}</option
+						>{/each}<option value={OTHER_REASON}>Otro</option></select
 				>
 			</div>
-			{#if reason === 'Otro'}<div>
+			{#if reason === OTHER_REASON}<div>
 					<label for="assignment-manual" class="mb-2 block text-sm">Describe el motivo</label
 					><textarea
 						id="assignment-manual"
@@ -98,9 +108,6 @@
 						rows="2"
 						class="w-full rounded-lg border border-slate-700 bg-slate-950 p-3"></textarea>
 				</div>{/if}
-			{#if reason === 'Escalado técnico'}<p class="text-sm text-slate-400">
-					Se registra como motivo del cambio de responsable. No cambia el nivel ni el equipo.
-				</p>{/if}
 		{/if}
 		<div>
 			<label for="assignment-comment" class="mb-2 block text-sm">Comentario (opcional)</label

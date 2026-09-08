@@ -1,18 +1,11 @@
+import type { ReassignmentReason } from '$lib/types/reassignment-reason';
+import { resolveReason } from '$lib/reasons/catalog';
 import { canActOnIncident } from '$lib/auth/record-access';
 import { demoOrganization } from '$lib/data/organizations';
 import type { Incident } from '$lib/types/incident';
 import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 import type { AppUser } from '$lib/types/user';
 
-export const reassignmentReasons = [
-	'Fin de turno',
-	'Ausencia / vacaciones',
-	'Requiere otra especialidad',
-	'Escalado técnico',
-	'Carga de trabajo',
-	'Intervención presencial',
-	'Otro'
-] as const;
 export const incidentOrganizationId = (incident: Incident) =>
 	incident.organizationId ?? demoOrganization.id;
 
@@ -66,4 +59,20 @@ export function prepareAssignment(
 			...(comment.trim() ? { comment: comment.trim() } : {})
 		}
 	};
+}
+
+export function prepareCatalogAssignment(
+	actor: AppUser,
+	incident: Incident,
+	users: AppUser[],
+	targetId: string,
+	reasons: ReassignmentReason[],
+	selection: string,
+	manual: string,
+	comment = ''
+) {
+	const reason = requiresAssignmentReason(actor, incident, targetId)
+		? resolveReason(reasons, incidentOrganizationId(incident), selection, manual)
+		: '';
+	return prepareAssignment(actor, incident, users, targetId, reason, comment);
 }
