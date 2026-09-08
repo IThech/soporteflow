@@ -1,43 +1,67 @@
-# Base de soporte e historial
+# Soporte, asignación e historial
 
-El rol sigue controlando permisos mediante la matriz existente. El nivel operativo
-(N1/N2/N3) es independiente del equipo. `SupportTeam` pertenece a una organización;
-su nombre es configurable como dato, sin correspondencia fija entre nivel y área.
-El perfil operativo es opcional para técnicos y administradores de organización.
-Los clientes y administradores de plataforma no tienen perfil técnico.
+El rol controla permisos mediante la matriz existente. El nivel operativo
+(N1/N2/N3) es independiente del equipo. Cada `SupportTeam` pertenece a una
+organización. Técnicos y administradores de organización pueden tener perfil
+operativo opcional; clientes y administradores de plataforma no lo tienen.
 
-`Incident.assignedToUserId` representa el responsable actual. `supportLevel` y
-`teamId` representan el destino operativo de la incidencia: cambiar responsable
-no implica cambiar nivel o equipo, y un escalado puede existir sin responsable.
-Los tres campos son opcionales para mantener los registros antiguos.
+`Incident.assignedToUserId` es el responsable actual. `supportLevel` y `teamId`
+son el destino operativo: una reasignación no modifica estos campos.
+Los registros antiguos sin organización siguen vinculados provisionalmente a
+Nodhouses mediante la regla de compatibilidad existente, sin migrarlos.
 
-`IncidentHistoryEntry` es una entrada independiente, enlazada a la incidencia y
-organización. El actor es quien realiza la acción, no necesariamente el destinatario.
-`eventType` determina los tipos de `previousValue` y `newValue`. En asignación y
-reasignación son identificadores de usuario; en escalado son instantáneas de nivel,
-equipo y responsable. `null` representa explícitamente un destino sin asignar;
-un valor omitido indica información no registrada. No inferir actores ni destinos
-históricos a partir de perfiles actuales.
+## Flujo implementado
 
-Los eventos son: `created`, `assigned`, `reassigned`, `escalated`, `status_changed`,
-`priority_changed`, `category_changed` y `resolved`. Las fechas de historial deben
-ser ISO 8601 UTC con hora y milisegundos. Ordenar cronológicamente por timestamp,
-con id como desempate estable. `reason` y `comment` son opcionales en esta fase.
+`prepareAssignment` comprueba `incidents:assign`, acceso a la incidencia y un
+candidato activo con rol `technician` en la organización de la incidencia.
+Platform admin conserva exactamente el acceso definido en la matriz.
+Asignar a un administrador de organización no está permitido como destino.
 
-## Contratos para el próximo bloque (aún no implementados)
+La primera asignación genera `assigned` (anterior `null`, nuevo identificador). Un técnico que asigna a otro técnico debe indicar motivo incluso en la asignación inicial. La autoasignación inicial y la asignación inicial por administrador no requieren motivo.
+Cambiar responsable genera `reassigned` con ambos identificadores y motivo
+obligatorio después de `trim()`. El mismo responsable no produce cambios ni evento.
+La autoasignación sigue esas mismas reglas. El comentario es opcional.
+El motivo «Escalado técnico» no cambia nivel/equipo ni genera `escalated`.
 
-- Comprobar permisos y organización de incidencia, actor, responsable y equipo.
-- Comprobar que los destinos sean activos y que el responsable pueda actuar como técnico.
-- Registrar responsable anterior y nuevo en reasignación; exigir motivo en esa acción.
-- Registrar nivel/equipo anterior y nuevo en escalado, sin tratarlo como reasignación.
-- Capturar valores antes de modificar la incidencia y conservar el historial sin editarlo.
-- Al resolver, registrar un evento `resolved` con estado anterior, estado resuelto y
-  solución; evitar duplicar la misma transición con `status_changed`.
-- Coordinar persistencia de incidencia e historial para evitar cambios sin su evento.
+Cada evento utiliza `IncidentHistoryEntry`: id, incidencia, organización, actor,
+fecha UTC con hora y milisegundos, valores anterior/nuevo y motivo/comentario.
+Solo se generan `assigned` y `reassigned` en este bloque. Los otros tipos existentes
+se validan y conservan, pero no se generan automáticamente. No se inventa historial
+para los registros antiguos. Los eventos se añaden al final sin modificar anteriores.
 
-Este bloque solo define modelos: no genera eventos, no escribe nuevas claves de
-localStorage y no reconstruye historial ficticio para datos antiguos. El validador
-actual admite los campos nuevos opcionales y rechaza niveles o equipos de tipo
-incorrecto sin borrar el contenido guardado. No hay persistencia de usuarios ni de
-equipos todavía; los equipos demo son datos estáticos. Los tipos no sustituyen la
-validación en ejecución ni la futura autorización en servidor.
+## Persistencia y fallos
+
+- `soporteflow-incidents`: conserva la lista y el responsable actual.
+- `soporteflow-incident-history`: lista de eventos; ausencia equivale a lista vacía.
+- `soporteflow-assignment-recovery`: copia temporal exacta de ambas claves antes
+  de escribir. Se elimina únicamente después de guardar ambas listas.
+
+Si falla una escritura, se restauran las dos claves. Si la restauración también
+falla, la copia permanece para recuperarla al recargar, antes de habilitar edición.
+La UI actualiza sus listas solo tras confirmar el guardado completo.
+Los datos inválidos se conservan y bloquean edición; no se borran automáticamente.
+Se comprueban las versiones leídas para rechazar cambios de otra pestaña.
+LocalStorage no es una base de datos transaccional: no garantiza exclusión entre
+escrituras simultáneas de varias pestañas ni seguridad frente a manipulación local.
+Para esta demo se debe trabajar desde una pestaña y recargar ante un conflicto.
+
+Las otras ediciones de incidencias comprueban también si hay recuperación pendiente
+o versiones diferentes antes de guardar. Los identificadores nuevos tienen en cuenta
+el historial para no reutilizar el id de una incidencia eliminada con eventos.
+
+## Pendiente
+
+Escalado real, historial de otras acciones, SLA, notificaciones y validación
+en servidor. Usuarios y equipos siguen siendo datos demo estáticos. Al implementar
+escalado habrá que validar el equipo de destino y guardar su instantánea anterior/nueva.
+
+## Pruebas
+
+Ejecutar `node --test tests/assignment.test.mjs` desde la raíz del proyecto.
+Usa las funciones reales con almacenamiento simulado; no toca datos del navegador.
+Incluye permisos, aislamiento, motivos, autoasignación, persistencia, claves ausentes,
+conflictos, datos corruptos y fallos en cada fase del guardado y recuperación.
+
+## Historial visual por incidencia
+
+El componente IncidentTimeline aparece debajo del formulario de edición. Muestra los eventos existentes del más antiguo al más reciente, con fecha y hora local, actor, descripción, motivo y comentario. Filtra por incidencia, organización y acceso del usuario, y excluye clientes. Los nombres se resuelven dentro de la organización; los actores de plataforma son reconocidos como tales. Los usuarios ausentes se muestran como Usuario no disponible, sin identificadores internos. Se representan los ocho tipos existentes sin generar nuevos eventos ni duplicar almacenamiento.

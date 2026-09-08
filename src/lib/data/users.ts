@@ -32,6 +32,17 @@ export const demoUsers: AppUser[] = [
 		createdAt: '2026-09-07'
 	},
 	{
+		id: 'user-nodhouses-technician-2',
+		organizationId: demoOrganization.id,
+		name: 'Jarvys (técnico demo)',
+		email: 'jarvys@nodhouses.test',
+		role: 'technician',
+		supportLevel: 'N2',
+		teamId: demoSupportTeam.id,
+		active: true,
+		createdAt: '2026-09-08'
+	},
+	{
 		id: 'user-nodhouses-client',
 		organizationId: demoOrganization.id,
 		name: 'Cliente de prueba',

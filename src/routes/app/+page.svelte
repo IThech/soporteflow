@@ -1,5 +1,23 @@
 <script lang="ts">
-	import { supportLevels } from '$lib/types/support';
+	import { isIncidentList } from '$lib/incidents/validation';
+	import {
+		assignmentCandidates,
+		prepareAssignment,
+		incidentOrganizationId
+	} from '$lib/incidents/assignment';
+	import {
+		loadHistory,
+		recoverAssignment,
+		commitAssignment,
+		INCIDENTS_KEY,
+		HISTORY_KEY,
+		RECOVERY_KEY
+	} from '$lib/storage/assignment';
+	import { demoUsers } from '$lib/data/users';
+	import type { IncidentHistoryEntry } from '$lib/types/incident-history';
+	import IncidentTimeline from '$lib/components/IncidentTimeline.svelte';
+	import { demoSupportTeams } from '$lib/data/teams';
+	import AssignmentDialog from '$lib/components/AssignmentDialog.svelte';
 	import { incidents as initialIncidents } from '$lib/data/incidents';
 	import type { Incident, IncidentPriority, IncidentStatus } from '$lib/types/incident';
 	import { onMount } from 'svelte';
@@ -32,6 +50,8 @@
 	function changeDemoUser(user: AppUser) {
 		if (!demoSessionUsers.includes(user)) return;
 		editingIncident = null;
+		assignmentIncident = null;
+		assignmentError = '';
 		categoryDraft = null;
 		categorySaveError = '';
 		isFormOpen = false;
@@ -67,7 +87,7 @@
 	let description = $state('');
 	let priority = $state<IncidentPriority>('medium');
 
-	const STORAGE_KEY = 'soporteflow-incidents';
+	const STORAGE_KEY = INCIDENTS_KEY;
 
 	let selectedStatus = $state<'all' | IncidentStatus>('all');
 
@@ -106,42 +126,82 @@
 	});
 
 	let incidentLoadError = $state('');
+	let history = $state<IncidentHistoryEntry[]>([]);
+	let assignmentReady = $state(false);
+	let assignmentError = $state('');
+	let assignmentIncident = $state<Incident | null>(null);
+	let assignmentTarget = $state('');
+	let storedIncidentSnapshot: string | null = null;
+	let storedHistorySnapshot: string | null = null;
+	function assigneeName(incident: Incident): string {
+		if (!incident.assignedToUserId) return 'Sin asignar';
+		const user = demoUsers.find(
+			(item) =>
+				item.id === incident.assignedToUserId &&
+				item.organizationId === incidentOrganizationId(incident)
+		);
+		return user ? user.name + (user.active ? '' : ' (inactivo)') : 'Técnico no disponible';
+	}
+	function openAssignment(incident: Incident, self = false) {
+		if (
+			!assignmentReady ||
+			incidentLoadError ||
+			!canActOnIncident(activeUser, incident, 'incidents:assign')
+		)
+			return;
+		assignmentError = '';
+		assignmentTarget = self ? activeUser.id : (incident.assignedToUserId ?? '');
+		assignmentIncident = incident;
+	}
+	function confirmAssignment(targetId: string, reason: string, comment: string) {
+		if (!assignmentReady || incidentLoadError || !assignmentIncident) return;
+		try {
+			const id = assignmentIncident.id;
+			const original = incidentList.find((item) => item.id === id);
+			if (!original) throw new Error('La incidencia ya no existe.');
+			const change = prepareAssignment(activeUser, original, demoUsers, targetId, reason, comment);
+			if (!change) {
+				assignmentIncident = null;
+				return;
+			}
+			const next = incidentList.map((item) => (item.id === id ? change.incident : item));
+			const nextHistory = [...history, change.event];
+			commitAssignment(
+				localStorage,
+				next,
+				nextHistory,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+			incidentList = next;
+			history = nextHistory;
+			storedIncidentSnapshot = JSON.stringify(next);
+			storedHistorySnapshot = JSON.stringify(nextHistory);
+			assignmentIncident = null;
+		} catch (error) {
+			assignmentError =
+				error instanceof Error ? error.message : 'No se pudo guardar la asignación.';
+		}
+	}
+
 	onMount(() => {
 		try {
+			recoverAssignment(localStorage);
 			const stored = localStorage.getItem(STORAGE_KEY);
+			storedIncidentSnapshot = stored;
+			storedHistorySnapshot = localStorage.getItem(HISTORY_KEY);
+			history = loadHistory(storedHistorySnapshot);
 			if (stored !== null) {
 				const parsed: unknown = JSON.parse(stored);
-				if (
-					!Array.isArray(parsed) ||
-					!parsed.every(
-						(item) =>
-							item &&
-							typeof item === 'object' &&
-							Number.isSafeInteger(item.id) &&
-							['title', 'client', 'createdAt'].every((key) => typeof item[key] === 'string') &&
-							['open', 'pending', 'resolved'].includes(item.status) &&
-							['low', 'medium', 'high'].includes(item.priority) &&
-							(item.supportLevel === undefined || supportLevels.includes(item.supportLevel)) &&
-							[
-								'organizationId',
-								'clientUserId',
-								'createdByUserId',
-								'assignedToUserId',
-								'teamId',
-								'description',
-								'solution',
-								'categoryId'
-							].every((key) => item[key] === undefined || typeof item[key] === 'string')
-					) ||
-					new SvelteSet(parsed.map((item) => item.id)).size !== parsed.length
-				) {
+				if (!isIncidentList(parsed)) {
 					throw new Error('Formato de incidencias no válido');
 				}
 				incidentList = parsed;
 			}
+			assignmentReady = true;
 		} catch {
 			incidentLoadError =
-				'No se pudieron cargar las incidencias. Se ha bloqueado la edición para conservar los datos guardados.';
+				'No se pudieron cargar las incidencias o su historial. Se ha bloqueado la edición para conservar los datos guardados.';
 			incidentList = [];
 		}
 	});
@@ -149,9 +209,18 @@
 	function saveIncidents() {
 		if (incidentLoadError) return;
 		try {
+			if (
+				localStorage.getItem(STORAGE_KEY) !== storedIncidentSnapshot ||
+				localStorage.getItem(HISTORY_KEY) !== storedHistorySnapshot ||
+				localStorage.getItem(RECOVERY_KEY) !== null
+			)
+				throw new Error('Los datos han cambiado en otra pestaña. Recarga antes de continuar.');
 			localStorage.setItem(STORAGE_KEY, JSON.stringify(incidentList));
+			storedIncidentSnapshot = JSON.stringify(incidentList);
 		} catch {
-			window.alert('No se pudieron guardar los cambios. Permanecen solo en memoria.');
+			incidentLoadError =
+				'No se pudieron guardar los cambios o los datos han cambiado en otra pestaña. Recarga antes de continuar.';
+			window.alert(incidentLoadError);
 		}
 	}
 
@@ -243,7 +312,11 @@
 		}
 
 		const nextId =
-			incidentList.length > 0 ? Math.max(...incidentList.map((incident) => incident.id)) + 1 : 1;
+			Math.max(
+				0,
+				...incidentList.map((incident) => incident.id),
+				...history.map((entry) => entry.incidentId)
+			) + 1;
 
 		incidentList.unshift({
 			id: nextId,
@@ -593,6 +666,27 @@
 												Solución: {incident.solution}
 											</p>{/if}{/if}
 									<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
+									<p class="mt-2 text-sm text-slate-300">
+										{incident.assignedToUserId ? 'Asignado a: ' : ''}{assigneeName(incident)}
+									</p>
+									{#if assignmentReady && !incidentLoadError && canActOnIncident(activeUser, incident, 'incidents:assign')}
+										<div class="mt-2 flex flex-wrap gap-3">
+											<button
+												type="button"
+												onclick={() => openAssignment(incident)}
+												class="rounded border border-slate-700 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+												>{incident.assignedToUserId ? 'Reasignar' : 'Asignar'}</button
+											>
+											{#if activeUser.role === 'technician' && activeUser.id !== incident.assignedToUserId && assignmentCandidates(incident, demoUsers).some((user) => user.id === activeUser.id)}
+												<button
+													type="button"
+													onclick={() => openAssignment(incident, true)}
+													class="rounded border border-slate-700 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+													>Asignarme</button
+												>
+											{/if}
+										</div>
+									{/if}
 								</td>
 
 								<td class="px-6 py-4 text-sm text-slate-400">
@@ -767,6 +861,21 @@
 		{/if}
 	</main>
 
+	{#if assignmentIncident && assignmentReady && !incidentLoadError && canActOnIncident(activeUser, assignmentIncident, 'incidents:assign')}
+		<AssignmentDialog
+			actor={activeUser}
+			incident={assignmentIncident}
+			candidates={assignmentCandidates(assignmentIncident, demoUsers)}
+			currentName={assigneeName(assignmentIncident)}
+			initialTarget={assignmentTarget}
+			error={assignmentError}
+			onconfirm={confirmAssignment}
+			oncancel={() => {
+				assignmentIncident = null;
+				assignmentError = '';
+			}}
+		/>
+	{/if}
 	{#if isFormOpen && canCreate && !incidentLoadError}
 		<dialog
 			use:showEditDialog
@@ -999,6 +1108,14 @@
 					</button>
 				</div>
 			</form>
+			<IncidentTimeline
+				incident={editingIncident}
+				viewer={activeUser}
+				entries={history}
+				users={demoUsers}
+				categories={categoryList}
+				teams={demoSupportTeams}
+			/>
 		</dialog>
 	{/if}
 </div>
