@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { supportLevels } from '$lib/types/support';
 	import { incidents as initialIncidents } from '$lib/data/incidents';
 	import type { Incident, IncidentPriority, IncidentStatus } from '$lib/types/incident';
 	import { onMount } from 'svelte';
@@ -120,11 +121,13 @@
 							['title', 'client', 'createdAt'].every((key) => typeof item[key] === 'string') &&
 							['open', 'pending', 'resolved'].includes(item.status) &&
 							['low', 'medium', 'high'].includes(item.priority) &&
+							(item.supportLevel === undefined || supportLevels.includes(item.supportLevel)) &&
 							[
 								'organizationId',
 								'clientUserId',
 								'createdByUserId',
 								'assignedToUserId',
+								'teamId',
 								'description',
 								'solution',
 								'categoryId'

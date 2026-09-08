@@ -1,3 +1,4 @@
+import { demoSupportTeam } from './teams';
 import { demoOrganization } from '$lib/data/organizations';
 import type { AppUser } from '$lib/types/user';
 
@@ -25,6 +26,8 @@ export const demoUsers: AppUser[] = [
 		name: 'Técnico de prueba',
 		email: 'tecnico@nodhouses.test',
 		role: 'technician',
+		supportLevel: 'N1',
+		teamId: demoSupportTeam.id,
 		active: true,
 		createdAt: '2026-09-07'
 	},

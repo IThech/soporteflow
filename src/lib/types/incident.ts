@@ -1,3 +1,5 @@
+import type { SupportLevel } from './support';
+
 export type IncidentStatus = 'open' | 'pending' | 'resolved';
 
 export type IncidentPriority = 'low' | 'medium' | 'high';
@@ -14,6 +16,9 @@ export interface Incident {
 	updatedAt?: string;
 	createdByUserId?: string;
 	assignedToUserId?: string;
+	// Current operational destination, independent of the assigned user's profile.
+	supportLevel?: SupportLevel;
+	teamId?: string;
 	description?: string;
 	solution?: string;
 	categoryId?: string;
