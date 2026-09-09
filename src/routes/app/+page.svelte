@@ -466,9 +466,11 @@
 	type EditableIncident = Incident;
 
 	let editingIncident = $state<EditableIncident | null>(null);
+	let solutionExpanded = $state(false);
 	const managedIncident = $derived(incidentList.find((item) => item.id === editingIncident?.id));
 
 	function openEditIncident(id: number) {
+		solutionExpanded = false;
 		const incident = incidentList.find((item) => item.id === id);
 
 		if (!incident || incidentLoadError || !canActOnIncident(activeUser, incident, 'incidents:edit'))
@@ -1153,196 +1155,214 @@
 			use:showEditDialog
 			onclose={() => (editingIncident = null)}
 			aria-labelledby="edit-incident-title"
-			class="fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-slate-950/80"
+			class="incident-workspace fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%-2rem)] max-w-5xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-slate-950/80"
 		>
 			<div class="flex items-start justify-between gap-4">
 				<div>
 					<p class="text-sm font-medium text-cyan-400">
 						Incidencia #{editingIncident.id}
 					</p>
-					<h2 id="edit-incident-title" class="mt-1 text-2xl font-bold">Editar incidencia</h2>
+					<h2 id="edit-incident-title" class="mt-1 text-2xl font-bold">
+						{managedIncident?.title || 'Sin título'}
+					</h2>
 				</div>
 
 				<button
 					type="button"
 					onclick={() => (editingIncident = null)}
-					aria-label="Cerrar edición"
+					aria-label="Cerrar incidencia"
 					class="rounded-lg px-3 py-2 text-slate-400 hover:bg-slate-800 hover:text-white"
 				>
 					✕
 				</button>
 			</div>
 
-			<form class="mt-6 space-y-5" onsubmit={saveEditedIncident}>
-				<div>
-					<label for="edit-title" class="mb-2 block text-sm font-medium text-slate-300">
-						Título
-					</label>
-					<input
-						id="edit-title"
-						bind:value={editingIncident.title}
-						required
-						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-					/>
-				</div>
-
-				<div>
-					<label for="edit-client" class="mb-2 block text-sm font-medium text-slate-300">
-						Cliente
-					</label>
-					<input
-						id="edit-client"
-						bind:value={editingIncident.client}
-						required
-						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-					/>
-				</div>
-
-				<div>
-					<label for="edit-description" class="mb-2 block text-sm font-medium text-slate-300">
-						Descripción del problema (obligatoria)
-					</label>
-					<textarea
-						id="edit-description"
-						bind:value={editingIncident.description}
-						required
-						rows="3"
-						placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
-						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
-					></textarea>
-				</div>
-
-				<div class="grid gap-5 sm:grid-cols-2">
+			<div class="incident-workspace-grid">
+				<form class="incident-information space-y-3" onsubmit={saveEditedIncident}>
+					<h3 class="text-sm font-semibold text-slate-300">Información</h3>
 					<div>
-						<label for="edit-priority" class="mb-2 block text-sm font-medium text-slate-300">
-							Prioridad
+						<label for="edit-title" class="mb-2 block text-sm font-medium text-slate-300">
+							Título
 						</label>
-						<select
-							id="edit-priority"
-							bind:value={editingIncident.priority}
+						<input
+							id="edit-title"
+							bind:value={editingIncident.title}
+							required
 							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-						>
-							<option value="low">Baja</option>
-							<option value="medium">Media</option>
-							<option value="high">Alta</option>
-						</select>
+						/>
 					</div>
 
 					<div>
-						<label for="edit-status" class="mb-2 block text-sm font-medium text-slate-300">
-							Estado
+						<label for="edit-client" class="mb-2 block text-sm font-medium text-slate-300">
+							Cliente
 						</label>
-						<select
-							id="edit-status"
-							bind:value={editingIncident.status}
+						<input
+							id="edit-client"
+							bind:value={editingIncident.client}
+							required
 							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-						>
-							<option value="open">Abierta</option>
-							<option value="pending">Pendiente</option>
-							<option value="resolved">Resuelta</option>
-						</select>
+						/>
 					</div>
-				</div>
 
-				<div>
-					<label for="edit-solution" class="mb-2 block text-sm font-medium text-slate-300">
-						Solución aplicada
-						{editingIncident.status === 'resolved' ? '(obligatoria)' : '(opcional)'}
-					</label>
-					<textarea
-						id="edit-solution"
-						bind:value={editingIncident.solution}
-						required={editingIncident.status === 'resolved'}
-						aria-describedby="edit-solution-help"
-						rows="3"
-						placeholder="Describe las acciones realizadas y el resultado."
-						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
-					></textarea>
-					<p id="edit-solution-help" class="mt-2 text-xs text-slate-400">
-						Para marcar la incidencia como resuelta debes documentar la solución. No incluyas
-						contraseñas ni credenciales.
+					<div>
+						<label for="edit-description" class="mb-2 block text-sm font-medium text-slate-300">
+							Descripción del problema (obligatoria)
+						</label>
+						<textarea
+							id="edit-description"
+							bind:value={editingIncident.description}
+							required
+							rows="3"
+							placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
+							class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+						></textarea>
+					</div>
+
+					<p class="text-sm text-slate-400">
+						Categoría: {categoryName(managedIncident ?? editingIncident)}
 					</p>
-				</div>
+					<div class="grid grid-cols-2 gap-3">
+						<div>
+							<label for="edit-priority" class="mb-2 block text-sm font-medium text-slate-300">
+								Prioridad
+							</label>
+							<select
+								id="edit-priority"
+								bind:value={editingIncident.priority}
+								class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+							>
+								<option value="low">Baja</option>
+								<option value="medium">Media</option>
+								<option value="high">Alta</option>
+							</select>
+						</div>
 
-				<div class="flex justify-end gap-3 pt-2">
-					<button
-						type="button"
-						onclick={() => (editingIncident = null)}
-						class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
-					>
-						Cancelar
-					</button>
+						<div>
+							<label for="edit-status" class="mb-2 block text-sm font-medium text-slate-300">
+								Estado
+							</label>
+							<select
+								id="edit-status"
+								bind:value={editingIncident.status}
+								class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+							>
+								<option value="open">Abierta</option>
+								<option value="pending">Pendiente</option>
+								<option value="resolved">Resuelta</option>
+							</select>
+						</div>
+					</div>
 
-					<button
-						type="submit"
-						class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+					{#if solutionExpanded || editingIncident.status === 'resolved' || editingIncident.solution?.trim()}
+						<div>
+							<label for="edit-solution" class="mb-2 block text-sm font-medium text-slate-300">
+								Solución aplicada
+								{editingIncident.status === 'resolved' ? '(obligatoria)' : '(opcional)'}
+							</label>
+							<textarea
+								id="edit-solution"
+								bind:value={editingIncident.solution}
+								required={editingIncident.status === 'resolved'}
+								aria-describedby="edit-solution-help"
+								rows="3"
+								placeholder="Describe las acciones realizadas y el resultado."
+								class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+							></textarea>
+							<p id="edit-solution-help" class="mt-2 text-xs text-slate-400">
+								Para marcar la incidencia como resuelta debes documentar la solución. No incluyas
+								contraseñas ni credenciales.
+							</p>
+						</div>
+					{:else}
+						<button
+							type="button"
+							class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-cyan-300"
+							onclick={() => (solutionExpanded = true)}>Añadir solución</button
+						>
+					{/if}
+
+					<div class="flex justify-end gap-3 pt-2">
+						<button
+							type="button"
+							onclick={() => (editingIncident = null)}
+							class="rounded-lg px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
+						>
+							Cancelar
+						</button>
+
+						<button
+							type="submit"
+							class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+						>
+							Guardar cambios
+						</button>
+					</div>
+				</form>
+				{#if managedIncident}
+					<section
+						aria-labelledby="incident-management-title"
+						class="incident-management rounded-xl border border-slate-700 p-4"
 					>
-						Guardar cambios
-					</button>
-				</div>
-			</form>
-			{#if managedIncident}
-				<section
-					aria-labelledby="incident-management-title"
-					class="mt-6 rounded-xl border border-slate-700 p-4"
-				>
-					<h3 id="incident-management-title" class="text-lg font-semibold">
-						Gestión de la incidencia
-					</h3>
-					<dl class="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-						<div>
-							<dt class="text-slate-400">Responsable</dt>
-							<dd class="mt-1">{assigneeName(managedIncident)}</dd>
-						</div>
-						<div>
-							<dt class="text-slate-400">Nivel</dt>
-							<dd class="mt-1">{managedIncident.supportLevel ?? 'Sin nivel'}</dd>
-						</div>
-						<div>
-							<dt class="text-slate-400">Equipo</dt>
-							<dd class="mt-1">{teamName(managedIncident)}</dd>
-						</div>
-					</dl>
-					<div class="mt-4 flex flex-wrap gap-3">
-						{#if assignmentReady && reasonsReady && !incidentLoadError}
-							{#if canManageAssignment(activeUser, managedIncident)}
+						<h3 id="incident-management-title" class="text-lg font-semibold">
+							Gestión de la incidencia
+						</h3>
+						<dl class="management-values mt-3 grid gap-3 text-sm">
+							<div>
+								<dt class="text-slate-400">Responsable</dt>
+								<dd class="mt-1">{assigneeName(managedIncident)}</dd>
+							</div>
+							<div>
+								<dt class="text-slate-400">Nivel</dt>
+								<dd class="mt-1">{managedIncident.supportLevel ?? 'Sin nivel'}</dd>
+							</div>
+							<div>
+								<dt class="text-slate-400">Equipo</dt>
+								<dd class="mt-1">{teamName(managedIncident)}</dd>
+							</div>
+						</dl>
+						<div class="mt-4 flex flex-wrap gap-3">
+							{#if assignmentReady && reasonsReady && !incidentLoadError}
+								{#if canManageAssignment(activeUser, managedIncident)}
+									<button
+										type="button"
+										onclick={() => openAssignment(managedIncident)}
+										class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+										>{managedIncident.assignedToUserId ? 'Reasignar' : 'Asignar técnico'}</button
+									>
+								{:else if activeUser.role === 'technician' && !managedIncident.assignedToUserId && canAssignTo(activeUser, managedIncident, activeUser.id)}
+									<button
+										type="button"
+										onclick={() => openAssignment(managedIncident, true)}
+										class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+										>Asignarme</button
+									>
+								{/if}
+							{/if}
+							{#if assignmentReady && !incidentLoadError && canEscalate(activeUser, managedIncident)}
 								<button
 									type="button"
-									onclick={() => openAssignment(managedIncident)}
+									onclick={() => openEscalation(managedIncident)}
 									class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-									>{managedIncident.assignedToUserId ? 'Reasignar' : 'Asignar técnico'}</button
-								>
-							{:else if activeUser.role === 'technician' && !managedIncident.assignedToUserId && canAssignTo(activeUser, managedIncident, activeUser.id)}
-								<button
-									type="button"
-									onclick={() => openAssignment(managedIncident, true)}
-									class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-									>Asignarme</button
+									>Escalar incidencia</button
 								>
 							{/if}
-						{/if}
-						{#if assignmentReady && !incidentLoadError && canEscalate(activeUser, managedIncident)}
-							<button
-								type="button"
-								onclick={() => openEscalation(managedIncident)}
-								class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-								>Escalar incidencia</button
-							>
-						{/if}
-					</div>
-				</section>
-			{/if}
-			<IncidentTimeline
-				incident={editingIncident}
-				viewer={activeUser}
-				entries={history}
-				users={demoUsers}
-				categories={categoryList}
-				teams={demoSupportTeams}
-			/>
+						</div>
+					</section>
+				{/if}
+			</div>
+			<div class="incident-activity">
+				<IncidentTimeline
+					incident={editingIncident}
+					viewer={activeUser}
+					entries={history}
+					users={demoUsers}
+					categories={categoryList}
+					teams={demoSupportTeams}
+				/>
+			</div>
 			{#if managedIncident && canDelete && canActOnIncident(activeUser, managedIncident, 'incidents:delete')}
-				<section aria-labelledby="danger-title" class="mt-8 border-t border-slate-700 pt-5">
-					<h3 id="danger-title" class="text-sm font-semibold text-red-300">Zona de peligro</h3>
+				<details class="incident-danger mt-4 border-t border-slate-700 pt-2">
+					<summary class="text-sm font-semibold text-red-300">Eliminar incidencia</summary>
 					<p class="mt-2 text-sm text-slate-400">
 						Eliminar la incidencia es permanente y no se puede deshacer.
 					</p>
@@ -1353,7 +1373,7 @@
 						class="mt-3 rounded-lg border border-red-400 px-4 py-2 text-sm font-medium text-red-300"
 						>Eliminar incidencia</button
 					>
-				</section>
+				</details>
 			{/if}
 		</dialog>
 	{/if}

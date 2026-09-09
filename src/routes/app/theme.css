@@ -281,3 +281,78 @@ html[data-app-theme='light'] .support-app .bg-cyan-500:hover {
 		border-radius: 0.5rem;
 	}
 }
+
+/* Incident workspace: information and operational context share the first screen. */
+.support-app .incident-workspace {
+	width: calc(100% - 2rem);
+}
+.support-app .incident-workspace > div:first-child > div {
+	min-width: 0;
+}
+.support-app .incident-workspace > div:first-child > button {
+	flex-shrink: 0;
+}
+.support-app .incident-workspace-grid {
+	display: grid;
+	gap: 1rem;
+	margin-top: 1.25rem;
+	align-items: start;
+}
+.support-app .incident-information :is(input, select, textarea) {
+	padding: 0.5rem 0.75rem;
+}
+.support-app .incident-information label {
+	margin-bottom: 0.3rem;
+	font-size: 0.8125rem;
+}
+.support-app .incident-management h3 {
+	font-size: 0.9375rem;
+}
+.support-app .management-values > div {
+	display: grid;
+	grid-template-columns: 6rem minmax(0, 1fr);
+	gap: 0.75rem;
+	align-items: baseline;
+}
+.support-app .management-values dd {
+	margin-top: 0;
+}
+.support-app .incident-activity > section {
+	margin-top: 1.25rem;
+	padding-top: 1rem;
+}
+.support-app .incident-activity h3 {
+	font-size: 1rem;
+}
+.support-app .incident-activity ol {
+	margin-top: 0.75rem;
+}
+.support-app .incident-activity li + li {
+	margin-top: 0.75rem;
+}
+.support-app .incident-danger summary {
+	display: list-item;
+	padding: 0.75rem 0.25rem;
+}
+.support-app .incident-danger[open] {
+	padding-bottom: 0.5rem;
+}
+@media (min-width: 900px) {
+	.support-app .incident-workspace-grid {
+		grid-template-columns: minmax(0, 1.7fr) minmax(16rem, 1fr);
+		gap: 1.5rem;
+	}
+}
+@media (max-width: 639px) {
+	.support-app .incident-workspace {
+		width: calc(100% - 1rem);
+		max-height: 94dvh;
+	}
+	.support-app .incident-workspace h2 {
+		font-size: 1.25rem;
+		line-height: 1.4;
+	}
+	.support-app .incident-workspace-grid {
+		margin-top: 1rem;
+	}
+}
