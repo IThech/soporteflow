@@ -356,3 +356,29 @@ html[data-app-theme='light'] .support-app .bg-cyan-500:hover {
 		margin-top: 1rem;
 	}
 }
+
+.support-app .incident-messages [role='tab'][aria-selected='true'] {
+	color: var(--color-cyan-300);
+	border-color: var(--color-cyan-400);
+	background: var(--color-slate-950);
+	font-weight: 600;
+}
+.support-app .incident-messages [role='tabpanel']:focus-visible {
+	outline: 2px solid #0891b2;
+	outline-offset: 3px;
+}
+.support-app .message-list {
+	max-height: 24rem;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	padding: 0.25rem;
+}
+.support-app .message-list time {
+	white-space: nowrap;
+}
+.support-app .message-list li {
+	overflow-wrap: anywhere;
+}
+.support-app .internal-messages {
+	background: var(--color-slate-950);
+}
