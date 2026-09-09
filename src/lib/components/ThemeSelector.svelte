@@ -1,9 +1,18 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { parseTheme, readTheme, saveTheme, resolveTheme, type ThemePreference } from '$lib/theme';
+	import { readTheme, saveTheme, resolveTheme, type ThemePreference } from '$lib/theme';
 	let preference = $state<ThemePreference>('system');
 	let ready = $state(false);
 	let error = $state('');
+	let open = $state(false);
+	let panel: HTMLDetailsElement;
+	let trigger: HTMLElement;
+	const choices = [
+		{ value: 'light', label: 'Claro' },
+		{ value: 'dark', label: 'Oscuro' },
+		{ value: 'system', label: 'Sistema' }
+	] as const;
+	const selectedLabel = $derived(choices.find((choice) => choice.value === preference)?.label);
 	let apply = () => {};
 	onMount(() => {
 		const media = window.matchMedia('(prefers-color-scheme: dark)');
@@ -23,29 +32,64 @@
 			delete document.documentElement.dataset.appTheme;
 		};
 	});
-	function change(event: Event) {
-		preference = parseTheme((event.currentTarget as HTMLSelectElement).value);
+	function change(value: ThemePreference) {
+		preference = value;
+		open = false;
+		trigger?.focus();
 		apply();
 		try {
 			error = saveTheme(window.localStorage, preference) ? '' : 'No se pudo guardar la apariencia.';
 		} catch {
 			error = 'No se pudo guardar la apariencia.';
 		}
+		if (error) open = true;
 	}
 </script>
 
-<div class="text-sm">
-	<label for="app-theme" class="mr-2 text-slate-300">Apariencia</label>
-	<select
-		id="app-theme"
-		value={preference}
-		disabled={!ready}
-		onchange={change}
-		class="rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-white"
+<svelte:window
+	onkeydown={(event) => {
+		if (event.key === 'Escape' && open) {
+			open = false;
+			trigger?.focus();
+		}
+	}}
+	onclick={(event) => {
+		if (open && event.target instanceof Node && !panel?.contains(event.target)) open = false;
+	}}
+/>
+<details class="appearance-control" bind:this={panel} bind:open>
+	<summary
+		bind:this={trigger}
+		aria-label={`Apariencia: ${selectedLabel}`}
+		title={`Apariencia: ${selectedLabel}`}
 	>
-		<option value="light">Claro</option><option value="dark">Oscuro</option><option value="system"
-			>Sistema</option
+		<svg
+			width="20"
+			height="20"
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke="currentColor"
+			stroke-width="1.7"
+			aria-hidden="true"
+			><circle cx="12" cy="12" r="4" /><path
+				d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"
+			/></svg
 		>
-	</select>
-	{#if error}<p role="status" class="mt-1 text-xs text-red-300">{error}</p>{/if}
-</div>
+	</summary>
+	<div class="appearance-menu" role="group" aria-label="Apariencia">
+		<p class="mb-2 text-xs font-semibold text-slate-400">Apariencia</p>
+		{#each choices as choice (choice.value)}
+			<button
+				type="button"
+				disabled={!ready}
+				aria-pressed={preference === choice.value}
+				onclick={() => change(choice.value)}
+			>
+				<span>{choice.label}</span><span aria-hidden="true"
+					>{preference === choice.value ? '✓' : ''}</span
+				>
+			</button>
+		{/each}
+		{#if error}<p role="status" class="mt-2 text-xs text-red-300">{error}</p>{/if}
+	</div>
+</details>

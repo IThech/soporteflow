@@ -74,7 +74,7 @@
 							rows="2"
 							class="w-full rounded-lg border border-slate-700 bg-slate-950 p-3"></textarea>
 					</div>
-					<div class="flex gap-3">
+					<div class="flex flex-wrap gap-3">
 						<button
 							type="submit"
 							class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950"

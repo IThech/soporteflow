@@ -55,3 +55,229 @@ html[data-app-theme='light'] .support-app .bg-cyan-500:hover {
 .support-app dialog::backdrop {
 	background: rgb(2 6 23 / 75%);
 }
+
+/* Shared interaction and layout polish, scoped to the internal application. */
+.support-app {
+	overflow-wrap: anywhere;
+}
+.support-app :is(button, summary) {
+	touch-action: manipulation;
+}
+.support-app button:not(:disabled),
+.support-app summary {
+	cursor: pointer;
+}
+.support-app :is(button, input, select, summary) {
+	min-height: 2.75rem;
+}
+.support-app :is(input, select, textarea) {
+	max-width: 100%;
+}
+.support-app :is(p, dd, li, h3) {
+	min-width: 0;
+}
+.support-app summary:focus-visible {
+	outline: 2px solid #0891b2;
+	outline-offset: 3px;
+}
+.support-app dialog {
+	overscroll-behavior: contain;
+	scrollbar-gutter: stable;
+}
+.support-app dialog .flex.justify-end {
+	flex-wrap: wrap;
+}
+.support-app table {
+	width: 100%;
+}
+.support-app th {
+	font-size: 0.7rem;
+	letter-spacing: 0.06em;
+}
+.support-app td {
+	vertical-align: top;
+}
+.support-app .header-actions {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	margin-left: auto;
+}
+.support-app .appearance-control {
+	position: relative;
+	flex: none;
+}
+.support-app .appearance-control summary {
+	display: grid;
+	place-items: center;
+	width: 2.75rem;
+	border: 1px solid var(--color-slate-700);
+	border-radius: 0.65rem;
+	color: var(--color-slate-300);
+	list-style: none;
+}
+.support-app .appearance-control summary::-webkit-details-marker {
+	display: none;
+}
+.support-app .appearance-control summary:hover {
+	background: var(--color-slate-800);
+}
+.support-app .appearance-menu {
+	position: absolute;
+	z-index: 30;
+	right: 0;
+	top: calc(100% + 0.5rem);
+	width: 11rem;
+	padding: 0.75rem;
+	border: 1px solid var(--color-slate-700);
+	border-radius: 0.75rem;
+	background: var(--color-slate-900);
+	box-shadow: 0 12px 30px rgb(2 6 23 / 20%);
+}
+.support-app .appearance-menu button {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	width: 100%;
+	padding: 0.5rem 0.65rem;
+	border-radius: 0.4rem;
+	font-size: 0.875rem;
+}
+.support-app .appearance-menu button:hover {
+	background: var(--color-slate-800);
+}
+.support-app .appearance-menu button[aria-pressed='true'] {
+	color: var(--color-cyan-300);
+	background: var(--color-slate-950);
+	font-weight: 600;
+}
+.support-app .demo-session-inner {
+	display: grid;
+	grid-template-columns: auto minmax(12rem, 20rem) 1fr;
+	align-items: center;
+	gap: 0.3rem 1rem;
+}
+.support-app .demo-session-inner > p:first-child {
+	grid-column: 1 / -1;
+	font-size: 0.7rem;
+}
+.support-app .demo-session-inner > p:last-child {
+	grid-column: 1 / -1;
+	font-size: 0.7rem;
+}
+.support-app .demo-session-inner select {
+	width: 100%;
+}
+.support-app .demo-session-inner label {
+	font-size: 0.75rem;
+}
+@media (max-width: 767px) {
+	.support-app .demo-session {
+		padding: 0.75rem 1rem;
+	}
+	.support-app .demo-session-inner {
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 0.3rem 0.75rem;
+	}
+	.support-app .demo-session-inner > p {
+		grid-column: 1 / -1;
+	}
+	.support-app .app-header > div {
+		padding: 0.75rem 1rem;
+		gap: 0.75rem;
+	}
+	.support-app .app-main {
+		padding: 1.5rem 1rem;
+	}
+	.support-app .app-main > section.p-6 {
+		padding: 1rem;
+	}
+	.support-app .app-main > section > .px-6 {
+		padding-left: 1rem;
+		padding-right: 1rem;
+	}
+	.support-app dialog {
+		padding: 1rem;
+	}
+	.support-app table :is(th, td) {
+		padding: 0.75rem;
+	}
+	.support-app .header-actions {
+		gap: 0.5rem;
+	}
+}
+@media (max-width: 420px) {
+	.support-app .app-header > div > div:first-child {
+		flex: 1 1 100%;
+	}
+	.support-app .header-actions {
+		width: 100%;
+		justify-content: flex-end;
+	}
+}
+
+.support-app .mobile-field-label {
+	display: none;
+}
+.support-app .incident-date {
+	white-space: nowrap;
+}
+@media (max-width: 639px) {
+	.support-app .incident-list {
+		display: block;
+		padding: 0 1rem 1rem;
+	}
+	.support-app .incident-list thead {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+	.support-app .incident-list tbody {
+		display: grid;
+		gap: 0.75rem;
+	}
+	.support-app .incident-list .incident-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+		border: 1px solid var(--color-slate-700);
+		border-radius: 0.75rem;
+		padding: 1rem;
+		background: var(--color-slate-950);
+	}
+	.support-app .incident-list .incident-row > td {
+		display: block;
+		min-width: 0;
+		padding: 0.5rem 0;
+	}
+	.support-app .incident-list .incident-title {
+		grid-column: 1 / -1;
+		padding-top: 0;
+	}
+	.support-app .incident-list .incident-row > td:nth-child(2) {
+		grid-column: 1 / -1;
+	}
+	.support-app .mobile-field-label {
+		display: block;
+		margin-bottom: 0.25rem;
+		color: var(--color-slate-400);
+		font-size: 0.75rem;
+		font-weight: 400;
+	}
+	.support-app .incident-list .incident-date {
+		grid-column: 1 / -1;
+		padding-bottom: 0;
+		margin-top: 0.25rem;
+		border-top: 1px solid var(--color-slate-800);
+	}
+	.support-app .incident-date .mobile-field-label {
+		display: inline;
+		margin-right: 0.5rem;
+	}
+	.support-app .incident-state select {
+		width: 100%;
+		border-radius: 0.5rem;
+	}
+}

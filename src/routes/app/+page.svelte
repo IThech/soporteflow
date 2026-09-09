@@ -404,13 +404,14 @@
 			return;
 
 		const confirmed = window.confirm(
-			`¿Seguro que quieres eliminar la incidencia "${incident.title}"?`
+			`¿Eliminar permanentemente la incidencia #${incident.id}: "${incident.title}"? Esta acción no se puede deshacer.`
 		);
 
 		if (!confirmed) return;
 
 		incidentList = incidentList.filter((item) => item.id !== id);
 		saveIncidents();
+		if (!incidentLoadError) editingIncident = null;
 	}
 
 	function createIncident(event: SubmitEvent) {
@@ -674,27 +675,29 @@
 
 <div class="support-app min-h-screen bg-slate-950 text-white">
 	<DemoSessionSelector user={activeUser} onchange={changeDemoUser} />
-	<header class="border-b border-slate-800 bg-slate-900">
+	<header class="app-header border-b border-slate-800 bg-slate-900">
 		<div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-4">
 			<div>
 				<p class="text-xl font-bold">Soporte<span class="text-cyan-400">Flow</span></p>
 				<p class="text-xs text-slate-400">Gestión de soporte técnico</p>
 			</div>
 
-			<ThemeSelector />
-			{#if canCreate && !incidentLoadError}
-				<button
-					type="button"
-					onclick={() => (isFormOpen = true)}
-					class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
-				>
-					Nueva incidencia
-				</button>
-			{/if}
+			<div class="header-actions">
+				<ThemeSelector />
+				{#if canCreate && !incidentLoadError}
+					<button
+						type="button"
+						onclick={() => (isFormOpen = true)}
+						class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
+					>
+						Nueva incidencia
+					</button>
+				{/if}
+			</div>
 		</div>
 	</header>
 
-	<main class="mx-auto max-w-7xl px-6 py-10">
+	<main class="app-main mx-auto max-w-7xl px-6 py-10">
 		{#if !reasonsReady && reasonError && activeUser.role !== 'client'}<p
 				role="alert"
 				class="mb-4 text-sm text-red-300"
@@ -711,7 +714,7 @@
 			<p class="mt-2 text-slate-400">Consulta rápidamente el estado del soporte técnico.</p>
 		</section>
 
-		<section class="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+		<section class="mt-8 grid gap-4 sm:grid-cols-2 md:grid-cols-3">
 			{#each summary as item (item.label)}
 				<article class="rounded-xl border border-slate-800 bg-slate-900 p-6">
 					<p class="text-sm text-slate-400">{item.label}</p>
@@ -788,21 +791,23 @@
 			</div>
 
 			<div class="overflow-x-auto">
-				<table class="w-full text-left">
+				<table aria-label="Incidencias" class="incident-list w-full text-left">
 					<thead class="text-xs text-slate-500 uppercase">
 						<tr class="border-b border-slate-800">
-							<th class="px-6 py-4 font-medium">Incidencia</th>
-							<th class="px-6 py-4 font-medium">Cliente</th>
-							<th class="px-6 py-4 font-medium">Prioridad</th>
-							<th class="px-6 py-4 font-medium">Estado</th>
-							<th class="px-6 py-4 font-medium">Fecha</th>
+							<th scope="col" class="px-6 py-4 font-medium">Incidencia</th>
+							<th scope="col" class="px-6 py-4 font-medium">Cliente</th>
+							<th scope="col" class="px-6 py-4 font-medium">Prioridad</th>
+							<th scope="col" class="px-6 py-4 font-medium">Estado</th>
+							<th scope="col" class="px-6 py-4 font-medium">Fecha</th>
 						</tr>
 					</thead>
 
 					<tbody>
 						{#each filteredIncidents as incident (incident.id)}
-							<tr class="border-b border-slate-800/70 last:border-0 hover:bg-slate-800/30">
-								<td class="px-6 py-4">
+							<tr
+								class="incident-row border-b border-slate-800/70 last:border-0 hover:bg-slate-800/30"
+							>
+								<td class="incident-title px-6 py-4">
 									{#if canEdit}
 										<button
 											type="button"
@@ -836,14 +841,20 @@
 								</td>
 
 								<td class="px-6 py-4 text-sm text-slate-400">
-									{incident.client}
+									<span class="mobile-field-label" aria-hidden="true">Cliente</span
+									>{incident.client}
 								</td>
 
-								<td class={`px-6 py-4 text-sm font-medium ${priorityClasses[incident.priority]}`}>
-									{priorityLabels[incident.priority]}
+								<td
+									role="cell"
+									class={`px-6 py-4 text-sm font-medium ${priorityClasses[incident.priority]}`}
+								>
+									<span class="mobile-field-label" aria-hidden="true">Prioridad</span
+									>{priorityLabels[incident.priority]}
 								</td>
 
-								<td class="px-6 py-4">
+								<td class="incident-state px-6 py-4"
+									><span class="mobile-field-label" aria-hidden="true">Estado</span>
 									{#if canEdit}
 										<select
 											value={incident.status}
@@ -859,19 +870,10 @@
 											>{statusFilters.find((filter) => filter.value === incident.status)
 												?.label}</span
 										>{/if}
-
-									{#if canDelete}
-										<button
-											type="button"
-											onclick={() => deleteIncident(incident.id)}
-											class="mt-2 block text-xs font-medium text-red-400 transition hover:text-red-300"
-										>
-											Eliminar
-										</button>
-									{/if}
 								</td>
 
-								<td class="px-6 py-4 text-sm text-slate-500">
+								<td class="incident-date px-6 py-4 text-sm text-slate-500"
+									><span class="mobile-field-label" aria-hidden="true">Fecha</span>
 									{new Date(incident.createdAt).toLocaleDateString('es-ES')}
 								</td>
 							</tr>
@@ -1338,6 +1340,21 @@
 				categories={categoryList}
 				teams={demoSupportTeams}
 			/>
+			{#if managedIncident && canDelete && canActOnIncident(activeUser, managedIncident, 'incidents:delete')}
+				<section aria-labelledby="danger-title" class="mt-8 border-t border-slate-700 pt-5">
+					<h3 id="danger-title" class="text-sm font-semibold text-red-300">Zona de peligro</h3>
+					<p class="mt-2 text-sm text-slate-400">
+						Eliminar la incidencia es permanente y no se puede deshacer.
+					</p>
+					<button
+						type="button"
+						disabled={!!incidentLoadError}
+						onclick={() => deleteIncident(managedIncident.id)}
+						class="mt-3 rounded-lg border border-red-400 px-4 py-2 text-sm font-medium text-red-300"
+						>Eliminar incidencia</button
+					>
+				</section>
+			{/if}
 		</dialog>
 	{/if}
 </div>

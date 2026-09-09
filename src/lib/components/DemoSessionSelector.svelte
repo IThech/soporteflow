@@ -14,9 +14,9 @@
 
 <section
 	aria-label="Sesión de demostración"
-	class="border-b border-amber-500/30 bg-slate-900 px-6 py-4"
+	class="demo-session border-b border-amber-500/30 bg-slate-900 px-6 py-4"
 >
-	<div class="mx-auto max-w-7xl space-y-2">
+	<div class="demo-session-inner mx-auto max-w-7xl">
 		<p class="text-sm font-semibold text-amber-300">
 			Sesión demo temporal · Sin autenticación real
 		</p>
