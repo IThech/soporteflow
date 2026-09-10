@@ -276,6 +276,9 @@ html[data-app-theme='light'] .support-app .bg-cyan-500:hover {
 		display: inline;
 		margin-right: 0.5rem;
 	}
+	.support-app .incident-list .incident-state {
+		grid-column: 1 / -1;
+	}
 	.support-app .incident-state select {
 		width: 100%;
 		border-radius: 0.5rem;

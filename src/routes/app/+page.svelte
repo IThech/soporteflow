@@ -72,6 +72,8 @@
 	import { applyCreationSla, recordStatusTransition } from '$lib/incidents/lifecycle';
 	import { demoSlaPolicies } from '$lib/data/sla';
 	import { demoSupportTeams } from '$lib/data/teams';
+	import SlaBadge from '$lib/components/SlaBadge.svelte';
+	import IncidentSlaPanel from '$lib/components/IncidentSlaPanel.svelte';
 	import AssignmentDialog from '$lib/components/AssignmentDialog.svelte';
 	import { incidents as initialIncidents } from '$lib/data/incidents';
 	import type { Incident, IncidentPriority, IncidentStatus } from '$lib/types/incident';
@@ -309,6 +311,8 @@
 		}
 	}
 
+	let now = $state(new Date());
+
 	onMount(() => {
 		try {
 			recoverAssignment(localStorage);
@@ -330,6 +334,23 @@
 				'No se pudieron cargar las incidencias o su historial. Se ha bloqueado la edición para conservar los datos guardados.';
 			incidentList = [];
 		}
+
+		const intervalId = setInterval(() => {
+			now = new Date();
+		}, 60_000);
+
+		function handleVisibility() {
+			if (document.visibilityState === 'visible') {
+				now = new Date();
+			}
+		}
+
+		document.addEventListener('visibilitychange', handleVisibility);
+
+		return () => {
+			clearInterval(intervalId);
+			document.removeEventListener('visibilitychange', handleVisibility);
+		};
 	});
 
 	function saveIncidents() {
@@ -833,6 +854,7 @@
 							<th scope="col" class="px-6 py-4 font-medium">Incidencia</th>
 							<th scope="col" class="px-6 py-4 font-medium">Cliente</th>
 							<th scope="col" class="px-6 py-4 font-medium">Prioridad</th>
+							<th scope="col" class="px-6 py-4 font-medium">SLA</th>
 							<th scope="col" class="px-6 py-4 font-medium">Estado</th>
 							<th scope="col" class="px-6 py-4 font-medium">Fecha</th>
 						</tr>
@@ -889,6 +911,11 @@
 									>{priorityLabels[incident.priority]}
 								</td>
 
+								<td class="incident-sla px-6 py-4 text-sm">
+									<span class="mobile-field-label" aria-hidden="true">SLA</span>
+									<SlaBadge {incident} {now} />
+								</td>
+
 								<td class="incident-state px-6 py-4"
 									><span class="mobile-field-label" aria-hidden="true">Estado</span>
 									{#if canEdit}
@@ -915,7 +942,7 @@
 							</tr>
 						{:else}
 							<tr>
-								<td colspan="5" class="px-6 py-10 text-center text-sm text-slate-400">
+								<td colspan="6" class="px-6 py-10 text-center text-sm text-slate-400">
 									No hay incidencias que coincidan con los filtros actuales.
 								</td>
 							</tr>
@@ -1354,55 +1381,58 @@
 				{/if}
 
 				{#if managedIncident}
-					<section
-						aria-labelledby="incident-management-title"
-						class="incident-management rounded-xl border border-slate-700 p-4"
-					>
-						<h3 id="incident-management-title" class="text-lg font-semibold">
-							Gestión de la incidencia
-						</h3>
-						<dl class="management-values mt-3 grid gap-3 text-sm">
-							<div>
-								<dt class="text-slate-400">Responsable</dt>
-								<dd class="mt-1">{assigneeName(managedIncident)}</dd>
-							</div>
-							<div>
-								<dt class="text-slate-400">Nivel</dt>
-								<dd class="mt-1">{managedIncident.supportLevel ?? 'Sin nivel'}</dd>
-							</div>
-							<div>
-								<dt class="text-slate-400">Equipo</dt>
-								<dd class="mt-1">{teamName(managedIncident)}</dd>
-							</div>
-						</dl>
-						<div class="mt-4 flex flex-wrap gap-3">
-							{#if assignmentReady && reasonsReady && !incidentLoadError}
-								{#if canManageAssignment(activeUser, managedIncident)}
+					<div class="space-y-4">
+						<section
+							aria-labelledby="incident-management-title"
+							class="incident-management rounded-xl border border-slate-700 p-4"
+						>
+							<h3 id="incident-management-title" class="text-lg font-semibold">
+								Gestión de la incidencia
+							</h3>
+							<dl class="management-values mt-3 grid gap-3 text-sm">
+								<div>
+									<dt class="text-slate-400">Responsable</dt>
+									<dd class="mt-1">{assigneeName(managedIncident)}</dd>
+								</div>
+								<div>
+									<dt class="text-slate-400">Nivel</dt>
+									<dd class="mt-1">{managedIncident.supportLevel ?? 'Sin nivel'}</dd>
+								</div>
+								<div>
+									<dt class="text-slate-400">Equipo</dt>
+									<dd class="mt-1">{teamName(managedIncident)}</dd>
+								</div>
+							</dl>
+							<div class="mt-4 flex flex-wrap gap-3">
+								{#if assignmentReady && reasonsReady && !incidentLoadError}
+									{#if canManageAssignment(activeUser, managedIncident)}
+										<button
+											type="button"
+											onclick={() => openAssignment(managedIncident)}
+											class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+											>{managedIncident.assignedToUserId ? 'Reasignar' : 'Asignar técnico'}</button
+										>
+									{:else if activeUser.role === 'technician' && !managedIncident.assignedToUserId && canAssignTo(activeUser, managedIncident, activeUser.id)}
+										<button
+											type="button"
+											onclick={() => openAssignment(managedIncident, true)}
+											class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+											>Asignarme</button
+										>
+									{/if}
+								{/if}
+								{#if assignmentReady && !incidentLoadError && canEscalate(activeUser, managedIncident)}
 									<button
 										type="button"
-										onclick={() => openAssignment(managedIncident)}
+										onclick={() => openEscalation(managedIncident)}
 										class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-										>{managedIncident.assignedToUserId ? 'Reasignar' : 'Asignar técnico'}</button
-									>
-								{:else if activeUser.role === 'technician' && !managedIncident.assignedToUserId && canAssignTo(activeUser, managedIncident, activeUser.id)}
-									<button
-										type="button"
-										onclick={() => openAssignment(managedIncident, true)}
-										class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-										>Asignarme</button
+										>Escalar incidencia</button
 									>
 								{/if}
-							{/if}
-							{#if assignmentReady && !incidentLoadError && canEscalate(activeUser, managedIncident)}
-								<button
-									type="button"
-									onclick={() => openEscalation(managedIncident)}
-									class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-									>Escalar incidencia</button
-								>
-							{/if}
-						</div>
-					</section>
+							</div>
+						</section>
+						<IncidentSlaPanel incident={managedIncident} {now} />
+					</div>
 				{/if}
 			</div>
 			<div class="incident-activity">
