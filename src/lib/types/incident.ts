@@ -1,4 +1,5 @@
 import type { SupportLevel } from './support';
+import type { IncidentSlaSnapshot } from './sla';
 
 export type IncidentStatus = 'open' | 'pending' | 'resolved';
 
@@ -22,4 +23,5 @@ export interface Incident {
 	description?: string;
 	solution?: string;
 	categoryId?: string;
+	sla?: IncidentSlaSnapshot | null;
 }

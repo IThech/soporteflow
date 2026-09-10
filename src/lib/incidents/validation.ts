@@ -1,5 +1,33 @@
 import type { Incident } from '$lib/types/incident';
 import { supportLevels } from '$lib/types/support';
+
+function isValidSlaSnapshot(sla: unknown): boolean {
+	if (sla === undefined || sla === null) return true;
+	if (typeof sla !== 'object' || Array.isArray(sla)) return false;
+	const s = sla as Record<string, unknown>;
+	return (
+		typeof s.policyId === 'string' &&
+		!!s.policyId.trim() &&
+		typeof s.policyName === 'string' &&
+		!!s.policyName.trim() &&
+		typeof s.firstResponseMinutes === 'number' &&
+		Number.isSafeInteger(s.firstResponseMinutes) &&
+		s.firstResponseMinutes > 0 &&
+		typeof s.resolutionMinutes === 'number' &&
+		Number.isSafeInteger(s.resolutionMinutes) &&
+		s.resolutionMinutes > 0 &&
+		typeof s.firstResponseDueAt === 'string' &&
+		Number.isFinite(Date.parse(s.firstResponseDueAt)) &&
+		typeof s.resolutionDueAt === 'string' &&
+		Number.isFinite(Date.parse(s.resolutionDueAt)) &&
+		(s.firstRespondedAt === null ||
+			(typeof s.firstRespondedAt === 'string' &&
+				Number.isFinite(Date.parse(s.firstRespondedAt)))) &&
+		(s.resolvedAt === null ||
+			(typeof s.resolvedAt === 'string' && Number.isFinite(Date.parse(s.resolvedAt))))
+	);
+}
+
 export function isIncidentList(parsed: unknown): parsed is Incident[] {
 	return !(
 		!Array.isArray(parsed) ||
@@ -20,8 +48,10 @@ export function isIncidentList(parsed: unknown): parsed is Incident[] {
 					'teamId',
 					'description',
 					'solution',
-					'categoryId'
-				].every((key) => item[key] === undefined || typeof item[key] === 'string')
+					'categoryId',
+					'updatedAt'
+				].every((key) => item[key] === undefined || typeof item[key] === 'string') &&
+				isValidSlaSnapshot(item.sla)
 		) ||
 		new Set(parsed.map((item) => item.id)).size !== parsed.length
 	);
