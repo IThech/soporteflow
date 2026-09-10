@@ -219,9 +219,14 @@ export function evaluateIncidentSla(
 		warningMinutes
 	);
 
+	// Resolution is only completed if incident is currently resolved.
+	// If reopened (status !== 'resolved'), historical resolvedAt is ignored during active evaluation
+	// and resolution is evaluated as pending against nowMs and resolutionDueAt.
+	const resolutionCompletedAt = incident.status === 'resolved' ? snapshot.resolvedAt : null;
+
 	const resolution = evaluateTarget(
 		snapshot.resolutionDueAt,
-		snapshot.resolvedAt,
+		resolutionCompletedAt,
 		nowMs,
 		warningMinutes,
 		isResolvedWithoutTimestamp

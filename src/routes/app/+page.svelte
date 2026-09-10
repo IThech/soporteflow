@@ -68,6 +68,9 @@
 	import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 	import IncidentMessages from '$lib/components/IncidentMessages.svelte';
 	import { loadMessages, MESSAGES_KEY } from '$lib/storage/messages';
+	import { recoverFirstResponse, FIRST_RESPONSE_RECOVERY_KEY } from '$lib/storage/first-response';
+	import { applyCreationSla, recordStatusTransition } from '$lib/incidents/lifecycle';
+	import { demoSlaPolicies } from '$lib/data/sla';
 	import { demoSupportTeams } from '$lib/data/teams';
 	import AssignmentDialog from '$lib/components/AssignmentDialog.svelte';
 	import { incidents as initialIncidents } from '$lib/data/incidents';
@@ -229,7 +232,7 @@
 	let assignmentError = $state('');
 	let assignmentIncident = $state<Incident | null>(null);
 	let assignmentTarget = $state('');
-	let storedIncidentSnapshot: string | null = null;
+	let storedIncidentSnapshot = $state<string | null>(null);
 	let storedHistorySnapshot: string | null = null;
 	function assigneeName(incident: Incident): string {
 		if (!incident.assignedToUserId) return 'Sin asignar';
@@ -309,6 +312,7 @@
 	onMount(() => {
 		try {
 			recoverAssignment(localStorage);
+			recoverFirstResponse(localStorage);
 			const stored = localStorage.getItem(STORAGE_KEY);
 			storedIncidentSnapshot = stored;
 			storedHistorySnapshot = localStorage.getItem(HISTORY_KEY);
@@ -334,7 +338,8 @@
 			if (
 				localStorage.getItem(STORAGE_KEY) !== storedIncidentSnapshot ||
 				localStorage.getItem(HISTORY_KEY) !== storedHistorySnapshot ||
-				localStorage.getItem(RECOVERY_KEY) !== null
+				localStorage.getItem(RECOVERY_KEY) !== null ||
+				localStorage.getItem(FIRST_RESPONSE_RECOVERY_KEY) !== null
 			)
 				throw new Error('Los datos han cambiado en otra pestaña. Recarga antes de continuar.');
 			localStorage.setItem(STORAGE_KEY, JSON.stringify(incidentList));
@@ -389,7 +394,9 @@
 			return;
 		}
 
-		incidentList = incidentList.map((item) => (item.id === id ? { ...item, status } : item));
+		incidentList = incidentList.map((item) =>
+			item.id === id ? recordStatusTransition(item, status) : item
+		);
 
 		saveIncidents();
 	}
@@ -454,7 +461,7 @@
 				...messageIncidentIds
 			) + 1;
 
-		incidentList.unshift({
+		const draft: Incident = {
 			id: nextId,
 			organizationId: activeUser.organizationId,
 			createdByUserId: activeUser.id,
@@ -466,7 +473,9 @@
 			status: 'open',
 			priority,
 			createdAt: new Date().toISOString().slice(0, 10)
-		});
+		};
+
+		incidentList.unshift(applyCreationSla(draft, demoSlaPolicies));
 
 		saveIncidents();
 
@@ -508,7 +517,7 @@
 		const original = incidentList.find((item) => item.id === editingId);
 		if (!original || !canActOnIncident(activeUser, original, 'incidents:edit')) return;
 
-		const updatedIncident: Incident = {
+		let updatedIncident: Incident = {
 			...original,
 			priority: editingIncident.priority,
 			status: editingIncident.status,
@@ -531,6 +540,18 @@
 		if (updatedIncident.status === 'resolved' && !updatedIncident.solution) {
 			window.alert('Para resolver esta incidencia, indica qué hiciste y cuál fue el resultado.');
 			return;
+		}
+
+		if (original.status !== editingIncident.status) {
+			const transitioned = recordStatusTransition(original, editingIncident.status);
+			updatedIncident = {
+				...transitioned,
+				priority: editingIncident.priority,
+				title: editingIncident.title.trim(),
+				client: editingIncident.client.trim(),
+				description: (editingIncident.description ?? '').trim(),
+				solution: (editingIncident.solution ?? '').trim()
+			};
 		}
 
 		incidentList = incidentList.map((incident) =>
@@ -1393,6 +1414,12 @@
 						users={demoUsers}
 						categories={categoryList}
 						teams={demoSupportTeams}
+						incidents={incidentList}
+						incidentsSnapshot={storedIncidentSnapshot}
+						onincidentupdate={(updated) => {
+							incidentList = incidentList.map((i) => (i.id === updated.id ? updated : i));
+							storedIncidentSnapshot = JSON.stringify(incidentList);
+						}}
 					/>
 				{/key}
 			</div>

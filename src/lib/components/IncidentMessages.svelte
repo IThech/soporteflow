@@ -7,20 +7,24 @@
 		createMessage,
 		messageAuthor
 	} from '$lib/incidents/messages';
-	import { loadMessages, appendMessage, MESSAGES_KEY } from '$lib/storage/messages';
+	import { loadMessages, MESSAGES_KEY } from '$lib/storage/messages';
 	import type { IncidentMessage, IncidentMessageVisibility } from '$lib/types/incident-message';
 	import type { Incident } from '$lib/types/incident';
 	import type { AppUser } from '$lib/types/user';
 	import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 	import type { IncidentCategory } from '$lib/types/category';
 	import type { SupportTeam } from '$lib/types/support';
+	import { sendIncidentMessage } from '$lib/storage/first-response';
 	let {
 		incident,
 		actor,
 		users,
 		history,
 		categories,
-		teams
+		teams,
+		incidents,
+		incidentsSnapshot,
+		onincidentupdate
 	}: {
 		incident: Incident;
 		actor: AppUser;
@@ -28,6 +32,9 @@
 		history: IncidentHistoryEntry[];
 		categories: IncidentCategory[];
 		teams: SupportTeam[];
+		incidents?: Incident[];
+		incidentsSnapshot?: string | null;
+		onincidentupdate?: (updatedIncident: Incident) => void;
 	} = $props();
 	let messages = $state<IncidentMessage[]>([]);
 	let ready = $state(false);
@@ -71,9 +78,20 @@
 				visibility === 'public' ? publicDraft : internalDraft,
 				messages
 			);
-			const next = appendMessage(localStorage, actor, incident, message, snapshot);
-			messages = next;
-			snapshot = JSON.stringify(next);
+			const result = sendIncidentMessage(
+				localStorage,
+				actor,
+				incident,
+				message,
+				snapshot,
+				incidents,
+				incidentsSnapshot
+			);
+			messages = result.nextMessages;
+			snapshot = JSON.stringify(result.nextMessages);
+			if (result.updatedIncident) {
+				onincidentupdate?.(result.updatedIncident);
+			}
 			if (visibility === 'public') publicDraft = '';
 			else internalDraft = '';
 			announcement = visibility === 'public' ? 'Comentario enviado.' : 'Nota interna añadida.';
