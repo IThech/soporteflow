@@ -18,6 +18,9 @@ test('SLA v1 Bloque 2: ciclo de vida, primera respuesta, persistencia coordinada
 		const { prepareEscalation } = await server.ssrLoadModule('/src/lib/incidents/escalation.ts');
 		const { INCIDENTS_KEY } = await server.ssrLoadModule('/src/lib/storage/assignment.ts');
 		const { MESSAGES_KEY } = await server.ssrLoadModule('/src/lib/storage/messages.ts');
+		const { formatSlaDateTime } = await server.ssrLoadModule(
+			'/src/lib/incidents/sla-presentation.ts'
+		);
 		const { demoUsers } = await server.ssrLoadModule('/src/lib/data/users.ts');
 		const { demoSupportTeams } = await server.ssrLoadModule('/src/lib/data/teams.ts');
 
@@ -783,6 +786,68 @@ test('SLA v1 Bloque 2: ciclo de vida, primera respuesta, persistencia coordinada
 					'2026-09-10T10:15:00.000Z'
 				);
 				assert.equal(storeSecond.getItem(FIRST_RESPONSE_RECOVERY_KEY), null);
+			}
+		);
+
+		await t.test(
+			'11. Regresión: precisión temporal de createdAt y cálculo exacto de plazos SLA',
+			() => {
+				const policyHigh = {
+					id: 'sla-high',
+					organizationId: orgId,
+					name: 'SLA Prioridad Alta',
+					active: true,
+					isDefault: false,
+					categoryId: null,
+					priority: 'high',
+					firstResponseMinutes: 60, // 1h
+					resolutionMinutes: 480, // 8h
+					createdAt: '2026-09-08T08:00:00.000Z'
+				};
+
+				// A. Incidencia creada a las 11:05:00.000Z con SLA 60/480 produce exactamente 12:05 y 19:05 en UTC
+				const creationIso = '2026-09-10T11:05:00.000Z';
+				const incidentDraft = {
+					id: 111,
+					organizationId: orgId,
+					title: 'Caída de servicio',
+					client: 'Cliente Test',
+					status: 'open',
+					priority: 'high',
+					createdAt: creationIso
+				};
+
+				const applied = applyCreationSla(incidentDraft, [policyHigh]);
+				assert.ok(applied.sla);
+				assert.equal(applied.sla.firstResponseDueAt, '2026-09-10T12:05:00.000Z');
+				assert.equal(applied.sla.resolutionDueAt, '2026-09-10T19:05:00.000Z');
+
+				// B. La hora original no se pierde ni se convierte a solo fecha YYYY-MM-DD
+				assert.equal(applied.createdAt, '2026-09-10T11:05:00.000Z');
+				assert.notEqual(applied.createdAt, '2026-09-10');
+				assert.equal(applied.createdAt.length, 24); // ISO 8601 completo
+
+				// C. El snapshot conserva ISO UTC estricto, mientras que formatSlaDateTime formatea para UI
+				const formattedResponse = formatSlaDateTime(applied.sla.firstResponseDueAt);
+				assert.ok(formattedResponse.length > 0);
+				assert.equal(applied.sla.firstResponseDueAt.endsWith('Z'), true);
+				assert.equal(applied.sla.resolutionDueAt.endsWith('Z'), true);
+
+				// D. Compatibilidad con incidencias históricas que tienen fecha sin hora (ej. '2026-08-26')
+				const legacyIncident = {
+					id: 112,
+					organizationId: orgId,
+					title: 'Incidencia antigua',
+					client: 'Cliente Antiguo',
+					status: 'open',
+					priority: 'high',
+					createdAt: '2026-08-26'
+				};
+				const appliedLegacy = applyCreationSla(legacyIncident, [policyHigh]);
+				assert.ok(appliedLegacy.sla);
+				// Sigue parseándose válidamente sin lanzar error
+				assert.equal(appliedLegacy.sla.firstResponseDueAt, '2026-08-26T01:00:00.000Z');
+				assert.equal(appliedLegacy.sla.resolutionDueAt, '2026-08-26T08:00:00.000Z');
 			}
 		);
 	} finally {

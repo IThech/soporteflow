@@ -562,7 +562,7 @@
 			solution: '',
 			status: 'open',
 			priority,
-			createdAt: new Date().toISOString().slice(0, 10)
+			createdAt: new Date().toISOString()
 		};
 
 		incidentList.unshift(applyCreationSla(draft, slaCheck.policies));
