@@ -70,10 +70,19 @@
 	import { loadMessages, MESSAGES_KEY } from '$lib/storage/messages';
 	import { recoverFirstResponse, FIRST_RESPONSE_RECOVERY_KEY } from '$lib/storage/first-response';
 	import { applyCreationSla, recordStatusTransition } from '$lib/incidents/lifecycle';
-	import { demoSlaPolicies } from '$lib/data/sla';
 	import { demoSupportTeams } from '$lib/data/teams';
 	import SlaBadge from '$lib/components/SlaBadge.svelte';
 	import IncidentSlaPanel from '$lib/components/IncidentSlaPanel.svelte';
+	import SlaPolicyManagement from '$lib/components/SlaPolicyManagement.svelte';
+	import {
+		SLA_POLICIES_KEY,
+		loadSlaPoliciesResult,
+		saveSlaPolicies,
+		changeSlaPolicy,
+		checkIncidentCreationSla,
+		type SlaPolicyCatalogState,
+		type SlaPolicyChange
+	} from '$lib/incidents/sla-catalog';
 	import AssignmentDialog from '$lib/components/AssignmentDialog.svelte';
 	import { incidents as initialIncidents } from '$lib/data/incidents';
 	import type { Incident, IncidentPriority, IncidentStatus } from '$lib/types/incident';
@@ -313,6 +322,11 @@
 
 	let now = $state(new Date());
 
+	let slaCatalogState = $state<SlaPolicyCatalogState>({ status: 'valid', policies: [] });
+	let slaPoliciesReady = $state(false);
+	let slaPolicyError = $state('');
+	let slaPolicySnapshot: string | null = null;
+
 	onMount(() => {
 		try {
 			recoverAssignment(localStorage);
@@ -335,6 +349,39 @@
 			incidentList = [];
 		}
 
+		try {
+			slaPolicySnapshot = localStorage.getItem(SLA_POLICIES_KEY);
+			const slaResult = loadSlaPoliciesResult(slaPolicySnapshot);
+			if (slaResult.status === 'missing') {
+				const initialRaw = JSON.stringify(slaResult.seededPolicies);
+				localStorage.setItem(SLA_POLICIES_KEY, initialRaw);
+				slaPolicySnapshot = initialRaw;
+				slaCatalogState = { status: 'valid', policies: slaResult.seededPolicies };
+				slaPoliciesReady = true;
+			} else if (slaResult.status === 'valid') {
+				slaCatalogState = { status: 'valid', policies: slaResult.policies };
+				slaPoliciesReady = true;
+			} else {
+				slaCatalogState = {
+					status: 'corrupt',
+					error: slaResult.error,
+					raw: slaPolicySnapshot ?? ''
+				};
+				slaPolicyError =
+					'No se pudo cargar el catálogo de políticas SLA. Los datos guardados están corruptos y se han conservado; la administración y asignación SLA están bloqueadas.';
+				slaPoliciesReady = false;
+			}
+		} catch {
+			slaCatalogState = {
+				status: 'corrupt',
+				error: 'Error inesperado al leer el almacenamiento de SLA.',
+				raw: slaPolicySnapshot ?? ''
+			};
+			slaPolicyError =
+				'No se pudo cargar el catálogo de políticas SLA. Los datos guardados se han conservado; la administración y asignación SLA están bloqueadas.';
+			slaPoliciesReady = false;
+		}
+
 		const intervalId = setInterval(() => {
 			now = new Date();
 		}, 60_000);
@@ -352,6 +399,21 @@
 			document.removeEventListener('visibilitychange', handleVisibility);
 		};
 	});
+
+	function updateSlaPolicy(change: SlaPolicyChange): boolean {
+		if (!slaPoliciesReady || slaCatalogState.status !== 'valid') return false;
+		try {
+			const next = changeSlaPolicy(activeUser, slaCatalogState.policies, change);
+			slaPolicySnapshot = saveSlaPolicies(localStorage, next, slaPolicySnapshot);
+			slaCatalogState = { status: 'valid', policies: next };
+			slaPolicyError = '';
+			return true;
+		} catch (error) {
+			slaPolicyError =
+				error instanceof Error ? error.message : 'No se pudo guardar la política SLA.';
+			return false;
+		}
+	}
 
 	function saveIncidents() {
 		if (incidentLoadError) return;
@@ -457,6 +519,13 @@
 		const cleanClient = activeUser.role === 'client' ? activeUser.name : client.trim();
 		const cleanDescription = description.trim();
 
+		const orgId = activeUser.organizationId ?? demoOrganization.id;
+		const slaCheck = checkIncidentCreationSla(slaCatalogState, orgId);
+		if (!slaCheck.allowed) {
+			window.alert(slaCheck.error);
+			return;
+		}
+
 		if (!cleanTitle || !cleanClient || !cleanDescription) {
 			window.alert('Completa el título, el cliente y la descripción del problema.');
 			return;
@@ -496,7 +565,7 @@
 			createdAt: new Date().toISOString().slice(0, 10)
 		};
 
-		incidentList.unshift(applyCreationSla(draft, demoSlaPolicies));
+		incidentList.unshift(applyCreationSla(draft, slaCheck.policies));
 
 		saveIncidents();
 
@@ -1076,6 +1145,14 @@
 				ready={reasonsReady}
 				error={reasonError}
 				onchange={updateReason}
+			/>{/key}
+		{#key activeUser.id}<SlaPolicyManagement
+				actor={activeUser}
+				policies={slaCatalogState.status === 'valid' ? slaCatalogState.policies : []}
+				categories={categoryList}
+				ready={slaPoliciesReady}
+				error={slaPolicyError}
+				onchange={updateSlaPolicy}
 			/>{/key}
 	</main>
 	{#if escalationIncident && assignmentReady && !incidentLoadError && canEscalate(activeUser, escalationIncident)}

@@ -5,6 +5,7 @@ export type Permission =
 	| 'organization:manage'
 	| 'users:manage'
 	| 'categories:manage'
+	| 'sla:manage'
 	| 'incidents:view_all'
 	| 'incidents:view_own'
 	| 'incidents:create'
@@ -18,6 +19,7 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 		'organization:manage',
 		'users:manage',
 		'categories:manage',
+		'sla:manage',
 		'incidents:view_all',
 		'incidents:view_own',
 		'incidents:create',
@@ -29,6 +31,7 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 		'organization:manage',
 		'users:manage',
 		'categories:manage',
+		'sla:manage',
 		'incidents:view_all',
 		'incidents:create',
 		'incidents:edit',

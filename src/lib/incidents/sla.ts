@@ -309,6 +309,12 @@ export function isSlaPolicyList(value: unknown): value is SlaPolicy[] {
 		if (item.isDefault) {
 			if (item.categoryId !== undefined && item.categoryId !== null) return false;
 			if (item.priority !== undefined && item.priority !== null) return false;
+		} else {
+			// Non-default (specific) policies must define at least categoryId or priority
+			const hasCategory =
+				item.categoryId !== undefined && item.categoryId !== null && item.categoryId.trim() !== '';
+			const hasPriority = item.priority !== undefined && item.priority !== null;
+			if (!hasCategory && !hasPriority) return false;
 		}
 
 		ids.add(item.id);
