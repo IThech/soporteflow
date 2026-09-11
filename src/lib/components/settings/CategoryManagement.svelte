@@ -2,30 +2,44 @@
 	import { hasPermission, canAccessOrganization } from '$lib/auth/permissions';
 	import { canAccessRecord } from '$lib/auth/record-access';
 	import { normalizeSearchText } from '$lib/incidents/queue';
+	import { validateCategoryRouting } from '$lib/categories/catalog';
 	import type { AppUser } from '$lib/types/user';
 	import type { IncidentCategory } from '$lib/types/category';
+	import type { SupportLevelDefinition, SupportTeam } from '$lib/types/support';
 
 	let {
 		actor,
 		categories,
+		levels = [],
+		teams = [],
 		ready = true,
 		error = '',
 		onchange
 	}: {
 		actor: AppUser;
 		categories: IncidentCategory[];
+		levels?: SupportLevelDefinition[];
+		teams?: SupportTeam[];
 		ready: boolean;
 		error?: string;
 		onchange: (next: IncidentCategory[]) => boolean;
 	} = $props();
 
-	let draft = $state<{ id?: string; name: string; description: string } | null>(null);
+	let draft = $state<{
+		id?: string;
+		name: string;
+		description: string;
+		defaultSupportLevel: string;
+		defaultTeamId: string;
+	} | null>(null);
 	let formError = $state('');
 
 	const allowed = $derived(hasPermission(actor, 'categories:manage'));
 	const visibleCategories = $derived(
 		categories.filter((category) => canAccessRecord(actor, category))
 	);
+	const orgLevels = $derived(levels.filter((l) => l.organizationId === actor.organizationId));
+	const orgTeams = $derived(teams.filter((t) => t.organizationId === actor.organizationId));
 
 	function mayManageCategory(category?: IncidentCategory): boolean {
 		return (
@@ -43,8 +57,19 @@
 		if ((id !== undefined && !category) || !mayManageCategory(category)) return;
 		formError = '';
 		draft = category
-			? { id: category.id, name: category.name, description: category.description }
-			: { name: '', description: '' };
+			? {
+					id: category.id,
+					name: category.name,
+					description: category.description,
+					defaultSupportLevel: category.defaultSupportLevel ?? '',
+					defaultTeamId: category.defaultTeamId ?? ''
+				}
+			: {
+					name: '',
+					description: '',
+					defaultSupportLevel: '',
+					defaultTeamId: ''
+				};
 	}
 
 	function saveCategory(event: SubmitEvent) {
@@ -77,14 +102,39 @@
 			return;
 		}
 
+		const rawLevel = currentDraft.defaultSupportLevel?.trim() || null;
+		const rawTeam = currentDraft.defaultTeamId?.trim() || null;
+
+		const orgId = actor.organizationId ?? '';
+		const routingValidation = validateCategoryRouting(
+			{ defaultSupportLevel: rawLevel, defaultTeamId: rawTeam },
+			levels,
+			teams,
+			orgId,
+			original
+		);
+
+		if (!routingValidation.valid) {
+			formError = routingValidation.error || 'Error de validación en el routing predeterminado.';
+			return;
+		}
+
 		const category: IncidentCategory = original
-			? { ...original, name, description }
+			? {
+					...original,
+					name,
+					description,
+					defaultSupportLevel: rawLevel,
+					defaultTeamId: rawTeam
+				}
 			: {
 					id: crypto.randomUUID(),
 					organizationId: actor.organizationId,
 					name,
 					description,
-					active: true
+					active: true,
+					defaultSupportLevel: rawLevel,
+					defaultTeamId: rawTeam
 				};
 
 		const next = original
@@ -176,6 +226,46 @@
 						class="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-white outline-none focus:border-cyan-400"
 					></textarea>
 				</div>
+
+				<div>
+					<label for="category-default-level" class="mb-2 block text-sm text-slate-300">
+						Nivel requerido predeterminado (opcional)
+					</label>
+					<select
+						id="category-default-level"
+						bind:value={draft.defaultSupportLevel}
+						class="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-white outline-none focus:border-cyan-400"
+					>
+						<option value="">Sin nivel predeterminado</option>
+						{#each orgLevels as lvl (lvl.id)}
+							<option
+								value={lvl.code}
+								disabled={!lvl.active && lvl.code !== draft.defaultSupportLevel}
+							>
+								{lvl.code} — {lvl.name}{lvl.active ? '' : ' (Inactivo)'}
+							</option>
+						{/each}
+					</select>
+				</div>
+
+				<div>
+					<label for="category-default-team" class="mb-2 block text-sm text-slate-300">
+						Equipo predeterminado (opcional)
+					</label>
+					<select
+						id="category-default-team"
+						bind:value={draft.defaultTeamId}
+						class="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-white outline-none focus:border-cyan-400"
+					>
+						<option value="">Sin equipo predeterminado</option>
+						{#each orgTeams as tm (tm.id)}
+							<option value={tm.id} disabled={!tm.active && tm.id !== draft.defaultTeamId}>
+								{tm.name}{tm.active ? '' : ' (Inactivo)'}
+							</option>
+						{/each}
+					</select>
+				</div>
+
 				<div class="flex gap-3">
 					<button
 						type="submit"
@@ -213,6 +303,23 @@
 					<p class="mt-2 text-sm text-slate-400">
 						{category.description || 'Sin descripción'}
 					</p>
+
+					{#if category.defaultSupportLevel || category.defaultTeamId}
+						<div class="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+							<span class="text-slate-500">Routing predeterminado:</span>
+							{#if category.defaultSupportLevel}
+								<span class="rounded bg-slate-800 px-2 py-0.5 font-medium text-cyan-300">
+									{category.defaultSupportLevel}
+								</span>
+							{/if}
+							{#if category.defaultTeamId}
+								{@const tMatch = teams.find((t) => t.id === category.defaultTeamId)}
+								<span class="rounded bg-slate-800 px-2 py-0.5 font-medium text-slate-300">
+									{tMatch ? tMatch.name : category.defaultTeamId}
+								</span>
+							{/if}
+						</div>
+					{/if}
 
 					{#if ready}
 						<div class="mt-4 flex flex-wrap gap-3">

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { AppUser } from '$lib/types/user';
+	import type { Incident } from '$lib/types/incident';
 	import type { IncidentCategory } from '$lib/types/category';
 	import type { ReassignmentReason } from '$lib/types/reassignment-reason';
 	import type { ReasonChange } from '$lib/reasons/catalog';
@@ -10,8 +11,10 @@
 		canManageSettingsSection,
 		type SettingsSectionId
 	} from '$lib/settings/sections';
-	import type { SupportLevel, SupportTeam } from '$lib/types/support';
+	import type { SupportLevelDefinition, SupportTeam } from '$lib/types/support';
 	import UserManagement from './UserManagement.svelte';
+	import SupportLevelManagement from './SupportLevelManagement.svelte';
+	import TeamManagement from './TeamManagement.svelte';
 	import CategoryManagement from './CategoryManagement.svelte';
 	import ReassignmentReasons from '$lib/components/ReassignmentReasons.svelte';
 	import SlaPolicyManagement from '$lib/components/SlaPolicyManagement.svelte';
@@ -23,8 +26,17 @@
 		usersReady,
 		userError = '',
 		onUserChange,
-		availableSupportLevels = [],
-		availableTeams = [],
+		supportLevels = [],
+		supportLevelsReady = true,
+		supportLevelError = '',
+		onSupportLevelChange,
+		teams = [],
+		teamsReady = true,
+		teamError = '',
+		onTeamChange,
+		availableSupportLevels,
+		availableTeams,
+		incidents = [],
 		categories,
 		categoriesReady,
 		categoryError = '',
@@ -44,8 +56,17 @@
 		usersReady: boolean;
 		userError?: string;
 		onUserChange: (next: AppUser[]) => boolean;
-		availableSupportLevels?: readonly SupportLevel[];
+		supportLevels?: SupportLevelDefinition[];
+		supportLevelsReady?: boolean;
+		supportLevelError?: string;
+		onSupportLevelChange?: (next: SupportLevelDefinition[]) => boolean;
+		teams?: SupportTeam[];
+		teamsReady?: boolean;
+		teamError?: string;
+		onTeamChange?: (next: SupportTeam[]) => boolean;
+		availableSupportLevels?: readonly (string | SupportLevelDefinition)[];
 		availableTeams?: readonly SupportTeam[];
+		incidents?: Incident[];
 		categories: IncidentCategory[];
 		categoriesReady: boolean;
 		categoryError?: string;
@@ -82,6 +103,16 @@
 	);
 
 	const isCurrentSectionPermitted = $derived(canManageSettingsSection(actor, selectedSection));
+
+	const effectiveLevels = $derived<SupportLevelDefinition[]>(
+		supportLevels.length > 0
+			? [...supportLevels]
+			: [...((availableSupportLevels ?? []) as unknown as SupportLevelDefinition[])]
+	);
+
+	const effectiveTeams = $derived<SupportTeam[]>(
+		teams.length > 0 ? [...teams] : [...(availableTeams ?? [])]
+	);
 </script>
 
 <div class="settings-view space-y-6">
@@ -145,19 +176,23 @@
 	<div class="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
 		<!-- Sidebar Navigation -->
 		<nav
-			class="space-y-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-3 xl:col-span-3"
+			class="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-3 xl:col-span-3"
 			aria-label="Menú de configuración"
 		>
-			{#each SETTINGS_GROUPS as group (group.id)}
+			{#each SETTINGS_GROUPS as group, groupIndex (group.id)}
 				{@const permittedSections = group.sections.filter((section) =>
 					canManageSettingsSection(actor, section.id)
 				)}
 				{#if permittedSections.length > 0}
-					<div class="settings-group">
-						<h2 class="px-3 text-[11px] font-bold tracking-wider text-slate-400 uppercase">
+					<div
+						class="settings-group {groupIndex > 0 ? 'mt-6 border-t border-slate-800/70 pt-5' : ''}"
+					>
+						<h2
+							class="settings-nav-header px-3 text-[11px] font-semibold tracking-wider text-slate-400 uppercase select-none"
+						>
 							{group.label}
 						</h2>
-						<div class="mt-2 space-y-1">
+						<div class="mt-2.5 space-y-1">
 							{#each group.sections as section (section.id)}
 								{@const isPermitted = canManageSettingsSection(actor, section.id)}
 								{#if isPermitted}
@@ -189,7 +224,7 @@
 		</nav>
 
 		<!-- Content Panel -->
-		<section class="min-w-0 lg:col-span-9 xl:col-span-9" aria-live="polite">
+		<section class="settings-content min-w-0 lg:col-span-9 xl:col-span-9" aria-live="polite">
 			{#if !isCurrentSectionPermitted}
 				<div
 					role="alert"
@@ -205,14 +240,40 @@
 					{users}
 					ready={usersReady}
 					error={userError}
-					{availableSupportLevels}
-					{availableTeams}
+					availableSupportLevels={effectiveLevels}
+					availableTeams={effectiveTeams}
 					onchange={onUserChange}
 				/>
+			{:else if selectedSection === 'support_levels'}
+				{#key actor.id}
+					<SupportLevelManagement
+						{actor}
+						levels={effectiveLevels}
+						{users}
+						{incidents}
+						ready={supportLevelsReady}
+						error={supportLevelError}
+						onchange={onSupportLevelChange ?? (() => false)}
+					/>
+				{/key}
+			{:else if selectedSection === 'teams'}
+				{#key actor.id}
+					<TeamManagement
+						{actor}
+						teams={effectiveTeams}
+						{users}
+						{incidents}
+						ready={teamsReady}
+						error={teamError}
+						onchange={onTeamChange ?? (() => false)}
+					/>
+				{/key}
 			{:else if selectedSection === 'categories'}
 				<CategoryManagement
 					{actor}
 					{categories}
+					levels={effectiveLevels}
+					teams={effectiveTeams}
 					ready={categoriesReady}
 					error={categoryError}
 					onchange={onCategoryChange}

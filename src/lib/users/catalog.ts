@@ -1,6 +1,6 @@
 import { canAccessOrganization, hasPermission } from '$lib/auth/permissions';
 import { demoUsers } from '$lib/data/users';
-import { supportLevels, type SupportLevel, type SupportTeam } from '$lib/types/support';
+import type { SupportLevel, SupportLevelDefinition, SupportTeam } from '$lib/types/support';
 import type {
 	AdministrableUserRole,
 	AppUser,
@@ -25,7 +25,7 @@ export type UserCatalogState =
 	{ status: 'valid'; users: AppUser[] } | { status: 'corrupt'; error: string; raw: string };
 
 export interface SupportContext {
-	availableLevels?: readonly string[];
+	availableLevels?: readonly (string | SupportLevelDefinition)[];
 	availableTeams?: readonly SupportTeam[];
 }
 
@@ -80,8 +80,7 @@ export function isUser(item: unknown): item is AppUser {
 	if (u.role === 'technician' || u.role === 'organization_admin') {
 		const validLevel =
 			u.supportLevel === undefined ||
-			(typeof u.supportLevel === 'string' &&
-				supportLevels.includes(u.supportLevel as SupportLevel));
+			(typeof u.supportLevel === 'string' && u.supportLevel.trim().length > 0);
 		const validTeam =
 			u.teamId === undefined || (typeof u.teamId === 'string' && u.teamId.trim().length > 0);
 		return validLevel && validTeam;
@@ -168,21 +167,44 @@ export function getOrganizationUsers(users: AppUser[], organizationId: string): 
 
 /**
  * Validates technician-specific fields (supportLevel and teamId).
+ * Enforces that for new assignments:
+ * - level/team must exist and belong to the same organization.
+ * - level/team must be active.
+ * Existing assignments already on the user can be preserved even if currently inactive (DECISIÓN 5).
  */
 function validateTechnicalFields(
 	input: { supportLevel?: SupportLevel; teamId?: string },
 	organizationId: string,
-	context?: SupportContext
+	context?: SupportContext,
+	currentUser?: AppUser
 ) {
 	if (input.supportLevel) {
-		const validLevels = context?.availableLevels ?? supportLevels;
-		if (!validLevels.includes(input.supportLevel)) {
-			throw new Error('El nivel de soporte seleccionado no es válido.');
+		const inputLevelCode = input.supportLevel.trim().toUpperCase();
+		const isPreservingCurrent =
+			currentUser?.supportLevel && currentUser.supportLevel.trim().toUpperCase() === inputLevelCode;
+
+		if (context?.availableLevels && !isPreservingCurrent) {
+			const isValid = context.availableLevels.some((item) => {
+				if (typeof item === 'string') {
+					return item.trim().toUpperCase() === inputLevelCode;
+				}
+				return (
+					item.organizationId === organizationId &&
+					item.active &&
+					item.code.trim().toUpperCase() === inputLevelCode
+				);
+			});
+			if (!isValid) {
+				throw new Error(
+					'El nivel de soporte seleccionado no es válido o no está activo en esta organización.'
+				);
+			}
 		}
 	}
 
 	if (input.teamId) {
-		if (context?.availableTeams) {
+		const isPreservingCurrent = currentUser?.teamId === input.teamId;
+		if (context?.availableTeams && !isPreservingCurrent) {
 			const team = context.availableTeams.find((t) => t.id === input.teamId);
 			if (!team || team.organizationId !== organizationId || !team.active) {
 				throw new Error(
@@ -347,7 +369,7 @@ export function updateUser(
 			input.supportLevel !== undefined ? input.supportLevel : target.supportLevel;
 		const teamId = input.teamId !== undefined ? input.teamId : target.teamId;
 
-		validateTechnicalFields({ supportLevel, teamId }, targetOrgId, context);
+		validateTechnicalFields({ supportLevel, teamId }, targetOrgId, context, target);
 
 		const updatedTechnicalUser: AppUser = {
 			id: target.id,

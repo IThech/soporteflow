@@ -1,8 +1,14 @@
 <script lang="ts">
 	import ThemeSelector from '$lib/components/ThemeSelector.svelte';
 	import './theme.css';
-	import EscalationDialog from '$lib/components/EscalationDialog.svelte';
-	import { canEscalate, prepareEscalation, type EscalationInput } from '$lib/incidents/escalation';
+	import {
+		prepareUnifiedAssignment,
+		type UnifiedAssignmentInput,
+		prepareClassificationChange,
+		canEscalate,
+		type ClassificationChangeInput
+	} from '$lib/incidents/escalation';
+	import ClassificationDialog from '$lib/components/ClassificationDialog.svelte';
 	import SettingsView from '$lib/components/settings/SettingsView.svelte';
 	import { canAccessSettings } from '$lib/settings/sections';
 	import {
@@ -63,11 +69,10 @@
 	import IncidentRatingModal from '$lib/components/IncidentRatingModal.svelte';
 	import { isIncidentList } from '$lib/incidents/validation';
 	import {
-		assignmentCandidates,
 		canManageAssignment,
 		canAssignTo,
-		prepareCatalogAssignment,
-		incidentOrganizationId
+		incidentOrganizationId,
+		getAssigneeLevelIncompatibility
 	} from '$lib/incidents/assignment';
 	import {
 		loadHistory,
@@ -90,7 +95,18 @@
 		isIncidentReopened
 	} from '$lib/incidents/lifecycle';
 	import { demoSupportTeams } from '$lib/data/teams';
-	import { supportLevels } from '$lib/types/support';
+	import { demoSupportLevels } from '$lib/data/support-levels';
+	import type { SupportLevelDefinition, SupportTeam } from '$lib/types/support';
+	import {
+		SUPPORT_LEVELS_STORAGE_KEY,
+		loadSupportLevelsResult,
+		saveSupportLevels
+	} from '$lib/support/levels-catalog';
+	import {
+		SUPPORT_TEAMS_STORAGE_KEY,
+		loadSupportTeamsResult,
+		saveSupportTeams
+	} from '$lib/support/teams-catalog';
 	import { USERS_STORAGE_KEY, loadUsersResult, saveUsers } from '$lib/users/catalog';
 	import SlaBadge from '$lib/components/SlaBadge.svelte';
 	import IncidentSlaPanel from '$lib/components/IncidentSlaPanel.svelte';
@@ -121,13 +137,17 @@
 	import type { Incident, IncidentPriority, IncidentStatus } from '$lib/types/incident';
 	import { onMount } from 'svelte';
 	import { initialCategories } from '$lib/data/categories';
+	import {
+		loadCategoriesResult,
+		resolveCategoryRouting,
+		CATEGORY_STORAGE_KEY
+	} from '$lib/categories/catalog';
 	import type { IncidentCategory } from '$lib/types/category';
-	import { SvelteSet } from 'svelte/reactivity';
 
 	import DemoSessionSelector from '$lib/components/DemoSessionSelector.svelte';
 	import { defaultDemoUser } from '$lib/auth/demo-session';
 	import { hasPermission, canAccessOrganization } from '$lib/auth/permissions';
-	import { canViewIncident, canActOnIncident } from '$lib/auth/record-access';
+	import { canViewIncident, canActOnIncident, canAccessRecord } from '$lib/auth/record-access';
 	import type { AppUser } from '$lib/types/user';
 
 	let incidentList = $state<Incident[]>([...initialIncidents]);
@@ -150,6 +170,46 @@
 			return true;
 		} catch (err) {
 			userSaveError = err instanceof Error ? err.message : 'No se pudieron guardar los usuarios.';
+			return false;
+		}
+	}
+
+	let levelList = $state<SupportLevelDefinition[]>([...demoSupportLevels]);
+	let levelsLoaded = $state(false);
+	let levelLoadError = $state('');
+	let levelSaveError = $state('');
+
+	function persistLevels(next: SupportLevelDefinition[]): boolean {
+		if (!levelsLoaded || levelLoadError || !hasPermission(activeUser, 'organization:manage')) {
+			return false;
+		}
+		try {
+			saveSupportLevels(localStorage, next);
+			levelList = next;
+			levelSaveError = '';
+			return true;
+		} catch (err) {
+			levelSaveError = err instanceof Error ? err.message : 'No se pudieron guardar los niveles.';
+			return false;
+		}
+	}
+
+	let teamList = $state<SupportTeam[]>([...demoSupportTeams]);
+	let teamsLoaded = $state(false);
+	let teamLoadError = $state('');
+	let teamSaveError = $state('');
+
+	function persistTeams(next: SupportTeam[]): boolean {
+		if (!teamsLoaded || teamLoadError || !hasPermission(activeUser, 'organization:manage')) {
+			return false;
+		}
+		try {
+			saveSupportTeams(localStorage, next);
+			teamList = next;
+			teamSaveError = '';
+			return true;
+		} catch (err) {
+			teamSaveError = err instanceof Error ? err.message : 'No se pudieron guardar los equipos.';
 			return false;
 		}
 	}
@@ -211,9 +271,10 @@
 		if (!user?.active || !userList.some((u) => u.id === user.id && u.active)) return;
 		editingIncident = null;
 		assignmentIncident = null;
-		escalationIncident = null;
-		escalationError = '';
 		assignmentError = '';
+		classificationIncident = null;
+		classificationError = '';
+		newCategoryId = '';
 		categorySaveError = '';
 		userSaveError = '';
 		isFormOpen = false;
@@ -283,53 +344,6 @@
 	let incidentLoadError = $state('');
 	let history = $state<IncidentHistoryEntry[]>([]);
 	let assignmentReady = $state(false);
-	let escalationIncident = $state<Incident | null>(null);
-	let escalationError = $state('');
-	function openEscalation(incident: Incident) {
-		if (!assignmentReady || incidentLoadError || !canEscalate(activeUser, incident)) return;
-		escalationError = '';
-		escalationIncident = incident;
-	}
-	function confirmEscalation(input: EscalationInput) {
-		if (!assignmentReady || incidentLoadError || !escalationIncident) return;
-		try {
-			const id = escalationIncident.id;
-			const original = incidentList.find((item) => item.id === id);
-			if (!original) throw new Error('La incidencia ya no existe.');
-			const change = prepareEscalation(activeUser, original, userList, demoSupportTeams, input);
-			if (!change) {
-				escalationIncident = null;
-				return;
-			}
-			// Responsible-only changes belong in the existing assignment dialog/catalog.
-			if (change.event.eventType !== 'escalated')
-				throw new Error('Utiliza Asignar/Reasignar para cambiar únicamente el responsable.');
-			const next = incidentList.map((item) => (item.id === id ? change.incident : item));
-			const nextHistory = [...history, change.event];
-			commitAssignment(
-				localStorage,
-				next,
-				nextHistory,
-				storedIncidentSnapshot,
-				storedHistorySnapshot
-			);
-			incidentList = next;
-			history = nextHistory;
-			storedIncidentSnapshot = JSON.stringify(next);
-			storedHistorySnapshot = JSON.stringify(nextHistory);
-			escalationIncident = null;
-			const notif = buildIncidentNotification({
-				type: 'incident_escalated',
-				incident: change.incident,
-				actor: activeUser,
-				newAssigneeId: input.assignedToUserId,
-				reason: input.reason
-			});
-			recordNotification(notif);
-		} catch (error) {
-			escalationError = error instanceof Error ? error.message : 'No se pudo guardar el escalado.';
-		}
-	}
 
 	let assignmentError = $state('');
 	let assignmentIncident = $state<Incident | null>(null);
@@ -348,7 +362,7 @@
 	function teamName(incident: Incident): string {
 		if (!incident.teamId) return 'Sin equipo';
 		return (
-			demoSupportTeams.find(
+			teamList.find(
 				(team) =>
 					team.id === incident.teamId && team.organizationId === incidentOrganizationId(incident)
 			)?.name ?? 'Equipo no disponible'
@@ -358,10 +372,9 @@
 	function openAssignment(incident: Incident, self = false) {
 		if (
 			!assignmentReady ||
-			!reasonsReady ||
 			incidentLoadError ||
 			!(self
-				? canAssignTo(activeUser, incident, activeUser.id)
+				? canAssignTo(activeUser, incident, activeUser.id, levelList)
 				: canManageAssignment(activeUser, incident))
 		)
 			return;
@@ -369,26 +382,30 @@
 		assignmentTarget = self ? activeUser.id : (incident.assignedToUserId ?? '');
 		assignmentIncident = incident;
 	}
-	function confirmAssignment(targetId: string, selection: string, manual: string, comment: string) {
-		if (!assignmentReady || !reasonsReady || incidentLoadError || !assignmentIncident) return;
+
+	let classificationIncident = $state<Incident | null>(null);
+	let classificationError = $state('');
+
+	function openClassification(incident: Incident) {
+		if (!assignmentReady || incidentLoadError || !canEscalate(activeUser, incident)) return;
+		classificationError = '';
+		classificationIncident = incident;
+	}
+
+	function confirmClassification(input: ClassificationChangeInput) {
+		if (!assignmentReady || incidentLoadError || !classificationIncident) return;
 		try {
-			const id = assignmentIncident.id;
+			const id = classificationIncident.id;
 			const original = incidentList.find((item) => item.id === id);
 			if (!original) throw new Error('La incidencia ya no existe.');
-			if (localStorage.getItem(REASONS_KEY) !== reasonSnapshot)
-				throw new Error('El catálogo ha cambiado. Recarga antes de asignar.');
-			const change = prepareCatalogAssignment(
-				activeUser,
-				original,
-				userList,
-				targetId,
-				reasonList,
-				selection,
-				manual,
-				comment
-			);
+			const change = prepareClassificationChange(activeUser, original, input, {
+				levels: levelList,
+				teams: teamList,
+				categories: categoryList
+			});
 			if (!change) {
-				assignmentIncident = null;
+				classificationIncident = null;
+				classificationError = '';
 				return;
 			}
 			const next = incidentList.map((item) => (item.id === id ? change.incident : item));
@@ -404,20 +421,83 @@
 			history = nextHistory;
 			storedIncidentSnapshot = JSON.stringify(next);
 			storedHistorySnapshot = JSON.stringify(nextHistory);
+			if (editingIncident && editingIncident.id === id) {
+				editingIncident = {
+					...change.incident,
+					description: change.incident.description ?? '',
+					solution: change.incident.solution ?? ''
+				};
+			}
+			classificationIncident = null;
+			classificationError = '';
+			if (change.event.eventType === 'escalated') {
+				const notif = buildIncidentNotification({
+					type: 'incident_escalated',
+					incident: change.incident,
+					actor: activeUser,
+					newAssigneeId: change.incident.assignedToUserId ?? undefined,
+					reason: change.event.reason ?? ''
+				});
+				recordNotification(notif);
+			}
+		} catch (error) {
+			classificationError =
+				error instanceof Error ? error.message : 'No se pudo guardar la clasificación.';
+		}
+	}
+	function confirmAssignment(input: UnifiedAssignmentInput) {
+		if (!assignmentReady || incidentLoadError || !assignmentIncident) return;
+		try {
+			const id = assignmentIncident.id;
+			const original = incidentList.find((item) => item.id === id);
+			if (!original) throw new Error('La incidencia ya no existe.');
+			const change = prepareUnifiedAssignment(
+				activeUser,
+				original,
+				userList,
+				teamList,
+				input,
+				levelList
+			);
+			if (!change) {
+				assignmentIncident = null;
+				assignmentError = '';
+				return;
+			}
+			const next = incidentList.map((item) => (item.id === id ? change.incident : item));
+			const nextHistory = [...history, change.event];
+			commitAssignment(
+				localStorage,
+				next,
+				nextHistory,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+			incidentList = next;
+			history = nextHistory;
+			storedIncidentSnapshot = JSON.stringify(next);
+			storedHistorySnapshot = JSON.stringify(nextHistory);
+			if (editingIncident && editingIncident.id === id) {
+				editingIncident = {
+					...change.incident,
+					description: change.incident.description ?? '',
+					solution: change.incident.solution ?? ''
+				};
+			}
 			assignmentIncident = null;
-			const notifType: NotificationType = original.assignedToUserId
-				? 'incident_reassigned'
-				: 'incident_assigned';
-			const reasonText =
-				selection === '__other__'
-					? manual
-					: (reasonList.find((r) => r.id === selection)?.name ?? manual);
+			assignmentError = '';
+			const notifType: NotificationType =
+				change.event.eventType === 'escalated'
+					? 'incident_escalated'
+					: change.event.eventType === 'reassigned'
+						? 'incident_reassigned'
+						: 'incident_assigned';
 			const notif = buildIncidentNotification({
 				type: notifType,
 				incident: change.incident,
 				actor: activeUser,
-				newAssigneeId: targetId,
-				reason: reasonText
+				newAssigneeId: change.incident.assignedToUserId ?? undefined,
+				reason: change.event.reason ?? ''
 			});
 			recordNotification(notif);
 		} catch (error) {
@@ -944,6 +1024,7 @@
 	}
 
 	let isFormOpen = $state(false);
+	let newCategoryId = $state('');
 
 	const priorityLabels = {
 		low: 'Baja',
@@ -1090,6 +1171,9 @@
 				...messageIncidentIds
 			) + 1;
 
+		const matchedCat = newCategoryId ? categoryList.find((c) => c.id === newCategoryId) : undefined;
+		const categoryRouting = resolveCategoryRouting(matchedCat);
+
 		const draft: Incident = {
 			id: nextId,
 			organizationId: activeUser.organizationId,
@@ -1101,7 +1185,8 @@
 			solution: '',
 			status: 'open',
 			priority,
-			createdAt: new Date().toISOString()
+			createdAt: new Date().toISOString(),
+			...categoryRouting
 		};
 
 		incidentList.unshift(applyCreationSla(draft, slaCheck.policies));
@@ -1112,6 +1197,7 @@
 		client = '';
 		description = '';
 		priority = 'medium';
+		newCategoryId = '';
 		isFormOpen = false;
 	}
 
@@ -1214,8 +1300,6 @@
 		editingIncident = null;
 	}
 
-	const CATEGORY_STORAGE_KEY = 'soporteflow-categories';
-
 	let categoryLoaded = $state(false);
 	let categoryLoadError = $state('');
 	let categorySaveError = $state('');
@@ -1233,35 +1317,6 @@
 				'No se pudieron guardar los cambios. El catálogo no se ha modificado. Inténtalo de nuevo.';
 			return false;
 		}
-	}
-
-	function isCategoryList(value: unknown): value is IncidentCategory[] {
-		if (!Array.isArray(value)) return false;
-
-		const ids = new SvelteSet<string>();
-
-		return value.every((item: unknown) => {
-			if (typeof item !== 'object' || item === null) return false;
-
-			const category = item as Record<string, unknown>;
-
-			if (
-				typeof category.id !== 'string' ||
-				!category.id.trim() ||
-				typeof category.name !== 'string' ||
-				!category.name.trim() ||
-				typeof category.description !== 'string' ||
-				typeof category.active !== 'boolean' ||
-				(category.organizationId !== undefined && typeof category.organizationId !== 'string')
-			) {
-				return false;
-			}
-
-			if (ids.has(category.id)) return false;
-
-			ids.add(category.id);
-			return true;
-		});
 	}
 
 	onMount(() => {
@@ -1283,21 +1338,53 @@
 
 		try {
 			const storedCategories = localStorage.getItem(CATEGORY_STORAGE_KEY);
-
-			if (storedCategories !== null) {
-				const parsedCategories: unknown = JSON.parse(storedCategories);
-
-				if (!isCategoryList(parsedCategories)) {
-					throw new Error('El catálogo guardado no tiene un formato válido.');
-				}
-
-				categoryList = parsedCategories;
+			const result = loadCategoriesResult(storedCategories);
+			if (result.status === 'missing') {
+				categoryList = result.seededCategories;
+			} else if (result.status === 'valid') {
+				categoryList = result.categories;
+				// Persist migrated categories so subsequent loads have full modern routing fields
+				localStorage.setItem(CATEGORY_STORAGE_KEY, JSON.stringify(result.categories));
+			} else if (result.status === 'corrupt') {
+				categoryLoadError = result.error;
 			}
 		} catch {
 			categoryLoadError =
 				'No se pudo cargar el catálogo. No se han modificado los datos guardados.';
 		} finally {
 			categoryLoaded = true;
+		}
+
+		try {
+			const storedLevels = localStorage.getItem(SUPPORT_LEVELS_STORAGE_KEY);
+			const result = loadSupportLevelsResult(storedLevels);
+			if (result.status === 'missing') {
+				levelList = result.seededLevels;
+			} else if (result.status === 'valid') {
+				levelList = result.levels;
+			} else if (result.status === 'corrupt') {
+				levelLoadError = result.error;
+			}
+		} catch {
+			levelLoadError = 'No se pudieron cargar los niveles de soporte guardados.';
+		} finally {
+			levelsLoaded = true;
+		}
+
+		try {
+			const storedTeams = localStorage.getItem(SUPPORT_TEAMS_STORAGE_KEY);
+			const result = loadSupportTeamsResult(storedTeams);
+			if (result.status === 'missing') {
+				teamList = result.seededTeams;
+			} else if (result.status === 'valid') {
+				teamList = result.teams;
+			} else if (result.status === 'corrupt') {
+				teamLoadError = result.error;
+			}
+		} catch {
+			teamLoadError = 'No se pudieron cargar los equipos guardados.';
+		} finally {
+			teamsLoaded = true;
 		}
 	});
 </script>
@@ -1381,8 +1468,17 @@
 					usersReady={usersLoaded}
 					userError={userLoadError || userSaveError}
 					onUserChange={persistUsers}
-					availableSupportLevels={supportLevels}
-					availableTeams={demoSupportTeams}
+					supportLevels={levelList}
+					supportLevelsReady={levelsLoaded}
+					supportLevelError={levelLoadError || levelSaveError}
+					onSupportLevelChange={persistLevels}
+					teams={teamList}
+					teamsReady={teamsLoaded}
+					teamError={teamLoadError || teamSaveError}
+					onTeamChange={persistTeams}
+					availableSupportLevels={levelList}
+					availableTeams={teamList}
+					incidents={incidentList}
 					categories={categoryList}
 					categoriesReady={categoryLoaded}
 					categoryError={categoryLoadError || categorySaveError}
@@ -1502,6 +1598,8 @@
 							<tr class="border-b border-slate-800">
 								<th scope="col" class="px-6 py-4 font-medium">Incidencia</th>
 								<th scope="col" class="px-6 py-4 font-medium">Cliente</th>
+								<th scope="col" class="px-6 py-4 font-medium">Categoría</th>
+								<th scope="col" class="px-6 py-4 font-medium">Nivel</th>
 								<th scope="col" class="px-6 py-4 font-medium">Prioridad</th>
 								<th scope="col" class="px-6 py-4 font-medium">SLA</th>
 								<th scope="col" class="px-6 py-4 font-medium">Estado</th>
@@ -1532,12 +1630,10 @@
 													Solución: {incident.solution}
 												</p>{/if}{/if}
 										<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
-
-										<p class="mt-2 text-sm text-slate-400">Categoría: {categoryName(incident)}</p>
 										<p class="mt-2 text-sm text-slate-300">
 											{incident.assignedToUserId ? 'Asignado a: ' : ''}{assigneeName(incident)}
 										</p>
-										{#if assignmentReady && reasonsReady && !incidentLoadError && activeUser.role === 'technician' && !incident.assignedToUserId && canAssignTo(activeUser, incident, activeUser.id)}
+										{#if assignmentReady && !incidentLoadError && activeUser.role === 'technician' && !incident.assignedToUserId && canAssignTo(activeUser, incident, activeUser.id, levelList)}
 											<button
 												type="button"
 												onclick={() => openAssignment(incident, true)}
@@ -1550,6 +1646,24 @@
 									<td class="px-6 py-4 text-sm text-slate-400">
 										<span class="mobile-field-label" aria-hidden="true">Cliente</span
 										>{incident.client}
+									</td>
+
+									<td class="incident-category px-6 py-4 text-sm text-slate-300">
+										<span class="mobile-field-label" aria-hidden="true">Categoría</span>
+										{categoryName(incident)}
+									</td>
+
+									<td class="incident-level px-6 py-4 text-sm">
+										<span class="mobile-field-label" aria-hidden="true">Nivel</span>
+										{#if incident.supportLevel}
+											<span
+												class="inline-flex items-center rounded-md border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-xs font-semibold text-cyan-300"
+											>
+												{incident.supportLevel}
+											</span>
+										{:else}
+											<span class="text-xs text-slate-500">—</span>
+										{/if}
 									</td>
 
 									<td
@@ -1608,7 +1722,7 @@
 								</tr>
 							{:else}
 								<tr>
-									<td colspan="6" class="px-6 py-10 text-center text-sm text-slate-400">
+									<td colspan="8" class="px-6 py-10 text-center text-sm text-slate-400">
 										No hay incidencias que coincidan con los filtros actuales.
 									</td>
 								</tr>
@@ -1619,37 +1733,36 @@
 			</section>
 		{/if}
 	</main>
-	{#if escalationIncident && assignmentReady && !incidentLoadError && canEscalate(activeUser, escalationIncident)}
-		<EscalationDialog
-			incident={escalationIncident}
-			teams={demoSupportTeams}
-			users={userList}
-			currentAssignee={assigneeName(escalationIncident)}
-			error={escalationError}
-			onconfirm={confirmEscalation}
-			oncancel={() => {
-				escalationIncident = null;
-				escalationError = '';
-			}}
-		/>
-	{/if}
-
 	{#if assignmentIncident && assignmentReady && !incidentLoadError && canActOnIncident(activeUser, assignmentIncident, 'incidents:assign')}
 		<AssignmentDialog
-			reasons={reasonList}
-			actor={activeUser}
 			incident={assignmentIncident}
-			candidates={assignmentCandidates(assignmentIncident, userList).filter(
-				(user) =>
-					assignmentIncident !== null && canAssignTo(activeUser, assignmentIncident, user.id)
-			)}
-			currentName={assigneeName(assignmentIncident)}
+			actor={activeUser}
+			users={userList}
+			teams={teamList}
+			levels={levelList}
+			categories={categoryList}
+			reasons={reasonList}
 			initialTarget={assignmentTarget}
 			error={assignmentError}
 			onconfirm={confirmAssignment}
 			oncancel={() => {
 				assignmentIncident = null;
 				assignmentError = '';
+			}}
+		/>
+	{/if}
+	{#if classificationIncident && assignmentReady && !incidentLoadError && canEscalate(activeUser, classificationIncident)}
+		<ClassificationDialog
+			incident={classificationIncident}
+			categories={categoryList}
+			levels={levelList}
+			teams={teamList}
+			reasons={reasonList}
+			error={classificationError}
+			onconfirm={confirmClassification}
+			oncancel={() => {
+				classificationIncident = null;
+				classificationError = '';
 			}}
 		/>
 	{/if}
@@ -1715,6 +1828,38 @@
 						placeholder="¿Qué ocurre, desde cuándo y a quién afecta?"
 						class="w-full resize-y rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
 					></textarea>
+				</div>
+
+				<div>
+					<label for="new-category" class="mb-2 block text-sm font-medium text-slate-300">
+						Categoría
+					</label>
+					<select
+						id="new-category"
+						bind:value={newCategoryId}
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+					>
+						<option value="">Sin categoría</option>
+						{#each categoryList.filter((c) => c.active && canAccessRecord(activeUser, c)) as cat (cat.id)}
+							<option value={cat.id}>{cat.name}</option>
+						{/each}
+					</select>
+					{#if newCategoryId}
+						{@const selectedCat = categoryList.find((c) => c.id === newCategoryId)}
+						{#if selectedCat && (selectedCat.defaultSupportLevel || selectedCat.defaultTeamId)}
+							{@const selectedTeam = teamList.find((t) => t.id === selectedCat.defaultTeamId)}
+							<p class="mt-1.5 text-xs text-slate-400">
+								Routing inicial:
+								<span class="font-medium text-cyan-300"
+									>{selectedCat.defaultSupportLevel ?? '—'}</span
+								>
+								·
+								<span class="font-medium text-slate-300"
+									>{selectedTeam ? selectedTeam.name : (selectedCat.defaultTeamId ?? '—')}</span
+								>
+							</p>
+						{/if}
+					{/if}
 				</div>
 
 				<div>
@@ -2135,6 +2280,12 @@
 				{/if}
 
 				{#if managedIncident}
+					{@const currentAssignee = userList.find((u) => u.id === managedIncident.assignedToUserId)}
+					{@const incompatibility = getAssigneeLevelIncompatibility(
+						managedIncident,
+						currentAssignee,
+						levelList
+					)}
 					<div class="space-y-4">
 						<section
 							aria-labelledby="incident-management-title"
@@ -2149,7 +2300,7 @@
 									<dd class="mt-1">{assigneeName(managedIncident)}</dd>
 								</div>
 								<div>
-									<dt class="text-slate-400">Nivel</dt>
+									<dt class="text-slate-400">Nivel requerido</dt>
 									<dd class="mt-1">{managedIncident.supportLevel ?? 'Sin nivel'}</dd>
 								</div>
 								<div>
@@ -2157,16 +2308,49 @@
 									<dd class="mt-1">{teamName(managedIncident)}</dd>
 								</div>
 							</dl>
+							{#if incompatibility}
+								<div
+									role="alert"
+									class="incompatibility-warning mt-3 flex items-start gap-2.5 rounded-lg border p-3 text-xs leading-relaxed"
+								>
+									<svg
+										class="warning-icon mt-0.5 h-4 w-4 shrink-0"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+										aria-hidden="true"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+										/>
+									</svg>
+									<div class="space-y-0.5">
+										<p class="warning-title font-semibold">
+											Responsable por debajo del nivel requerido
+										</p>
+										<p class="warning-text">
+											{incompatibility.message}
+										</p>
+									</div>
+								</div>
+							{/if}
 							<div class="mt-4 flex flex-wrap gap-3">
-								{#if assignmentReady && reasonsReady && !incidentLoadError}
+								{#if assignmentReady && !incidentLoadError}
 									{#if canManageAssignment(activeUser, managedIncident)}
 										<button
 											type="button"
 											onclick={() => openAssignment(managedIncident)}
-											class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-											>{managedIncident.assignedToUserId ? 'Reasignar' : 'Asignar técnico'}</button
+											class="rounded border px-3 py-2 text-sm transition-colors {incompatibility
+												? 'btn-reassign-emphasis font-medium'
+												: 'border-slate-600 text-cyan-300 hover:bg-slate-800'}"
+											>{managedIncident.assignedToUserId
+												? 'Reasignar incidencia'
+												: 'Asignar incidencia'}</button
 										>
-									{:else if activeUser.role === 'technician' && !managedIncident.assignedToUserId && canAssignTo(activeUser, managedIncident, activeUser.id)}
+									{:else if activeUser.role === 'technician' && !managedIncident.assignedToUserId && canAssignTo(activeUser, managedIncident, activeUser.id, levelList)}
 										<button
 											type="button"
 											onclick={() => openAssignment(managedIncident, true)}
@@ -2174,14 +2358,14 @@
 											>Asignarme</button
 										>
 									{/if}
-								{/if}
-								{#if assignmentReady && !incidentLoadError && canEscalate(activeUser, managedIncident)}
-									<button
-										type="button"
-										onclick={() => openEscalation(managedIncident)}
-										class="rounded border border-slate-600 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-										>Escalar incidencia</button
-									>
+									{#if canEscalate(activeUser, managedIncident)}
+										<button
+											type="button"
+											onclick={() => openClassification(managedIncident)}
+											class="rounded border border-slate-600 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+											>Cambiar clasificación</button
+										>
+									{/if}
 								{/if}
 							</div>
 						</section>
@@ -2197,7 +2381,7 @@
 						{history}
 						users={userList}
 						categories={categoryList}
-						teams={demoSupportTeams}
+						teams={teamList}
 						incidents={incidentList}
 						incidentsSnapshot={storedIncidentSnapshot}
 						onincidentupdate={(updated) => {

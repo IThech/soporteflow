@@ -1,5 +1,4 @@
 import type { IncidentHistoryEntry } from '$lib/types/incident-history';
-import { supportLevels } from '$lib/types/support';
 
 /**
  * Transitional system actor identifier for client-side v1 automatic actions (e.g. auto-close).
@@ -20,7 +19,7 @@ const routing = (v: unknown) =>
 	object(v) &&
 	(v.supportLevel === undefined ||
 		v.supportLevel === null ||
-		supportLevels.some((level) => level === v.supportLevel)) &&
+		(typeof v.supportLevel === 'string' && v.supportLevel.trim().length > 0)) &&
 	['teamId', 'assignedToUserId'].every((key) => v[key] === undefined || nullableId(v[key]));
 
 function validValue(event: string, value: unknown): boolean {

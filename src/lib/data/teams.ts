@@ -6,8 +6,10 @@ export const demoSupportTeam: SupportTeam = {
 	organizationId: demoOrganization.id,
 	name: 'Soporte',
 	description: 'Atención técnica general de Nodhouses.',
-	active: true
+	active: true,
+	createdAt: '2026-09-01'
 };
+
 export const demoSupportTeams: SupportTeam[] = [
 	demoSupportTeam,
 	{
@@ -15,6 +17,7 @@ export const demoSupportTeams: SupportTeam[] = [
 		organizationId: demoOrganization.id,
 		name: 'Operaciones Nodhouses',
 		description: 'Equipo demo de coordinación operativa.',
-		active: true
+		active: true,
+		createdAt: '2026-09-01'
 	}
 ];

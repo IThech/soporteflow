@@ -136,7 +136,7 @@
 {#if allowed}
 	<section
 		aria-labelledby="sla-policies-title"
-		class="mt-8 rounded-xl border border-slate-800 bg-slate-900 p-6"
+		class="rounded-xl border border-slate-800 bg-slate-900 p-6"
 	>
 		<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 			<div>
@@ -357,11 +357,7 @@
 								<div class="flex flex-wrap items-center gap-2">
 									<h3 class="font-medium text-slate-200">{policy.name}</h3>
 									{#if policy.isDefault}
-										<span
-											class="rounded border border-cyan-800/60 bg-cyan-950 px-2 py-0.5 text-xs font-medium text-cyan-300"
-										>
-											Predeterminada
-										</span>
+										<span class="badge-default-policy"> Predeterminada </span>
 									{/if}
 								</div>
 								<span

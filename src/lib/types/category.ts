@@ -4,4 +4,6 @@ export interface IncidentCategory {
 	name: string;
 	description: string;
 	active: boolean;
+	defaultSupportLevel?: string | null;
+	defaultTeamId?: string | null;
 }

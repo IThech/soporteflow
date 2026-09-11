@@ -1,5 +1,4 @@
 import type { Incident } from '$lib/types/incident';
-import { supportLevels } from '$lib/types/support';
 
 function isValidSlaSnapshot(sla: unknown): boolean {
 	if (sla === undefined || sla === null) return true;
@@ -50,7 +49,8 @@ export function isIncidentList(parsed: unknown): parsed is Incident[] {
 				['title', 'client', 'createdAt'].every((key) => typeof item[key] === 'string') &&
 				['open', 'pending', 'resolved', 'closed'].includes(item.status) &&
 				['low', 'medium', 'high'].includes(item.priority) &&
-				(item.supportLevel === undefined || supportLevels.includes(item.supportLevel)) &&
+				(item.supportLevel === undefined ||
+					(typeof item.supportLevel === 'string' && item.supportLevel.trim().length > 0)) &&
 				[
 					'organizationId',
 					'clientUserId',

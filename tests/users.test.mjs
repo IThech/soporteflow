@@ -481,6 +481,71 @@ test('Administración v1 — Fase B: Gestión de Usuarios (Dominio, Persistencia
 					defaultContext
 				)
 			);
+
+			// Niveles y equipos inactivos:
+			// Un usuario existente puede conservar su nivel y equipo inactivos (DECISIÓN 5)
+			const contextWithInactives = {
+				availableLevels: [
+					{
+						id: 'l1',
+						organizationId: orgId,
+						code: 'N1',
+						name: 'N1',
+						order: 1,
+						active: false,
+						createdAt: '2026-09-01'
+					},
+					{
+						id: 'l2',
+						organizationId: orgId,
+						code: 'N2',
+						name: 'N2',
+						order: 2,
+						active: true,
+						createdAt: '2026-09-01'
+					}
+				],
+				availableTeams: [{ ...demoSupportTeams[0], active: false }]
+			};
+
+			// technician ya tiene N1 y team-nodhouses-support: conservar ambos inactivos al actualizar nombre es válido
+			const preservedInactive = updateUser(
+				orgAdmin,
+				currentUsers,
+				{
+					id: technician.id,
+					name: 'Técnico Nombre Cambiado',
+					email: technician.email,
+					role: 'technician',
+					supportLevel: 'N1',
+					teamId: demoSupportTeams[0].id
+				},
+				contextWithInactives
+			);
+			assert.equal(preservedInactive.find((u) => u.id === technician.id).supportLevel, 'N1');
+			assert.equal(
+				preservedInactive.find((u) => u.id === technician.id).teamId,
+				demoSupportTeams[0].id
+			);
+
+			// Pero asignar un nivel o equipo inactivo como NUEVA asignación debe ser rechazado
+			const tech2 = currentUsers.find((u) => u.id === 'user-nodhouses-technician-2'); // tiene N2
+			assert.throws(
+				() =>
+					updateUser(
+						orgAdmin,
+						currentUsers,
+						{
+							id: tech2.id,
+							name: tech2.name,
+							email: tech2.email,
+							role: 'technician',
+							supportLevel: 'N1' // N1 está inactivo
+						},
+						contextWithInactives
+					),
+				/nivel de soporte seleccionado no es válido o no está activo/i
+			);
 		});
 
 		await t.test('6. Protección contra degradación o desactivación del último admin', () => {

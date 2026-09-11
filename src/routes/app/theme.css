@@ -422,3 +422,95 @@ html[data-app-theme='light'] .support-app .btn-reject-solution:focus-visible {
 .support-app .internal-messages {
 	background: var(--color-slate-950);
 }
+
+/* Operational incompatibility warning callout in drawer */
+.support-app .incompatibility-warning {
+	border-color: rgba(245, 158, 11, 0.4);
+	background-color: rgba(245, 158, 11, 0.1);
+	color: #fef3c7;
+}
+.support-app .incompatibility-warning .warning-title {
+	color: #fcd34d;
+}
+.support-app .incompatibility-warning .warning-text {
+	color: #fde68a;
+}
+.support-app .incompatibility-warning .warning-icon {
+	color: #fbbf24;
+}
+
+html[data-app-theme='light'] .support-app .incompatibility-warning {
+	border-color: rgba(217, 119, 6, 0.45);
+	background-color: #fffbeb;
+	color: #78350f;
+}
+html[data-app-theme='light'] .support-app .incompatibility-warning .warning-title {
+	color: #92400e;
+}
+html[data-app-theme='light'] .support-app .incompatibility-warning .warning-text {
+	color: #b45309;
+}
+html[data-app-theme='light'] .support-app .incompatibility-warning .warning-icon {
+	color: #d97706;
+}
+
+/* Reassign button subtle emphasis when incompatible */
+.support-app .btn-reassign-emphasis {
+	border-color: rgba(245, 158, 11, 0.6);
+	background-color: rgba(245, 158, 11, 0.12);
+	color: #fcd34d;
+}
+.support-app .btn-reassign-emphasis:hover {
+	background-color: rgba(245, 158, 11, 0.22);
+}
+
+html[data-app-theme='light'] .support-app .btn-reassign-emphasis {
+	border-color: #d97706;
+	background-color: #fef3c7;
+	color: #92400e;
+}
+html[data-app-theme='light'] .support-app .btn-reassign-emphasis:hover {
+	background-color: #fde68a;
+}
+
+/* Settings view common layout alignment */
+.support-app .settings-content > :first-child,
+.support-app .settings-content > * > :first-child,
+.support-app .settings-content section:first-of-type {
+	margin-top: 0;
+}
+
+/* Settings navigation structural headers */
+.support-app .settings-nav-header {
+	font-size: 0.6875rem;
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--color-slate-400);
+	cursor: default;
+	user-select: none;
+}
+
+html[data-app-theme='light'] .support-app .settings-nav-header {
+	color: #64748b;
+}
+
+/* Badge "Predeterminada" in SLA policies and catalogs */
+.support-app .badge-default-policy {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.125rem 0.5rem;
+	font-size: 0.75rem;
+	font-weight: 500;
+	border-radius: 0.375rem;
+	border: 1px solid rgba(6, 182, 212, 0.35);
+	background-color: rgba(8, 145, 178, 0.2);
+	color: #a5f3fc;
+	letter-spacing: 0.01em;
+}
+
+html[data-app-theme='light'] .support-app .badge-default-policy {
+	border: 1px solid rgba(14, 116, 144, 0.25);
+	background-color: #ecfeff;
+	color: #0e7490;
+}

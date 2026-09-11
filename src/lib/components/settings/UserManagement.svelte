@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { AppUser, AdministrableUserRole } from '$lib/types/user';
-	import type { SupportLevel, SupportTeam } from '$lib/types/support';
+	import type { SupportLevel, SupportLevelDefinition, SupportTeam } from '$lib/types/support';
 	import { hasPermission } from '$lib/auth/permissions';
 	import {
 		createUser,
@@ -23,7 +23,7 @@
 		users: AppUser[];
 		ready: boolean;
 		error?: string;
-		availableSupportLevels?: readonly SupportLevel[];
+		availableSupportLevels?: readonly (string | SupportLevelDefinition)[];
 		availableTeams?: readonly SupportTeam[];
 		onchange: (next: AppUser[]) => boolean;
 	} = $props();
@@ -84,11 +84,58 @@
 		client: 'Cliente'
 	};
 
+	function getLevelObj(
+		codeOrLevel?: string | SupportLevelDefinition
+	): SupportLevelDefinition | undefined {
+		if (!codeOrLevel) return undefined;
+		if (typeof codeOrLevel === 'object') return codeOrLevel;
+		const norm = codeOrLevel.trim().toUpperCase();
+		return availableSupportLevels.find(
+			(l) => typeof l === 'object' && l.code.trim().toUpperCase() === norm
+		) as SupportLevelDefinition | undefined;
+	}
+
+	function levelLabel(code?: string): string {
+		if (!code) return '—';
+		const obj = getLevelObj(code);
+		if (!obj) return code;
+		return `${obj.code} — ${obj.name}${!obj.active ? ' (inactivo)' : ''}`;
+	}
+
+	function levelBadge(code?: string): string {
+		if (!code) return '—';
+		const obj = getLevelObj(code);
+		return obj ? obj.code : code;
+	}
+
+	function isLevelInactive(code?: string): boolean {
+		if (!code) return false;
+		const obj = getLevelObj(code);
+		return obj ? !obj.active : false;
+	}
+
+	function teamObj(teamId?: string): SupportTeam | undefined {
+		if (!teamId) return undefined;
+		return availableTeams.find((t) => t.id === teamId);
+	}
+
 	function teamName(teamId?: string): string {
 		if (!teamId) return '—';
-		const team = availableTeams.find((t) => t.id === teamId);
-		return team ? team.name : '—';
+		const team = teamObj(teamId);
+		if (!team) return '—';
+		return `${team.name}${!team.active ? ' (inactivo)' : ''}`;
 	}
+
+	const activeLevels = $derived(
+		availableSupportLevels.filter((l) => {
+			if (typeof l === 'string') return true;
+			return l.active && l.organizationId === actor.organizationId;
+		})
+	);
+
+	const activeTeams = $derived(
+		availableTeams.filter((t) => t.active && t.organizationId === actor.organizationId)
+	);
 
 	function openCreateDialog() {
 		if (!allowed || !actor.organizationId) return;
@@ -395,8 +442,11 @@
 									{#if (user.role === 'technician' || user.role === 'organization_admin') && user.supportLevel}
 										<span
 											class="inline-flex items-center rounded bg-slate-800 px-1.5 py-0.5 text-xs font-semibold whitespace-nowrap text-cyan-300 ring-1 ring-slate-700/50"
+											title={levelLabel(user.supportLevel)}
 										>
-											{user.supportLevel}
+											{levelBadge(user.supportLevel)}{isLevelInactive(user.supportLevel)
+												? ' (inactivo)'
+												: ''}
 										</span>
 									{:else}
 										<span class="whitespace-nowrap text-slate-500">—</span>
@@ -498,13 +548,15 @@
 								{#if user.supportLevel}
 									<span
 										class="inline-flex items-center rounded bg-slate-800 px-2 py-0.5 font-medium whitespace-nowrap text-cyan-300 ring-1 ring-slate-700/50"
+										title={levelLabel(user.supportLevel)}
 									>
-										Nivel: {user.supportLevel}
+										Nivel: {levelLabel(user.supportLevel)}
 									</span>
 								{/if}
 								{#if user.teamId}
 									<span
 										class="inline-flex items-center rounded bg-slate-800 px-2 py-0.5 font-medium whitespace-nowrap text-slate-300 ring-1 ring-slate-700/50"
+										title={teamName(user.teamId)}
 									>
 										{teamName(user.teamId)}
 									</span>
@@ -655,8 +707,18 @@
 									class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white transition outline-none focus:border-cyan-400"
 								>
 									<option value="">Sin nivel asignado</option>
-									{#each availableSupportLevels as level (level)}
-										<option value={level}>{level}</option>
+									{#if draft.supportLevel && isLevelInactive(draft.supportLevel)}
+										<option value={draft.supportLevel}
+											>Mantener: {levelLabel(draft.supportLevel)}</option
+										>
+									{/if}
+									{#each activeLevels as level (typeof level === 'object' ? level.id : level)}
+										{@const code = typeof level === 'object' ? level.code : level}
+										{@const label =
+											typeof level === 'object' ? `${level.code} — ${level.name}` : level}
+										{#if !draft.supportLevel || code !== draft.supportLevel || !isLevelInactive(code)}
+											<option value={code}>{label}</option>
+										{/if}
 									{/each}
 								</select>
 							</div>
@@ -671,7 +733,10 @@
 									class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white transition outline-none focus:border-cyan-400"
 								>
 									<option value="">Sin equipo asignado</option>
-									{#each availableTeams.filter((t) => t.active && t.organizationId === actor.organizationId) as team (team.id)}
+									{#if draft.teamId && teamObj(draft.teamId) && !teamObj(draft.teamId)?.active}
+										<option value={draft.teamId}>Mantener: {teamName(draft.teamId)}</option>
+									{/if}
+									{#each activeTeams as team (team.id)}
 										<option value={team.id}>{team.name}</option>
 									{/each}
 								</select>

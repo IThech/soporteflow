@@ -39,7 +39,7 @@
 {#if allowed}
 	<section
 		aria-labelledby="reasons-title"
-		class="mt-8 rounded-xl border border-slate-800 bg-slate-900 p-6"
+		class="rounded-xl border border-slate-800 bg-slate-900 p-6"
 	>
 		<h2 id="reasons-title" class="text-lg font-semibold">Motivos de reasignación</h2>
 		<p class="mt-1 text-sm text-slate-400">

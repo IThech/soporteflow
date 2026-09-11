@@ -62,16 +62,16 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDefinition[] = [
 				id: 'support_levels',
 				groupId: 'support',
 				label: 'Niveles de soporte',
-				description: 'Configuración y criterios de escalado para niveles N1, N2 y N3.',
-				status: 'coming_soon',
+				description: 'Configuración y jerarquía operativa para los niveles de atención técnica.',
+				status: 'active',
 				requiredPermission: 'organization:manage'
 			},
 			{
 				id: 'teams',
 				groupId: 'support',
 				label: 'Equipos',
-				description: 'Equipos de soporte técnico y distribución de carga.',
-				status: 'coming_soon',
+				description: 'Equipos de soporte técnico y distribución organizativa de carga.',
+				status: 'active',
 				requiredPermission: 'organization:manage'
 			}
 		]

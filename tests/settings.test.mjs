@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'vite';
 
 test('Administración v1 — Fase A: shell de Configuración y permisos', async (t) => {
@@ -41,15 +42,22 @@ test('Administración v1 — Fase A: shell de Configuración y permisos', async 
 
 			// Verificar secciones activas
 			const activeSections = allSections.filter((s) => s.status === 'active');
-			assert.equal(activeSections.length, 4, 'Debe haber 4 secciones activas en Fase B');
+			assert.equal(activeSections.length, 6, 'Debe haber 6 secciones activas en Fase C');
 			const activeIds = activeSections.map((s) => s.id).sort();
-			assert.deepEqual(activeIds, ['categories', 'reassignment_reasons', 'sla_policies', 'users']);
+			assert.deepEqual(activeIds, [
+				'categories',
+				'reassignment_reasons',
+				'sla_policies',
+				'support_levels',
+				'teams',
+				'users'
+			]);
 
 			// Verificar secciones de próxima fase (coming_soon)
 			const comingSoonSections = allSections.filter((s) => s.status === 'coming_soon');
-			assert.equal(comingSoonSections.length, 3, 'Debe haber 3 secciones de próxima fase');
+			assert.equal(comingSoonSections.length, 1, 'Debe haber 1 sección de próxima fase');
 			const comingSoonIds = comingSoonSections.map((s) => s.id).sort();
-			assert.deepEqual(comingSoonIds, ['locations', 'support_levels', 'teams']);
+			assert.deepEqual(comingSoonIds, ['locations']);
 
 			// Todas las secciones deben tener campos requeridos
 			for (const section of allSections) {
@@ -112,11 +120,13 @@ test('Administración v1 — Fase A: shell de Configuración y permisos', async 
 
 				// getPermittedSettingsSections excluye coming_soon por defecto
 				const activePermitted = getPermittedSettingsSections(orgAdmin);
-				assert.equal(activePermitted.length, 4);
+				assert.equal(activePermitted.length, 6);
 				assert.deepEqual(activePermitted.map((s) => s.id).sort(), [
 					'categories',
 					'reassignment_reasons',
 					'sla_policies',
+					'support_levels',
+					'teams',
 					'users'
 				]);
 
@@ -161,6 +171,68 @@ test('Administración v1 — Fase A: shell de Configuración y permisos', async 
 			const inactiveAdmin = { ...orgAdmin, active: false };
 			assert.equal(canManageSettingsSection(inactiveAdmin, 'categories'), false);
 		});
+
+		await t.test(
+			'Pulido visual de Administración: alineación, badge predeterminada y encabezados estructurales',
+			() => {
+				const settingsViewCode = readFileSync(
+					'src/lib/components/settings/SettingsView.svelte',
+					'utf-8'
+				);
+				const slaPolicyCode = readFileSync(
+					'src/lib/components/SlaPolicyManagement.svelte',
+					'utf-8'
+				);
+				const reasonsCode = readFileSync('src/lib/components/ReassignmentReasons.svelte', 'utf-8');
+				const themeCssCode = readFileSync('src/routes/app/theme.css', 'utf-8');
+
+				// 1. Alineación vertical común y eliminación de mt-8
+				assert.ok(
+					settingsViewCode.includes('class="settings-content'),
+					'SettingsView debe marcar el panel de contenido con settings-content'
+				);
+				assert.ok(
+					themeCssCode.includes('.support-app .settings-content'),
+					'theme.css debe definir reset de margin-top para la alineación común'
+				);
+				assert.ok(
+					!reasonsCode.includes('class="mt-8'),
+					'ReassignmentReasons no debe tener mt-8 en su contenedor raíz'
+				);
+				assert.ok(
+					!slaPolicyCode.includes('class="mt-8'),
+					'SlaPolicyManagement no debe tener mt-8 en su contenedor raíz'
+				);
+
+				// 2. Badge "Predeterminada"
+				assert.ok(
+					slaPolicyCode.includes('badge-default-policy'),
+					'SlaPolicyManagement debe usar la clase badge-default-policy'
+				);
+				assert.ok(
+					themeCssCode.includes('.support-app .badge-default-policy'),
+					'theme.css debe definir estilos oscuros para badge-default-policy'
+				);
+				assert.ok(
+					themeCssCode.includes("html[data-app-theme='light'] .support-app .badge-default-policy"),
+					'theme.css debe definir estilos claros para badge-default-policy'
+				);
+
+				// 3. Encabezados estructurales del menú
+				assert.ok(
+					settingsViewCode.includes('settings-nav-header'),
+					'SettingsView debe usar settings-nav-header en los títulos de grupo'
+				);
+				assert.ok(
+					settingsViewCode.includes('border-t border-slate-800/70'),
+					'SettingsView debe incluir divisores entre grupos estructurales'
+				);
+				assert.ok(
+					themeCssCode.includes('.support-app .settings-nav-header'),
+					'theme.css debe definir jerarquía no interactiva para settings-nav-header'
+				);
+			}
+		);
 	} finally {
 		await server.close();
 	}

@@ -403,6 +403,302 @@ test('Asignaciones, permisos, historial y recuperación de localStorage', async 
 			assert.throws(() => recoverAssignment(storage));
 			assert.equal(storage.getItem(RECOVERY_KEY), '{bad');
 		});
+		await t.test(
+			'Administración v1 — Fase C: Reglas de herencia de routing en asignación inicial',
+			async (sub) => {
+				const { shouldInheritInitialRouting, applyInitialRouting } = await server.ssrLoadModule(
+					'/src/lib/incidents/assignment.ts'
+				);
+				const { demoSupportTeams } = await server.ssrLoadModule('/src/lib/data/teams.ts');
+
+				const unroutedTicket = {
+					id: 100,
+					organizationId: admin.organizationId,
+					title: 'Sin routing previo',
+					client: 'Cliente Demo',
+					status: 'open',
+					priority: 'medium',
+					createdAt: '2026-09-11T10:00:00.000Z'
+				};
+
+				const techWithRouting = {
+					id: 'tech-andres',
+					organizationId: admin.organizationId,
+					name: 'Andres',
+					email: 'andres@nodhouses.test',
+					role: 'technician',
+					supportLevel: 'N1',
+					teamId: demoSupportTeams[0].id,
+					active: true,
+					createdAt: '2026-09-07'
+				};
+
+				const adminOperative = {
+					id: 'admin-operative',
+					organizationId: admin.organizationId,
+					name: 'Admin Operativo',
+					email: 'adminop@nodhouses.test',
+					role: 'organization_admin',
+					supportLevel: 'N2',
+					teamId: demoSupportTeams[1].id,
+					active: true,
+					createdAt: '2026-09-07'
+				};
+
+				const techBare = {
+					id: 'tech-bare',
+					organizationId: admin.organizationId,
+					name: 'Técnico Sin Parámetros',
+					email: 'bare@nodhouses.test',
+					role: 'technician',
+					active: true,
+					createdAt: '2026-09-07'
+				};
+
+				// A) Incidencia sin responsable, nivel ni equipo + técnico N1 / Soporte -> asignación inicial produce responsable + N1 + Soporte.
+				await sub.test('A: Incidencia sin routing adopta nivel y equipo del técnico', () => {
+					assert.equal(shouldInheritInitialRouting(unroutedTicket), true);
+					const res = prepareAssignment(
+						admin,
+						unroutedTicket,
+						[...demoUsers, techWithRouting],
+						techWithRouting.id
+					);
+					assert.ok(res);
+					assert.equal(res.incident.assignedToUserId, techWithRouting.id);
+					assert.equal(res.incident.supportLevel, 'N1');
+					assert.equal(res.incident.teamId, demoSupportTeams[0].id);
+					assert.equal(res.event.eventType, 'assigned');
+				});
+
+				// B) Incidencia sin routing + organization_admin operativo con nivel/equipo -> hereda routing si puede ser responsable según las reglas actuales.
+				await sub.test(
+					'B: organization_admin operativo con nivel/equipo hereda routing inicial',
+					() => {
+						const candidates = assignmentCandidates(unroutedTicket, [...demoUsers, adminOperative]);
+						assert.ok(candidates.some((u) => u.id === adminOperative.id));
+						const res = prepareAssignment(
+							admin,
+							unroutedTicket,
+							[...demoUsers, adminOperative],
+							adminOperative.id
+						);
+						assert.ok(res);
+						assert.equal(res.incident.assignedToUserId, adminOperative.id);
+						assert.equal(res.incident.supportLevel, 'N2');
+						assert.equal(res.incident.teamId, demoSupportTeams[1].id);
+						assert.equal(res.event.eventType, 'assigned');
+					}
+				);
+
+				// C) Incidencia N2 / Infraestructura + reasignación a técnico N2 -> conserva N2 / Infraestructura.
+				await sub.test('C: Reasignación conserva routing existente (N2 / Infraestructura)', () => {
+					const routedIncident = {
+						...unroutedTicket,
+						assignedToUserId: 'user-previous',
+						supportLevel: 'N2',
+						teamId: demoSupportTeams[1].id
+					};
+					assert.equal(shouldInheritInitialRouting(routedIncident), false);
+					// Técnico N1 no puede asumir incidencia N2
+					assert.throws(
+						() =>
+							prepareAssignment(
+								admin,
+								routedIncident,
+								[...demoUsers, techWithRouting],
+								techWithRouting.id,
+								'Reasignación rechazada'
+							),
+						/nivel requerido/
+					);
+					const res = prepareAssignment(
+						admin,
+						routedIncident,
+						[...demoUsers, adminOperative],
+						adminOperative.id,
+						'Reasignación operativa'
+					);
+					assert.ok(res);
+					assert.equal(res.incident.assignedToUserId, adminOperative.id);
+					assert.equal(res.incident.supportLevel, 'N2');
+					assert.equal(res.incident.teamId, demoSupportTeams[1].id);
+					assert.equal(res.event.eventType, 'reassigned');
+				});
+
+				// D) Incidencia con supportLevel pero sin teamId + asignación -> NO completa automáticamente teamId.
+				await sub.test('D: Incidencia con supportLevel pero sin teamId NO completa teamId', () => {
+					const partialIncident = {
+						...unroutedTicket,
+						supportLevel: 'N2'
+					};
+					assert.equal(shouldInheritInitialRouting(partialIncident), false);
+					const res = prepareAssignment(
+						admin,
+						partialIncident,
+						[...demoUsers, adminOperative],
+						adminOperative.id
+					);
+					assert.ok(res);
+					assert.equal(res.incident.assignedToUserId, adminOperative.id);
+					assert.equal(res.incident.supportLevel, 'N2');
+					assert.equal(res.incident.teamId, undefined);
+				});
+
+				// E) Incidencia con teamId pero sin supportLevel + asignación -> NO completa automáticamente supportLevel.
+				await sub.test(
+					'E: Incidencia con teamId pero sin supportLevel NO completa supportLevel',
+					() => {
+						const partialIncident = {
+							...unroutedTicket,
+							teamId: demoSupportTeams[1].id
+						};
+						assert.equal(shouldInheritInitialRouting(partialIncident), false);
+						const res = prepareAssignment(
+							admin,
+							partialIncident,
+							[...demoUsers, techWithRouting],
+							techWithRouting.id
+						);
+						assert.ok(res);
+						assert.equal(res.incident.assignedToUserId, techWithRouting.id);
+						assert.equal(res.incident.teamId, demoSupportTeams[1].id);
+						assert.equal(res.incident.supportLevel, undefined);
+					}
+				);
+
+				// F) Usuario sin nivel/equipo + asignación inicial -> responsable cambia pero routing permanece vacío.
+				await sub.test(
+					'F: Técnico sin nivel/equipo cambia responsable pero mantiene routing vacío',
+					() => {
+						const res = prepareAssignment(
+							admin,
+							unroutedTicket,
+							[...demoUsers, techBare],
+							techBare.id
+						);
+						assert.ok(res);
+						assert.equal(res.incident.assignedToUserId, techBare.id);
+						assert.equal(res.incident.supportLevel, undefined);
+						assert.equal(res.incident.teamId, undefined);
+						assert.equal(res.event.eventType, 'assigned');
+					}
+				);
+
+				// G) No se genera evento escalated por una herencia de routing durante asignación inicial.
+				await sub.test(
+					'G: Asignación inicial con herencia genera evento assigned, nunca escalated',
+					() => {
+						const res = prepareAssignment(
+							admin,
+							unroutedTicket,
+							[...demoUsers, techWithRouting],
+							techWithRouting.id
+						);
+						assert.ok(res);
+						assert.equal(res.event.eventType, 'assigned');
+						assert.notEqual(res.event.eventType, 'escalated');
+						assert.equal(res.event.previousValue, null);
+						assert.equal(res.event.newValue, techWithRouting.id);
+					}
+				);
+
+				// H) La lógica respeta organizationId y catálogos configurables.
+				await sub.test(
+					'H: Respeta organizationId y catálogos dinámicos (inactivos y cross-tenant)',
+					() => {
+						const customLevels = [
+							{
+								id: 'lvl-1',
+								organizationId: admin.organizationId,
+								code: 'N1',
+								name: 'Nivel 1',
+								order: 1,
+								active: false,
+								createdAt: '2026-09-07'
+							},
+							{
+								id: 'lvl-2',
+								organizationId: 'other-org',
+								code: 'N2',
+								name: 'Nivel 2 Otro',
+								order: 2,
+								active: true,
+								createdAt: '2026-09-07'
+							}
+						];
+						const customTeams = [
+							{
+								id: 'team-inactive',
+								organizationId: admin.organizationId,
+								name: 'Equipo Inactivo',
+								active: false
+							},
+							{
+								id: 'team-other',
+								organizationId: 'other-org',
+								name: 'Equipo Otro',
+								active: true
+							}
+						];
+
+						// Técnico con nivel inactivo y equipo inactivo
+						const techInactiveParams = {
+							...techBare,
+							id: 'tech-inactive-params',
+							supportLevel: 'N1',
+							teamId: 'team-inactive'
+						};
+						const resInactive = prepareAssignment(
+							admin,
+							unroutedTicket,
+							[...demoUsers, techInactiveParams],
+							techInactiveParams.id,
+							'',
+							'',
+							{ levels: customLevels, teams: customTeams }
+						);
+						assert.ok(resInactive);
+						assert.equal(resInactive.incident.assignedToUserId, techInactiveParams.id);
+						assert.equal(resInactive.incident.supportLevel, undefined);
+						assert.equal(resInactive.incident.teamId, undefined);
+
+						// Técnico con nivel de otra organización
+						const techCrossOrg = {
+							...techBare,
+							id: 'tech-cross',
+							supportLevel: 'N2',
+							teamId: 'team-other'
+						};
+						const resCross = prepareAssignment(
+							admin,
+							unroutedTicket,
+							[...demoUsers, techCrossOrg],
+							techCrossOrg.id,
+							'',
+							'',
+							{ levels: customLevels, teams: customTeams }
+						);
+						assert.ok(resCross);
+						assert.equal(resCross.incident.supportLevel, undefined);
+						assert.equal(resCross.incident.teamId, undefined);
+					}
+				);
+
+				// Helper applyInitialRouting
+				await sub.test('applyInitialRouting aplica herencia sobre draft si procede', () => {
+					const draft = { ...unroutedTicket };
+					const updated = applyInitialRouting(draft, techWithRouting);
+					assert.equal(updated.supportLevel, 'N1');
+					assert.equal(updated.teamId, demoSupportTeams[0].id);
+
+					const routedDraft = { ...unroutedTicket, supportLevel: 'N3' };
+					const untouched = applyInitialRouting(routedDraft, techWithRouting);
+					assert.equal(untouched.supportLevel, 'N3');
+					assert.equal(untouched.teamId, undefined);
+				});
+			}
+		);
 	} finally {
 		await server.close();
 	}
