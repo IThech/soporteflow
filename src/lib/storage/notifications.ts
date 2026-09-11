@@ -10,7 +10,8 @@ export const NOTIFICATION_TYPES: readonly NotificationType[] = [
 	'incident_internal_note',
 	'incident_status_changed',
 	'incident_resolved',
-	'incident_reopened'
+	'incident_reopened',
+	'incident_closed'
 ] as const;
 
 export type NotificationLoadResult =

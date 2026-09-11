@@ -12,6 +12,7 @@ test('Notificaciones v1: modelo, eventos de dominio, persistencia, aislamiento y
 			countUnreadNotifications,
 			markNotificationAsRead,
 			markAllNotificationsAsRead,
+			clearUserNotifications,
 			deriveDynamicSlaAlerts
 		} = await server.ssrLoadModule('/src/lib/incidents/notifications.ts');
 
@@ -668,6 +669,242 @@ test('Notificaciones v1: modelo, eventos de dominio, persistencia, aislamiento y
 				});
 				assert.ok(notif2);
 				assert.notEqual(notif.id, notif2.id);
+			}
+		);
+
+		await t.test(
+			'27. Limpiar notificaciones: borra solo notificaciones persistidas del usuario y org activa, respetando aislamiento multi-usuario y multi-tenant',
+			() => {
+				const nTech1 = {
+					id: 'n-1',
+					organizationId: orgA,
+					recipientUserId: techA.id,
+					type: 'incident_assigned',
+					incidentId: 10,
+					title: 'Asignada a Tech A',
+					message: 'Detalle',
+					createdAt: '2026-09-11T10:00:00.000Z',
+					readAt: null
+				};
+				const nTech2 = {
+					id: 'n-2',
+					organizationId: orgA,
+					recipientUserId: otherTechA.id,
+					type: 'incident_assigned',
+					incidentId: 11,
+					title: 'Asignada a Tech 2',
+					message: 'Detalle',
+					createdAt: '2026-09-11T10:05:00.000Z',
+					readAt: null
+				};
+				const nClient = {
+					id: 'n-3',
+					organizationId: orgA,
+					recipientUserId: clientA.id,
+					type: 'incident_resolved',
+					incidentId: 10,
+					title: 'Resuelta para cliente',
+					message: 'Detalle',
+					createdAt: '2026-09-11T10:10:00.000Z',
+					readAt: '2026-09-11T10:15:00.000Z'
+				};
+				const nOtherOrg = {
+					id: 'n-4',
+					organizationId: orgB,
+					recipientUserId: techA.id, // Mismo ID de usuario pero en otra organización
+					type: 'incident_assigned',
+					incidentId: 50,
+					title: 'Notificación otra org',
+					message: 'Detalle',
+					createdAt: '2026-09-11T10:20:00.000Z',
+					readAt: null
+				};
+
+				const allNotifications = [nTech1, nTech2, nClient, nOtherOrg];
+
+				// Verificar estado inicial
+				assert.equal(filterUserNotifications(techA, allNotifications).length, 1);
+				assert.equal(countUnreadNotifications(techA, allNotifications), 1);
+
+				// Limpiar notificaciones de techA para orgA
+				const cleared = clearUserNotifications(allNotifications, techA.id, orgA);
+
+				// Solo nTech1 debe ser eliminada
+				assert.equal(cleared.length, 3);
+				assert.equal(
+					cleared.some((n) => n.id === 'n-1'),
+					false
+				);
+				assert.equal(
+					cleared.some((n) => n.id === 'n-2'),
+					true
+				);
+				assert.equal(
+					cleared.some((n) => n.id === 'n-3'),
+					true
+				);
+				assert.equal(
+					cleared.some((n) => n.id === 'n-4'),
+					true
+				);
+
+				// Para techA en orgA, ahora tiene 0 notificaciones
+				assert.equal(filterUserNotifications(techA, cleared).length, 0);
+				assert.equal(countUnreadNotifications(techA, cleared), 0);
+
+				// Para otherTechA y clientA no ha cambiado nada
+				assert.equal(filterUserNotifications(otherTechA, cleared).length, 1);
+				assert.equal(filterUserNotifications(clientA, cleared).length, 1);
+			}
+		);
+
+		await t.test(
+			'28. Limpiar notificaciones NO elimina ni afecta a las alertas dinámicas de SLA',
+			() => {
+				const now = new Date('2026-09-11T12:00:00.000Z');
+				const incidentBreached = {
+					...baseIncident,
+					id: 20,
+					assignedToUserId: techA.id,
+					status: 'open',
+					sla: {
+						policyId: 'p-1',
+						policyName: 'SLA Alta',
+						firstResponseMinutes: 60,
+						resolutionMinutes: 120,
+						firstResponseDueAt: '2026-09-11T10:00:00.000Z',
+						resolutionDueAt: '2026-09-11T11:00:00.000Z',
+						firstRespondedAt: null,
+						resolvedAt: null
+					}
+				};
+
+				const persistedNotif = {
+					id: 'p-1',
+					organizationId: orgA,
+					recipientUserId: techA.id,
+					type: 'incident_assigned',
+					incidentId: 20,
+					title: 'Asignada',
+					message: 'Detalle',
+					createdAt: '2026-09-11T09:00:00.000Z',
+					readAt: null
+				};
+
+				let notifications = [persistedNotif];
+
+				// Alertas dinámicas calculadas en memoria
+				const initialAlerts = deriveDynamicSlaAlerts(techA, [incidentBreached], now);
+				assert.equal(initialAlerts.length, 2);
+
+				// Se limpia el historial persistido
+				notifications = clearUserNotifications(notifications, techA.id, orgA);
+				assert.equal(notifications.length, 0);
+
+				// Las alertas dinámicas SLA siguen existiendo y derivándose fielmente
+				const subsequentAlerts = deriveDynamicSlaAlerts(techA, [incidentBreached], now);
+				assert.equal(subsequentAlerts.length, 2);
+				assert.equal(subsequentAlerts[0].incidentId, 20);
+			}
+		);
+
+		await t.test(
+			'29. SLA dinámico: incidencia incumplida genera alerta y al eliminarse de la colección ya no genera alerta',
+			() => {
+				const now = new Date('2026-09-11T12:00:00.000Z');
+				const incidentBreached = {
+					...baseIncident,
+					id: 30,
+					assignedToUserId: techA.id,
+					status: 'open',
+					sla: {
+						policyId: 'p-1',
+						policyName: 'SLA Alta',
+						firstResponseMinutes: 60,
+						resolutionMinutes: 120,
+						firstResponseDueAt: '2026-09-11T10:00:00.000Z',
+						resolutionDueAt: '2026-09-11T11:00:00.000Z',
+						firstRespondedAt: null,
+						resolvedAt: null
+					}
+				};
+
+				let incidentList = [incidentBreached];
+
+				// 1. Incidencia incumplida en la colección -> genera alerta dinámica
+				const alertsBefore = deriveDynamicSlaAlerts(techA, incidentList, now);
+				assert.equal(alertsBefore.length, 2);
+				assert.equal(alertsBefore[0].incidentId, 30);
+
+				// 2. Incidencia eliminada de la colección -> ya no genera ninguna alerta dinámica
+				incidentList = incidentList.filter((item) => item.id !== 30);
+				const alertsAfter = deriveDynamicSlaAlerts(techA, incidentList, now);
+				assert.equal(alertsAfter.length, 0);
+			}
+		);
+
+		await t.test(
+			'30. SLA dinámico en modo técnico: no genera alertas para tickets resueltos o cerrados, y las reabiertas vuelven a generar alertas activas',
+			() => {
+				const now = new Date('2026-09-11T12:00:00.000Z');
+				const baseSla = {
+					policyId: 'p-1',
+					policyName: 'SLA Alta',
+					firstResponseMinutes: 60,
+					resolutionMinutes: 120,
+					firstResponseDueAt: '2026-09-11T10:00:00.000Z',
+					resolutionDueAt: '2026-09-11T11:00:00.000Z',
+					firstRespondedAt: null,
+					resolvedAt: null
+				};
+
+				// 30.1 Ticket resuelto (incluso sin haber registrado firstRespondedAt antes de resolver)
+				const resolvedIncident = {
+					...baseIncident,
+					id: 31,
+					assignedToUserId: techA.id,
+					status: 'resolved',
+					resolvedAt: '2026-09-11T10:30:00.000Z',
+					sla: { ...baseSla, resolvedAt: '2026-09-11T10:30:00.000Z' }
+				};
+				assert.equal(deriveDynamicSlaAlerts(techA, [resolvedIncident], now).length, 0);
+
+				// 30.2 Ticket cerrado
+				const closedIncident = {
+					...baseIncident,
+					id: 32,
+					assignedToUserId: techA.id,
+					status: 'closed',
+					resolvedAt: '2026-09-11T10:30:00.000Z',
+					closedAt: '2026-09-11T11:30:00.000Z',
+					closureType: 'client_confirmed',
+					sla: { ...baseSla, resolvedAt: '2026-09-11T10:30:00.000Z' }
+				};
+				assert.equal(deriveDynamicSlaAlerts(techA, [closedIncident], now).length, 0);
+
+				// 30.3 Ticket reabierto (pasa a status 'open') con SLA de resolución vencido
+				const reopenedIncident = {
+					...baseIncident,
+					id: 33,
+					assignedToUserId: techA.id,
+					status: 'open',
+					resolvedAt: '2026-09-11T10:30:00.000Z',
+					sla: { ...baseSla, resolvedAt: '2026-09-11T10:30:00.000Z' }
+				};
+				const reopenedAlerts = deriveDynamicSlaAlerts(techA, [reopenedIncident], now);
+				assert.equal(reopenedAlerts.length, 2); // first_response y resolution ambas activas para atención
+				assert.equal(
+					reopenedAlerts.some((a) => a.target === 'resolution'),
+					true
+				);
+
+				// 30.4 Al re-resolverse vuelve a desaparecer toda alerta
+				const reResolved = {
+					...reopenedIncident,
+					status: 'resolved',
+					resolvedAt: '2026-09-11T12:00:00.000Z'
+				};
+				assert.equal(deriveDynamicSlaAlerts(techA, [reResolved], now).length, 0);
 			}
 		);
 	} finally {

@@ -210,7 +210,8 @@ export function evaluateIncidentSla(
 		typeof now === 'number' ? now : typeof now === 'string' ? Date.parse(now) : now.getTime();
 
 	const warningMinutes = options?.warningThresholdMinutes ?? 15;
-	const isResolvedWithoutTimestamp = incident.status === 'resolved' && !snapshot.resolvedAt;
+	const isResolvedOrClosed = incident.status === 'resolved' || incident.status === 'closed';
+	const isResolvedWithoutTimestamp = isResolvedOrClosed && !snapshot.resolvedAt;
 
 	const firstResponse = evaluateTarget(
 		snapshot.firstResponseDueAt,
@@ -219,10 +220,11 @@ export function evaluateIncidentSla(
 		warningMinutes
 	);
 
-	// Resolution is only completed if incident is currently resolved.
-	// If reopened (status !== 'resolved'), historical resolvedAt is ignored during active evaluation
+	// Resolution is only completed if incident is currently resolved or closed.
+	// Resolution SLA deadline compliance is judged strictly by snapshot.resolvedAt (never closedAt).
+	// If reopened (status !== 'resolved' && status !== 'closed'), historical resolvedAt is ignored during active evaluation
 	// and resolution is evaluated as pending against nowMs and resolutionDueAt.
-	const resolutionCompletedAt = incident.status === 'resolved' ? snapshot.resolvedAt : null;
+	const resolutionCompletedAt = isResolvedOrClosed ? snapshot.resolvedAt : null;
 
 	const resolution = evaluateTarget(
 		snapshot.resolutionDueAt,

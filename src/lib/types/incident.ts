@@ -1,7 +1,9 @@
 import type { SupportLevel } from './support';
 import type { IncidentSlaSnapshot } from './sla';
 
-export type IncidentStatus = 'open' | 'pending' | 'resolved';
+export type IncidentStatus = 'open' | 'pending' | 'resolved' | 'closed';
+
+export type IncidentClosureType = 'client_confirmed' | 'auto_closed';
 
 export type IncidentPriority = 'low' | 'medium' | 'high';
 
@@ -24,4 +26,7 @@ export interface Incident {
 	solution?: string;
 	categoryId?: string;
 	sla?: IncidentSlaSnapshot | null;
+	resolvedAt?: string | null;
+	closedAt?: string | null;
+	closureType?: IncidentClosureType | null;
 }

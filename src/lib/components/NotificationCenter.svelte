@@ -12,7 +12,8 @@
 		notificationError = '',
 		onopenincident,
 		onmarkread,
-		onmarkallread
+		onmarkallread,
+		onclearall
 	}: {
 		user: AppUser;
 		incidents: Incident[];
@@ -22,6 +23,7 @@
 		onopenincident: (incidentId: number) => void;
 		onmarkread: (notificationId: string) => void;
 		onmarkallread: () => void;
+		onclearall?: () => void;
 	} = $props();
 
 	let isOpen = $state(false);
@@ -29,9 +31,23 @@
 	let panelElement = $state<HTMLDivElement | null>(null);
 	let triggerElement = $state<HTMLButtonElement | null>(null);
 
+	function handleClearAll() {
+		if (!onclearall) return;
+		const confirmed = window.confirm(
+			'¿Deseas eliminar todas las notificaciones persistidas? Esta acción no se puede deshacer.'
+		);
+		if (confirmed) {
+			onclearall();
+		}
+	}
+
 	const userNotifications = $derived(filterUserNotifications(user, notifications));
 	const unreadCount = $derived(userNotifications.filter((n) => n.readAt === null).length);
-	const dynamicAlerts = $derived(deriveDynamicSlaAlerts(user, incidents, now));
+	const dynamicAlerts = $derived(
+		deriveDynamicSlaAlerts(user, incidents, now).filter((alert) =>
+			incidents.some((item) => item.id === alert.incidentId)
+		)
+	);
 
 	const timeFormatter = new Intl.DateTimeFormat('es-ES', {
 		dateStyle: 'short',
@@ -142,12 +158,14 @@
 	{#if isOpen}
 		<div
 			bind:this={panelElement}
-			class="notification-panel absolute right-0 z-50 mt-2 w-80 max-w-[90vw] rounded-xl border border-slate-700 bg-slate-900 shadow-2xl sm:w-96"
+			class="notification-panel absolute right-0 z-50 mt-2 w-80 max-w-[96vw] rounded-xl border border-slate-700 bg-slate-900 shadow-2xl sm:w-[420px]"
 			role="dialog"
 			aria-label="Centro de notificaciones"
 		>
-			<header class="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-				<div class="flex items-center gap-2">
+			<header
+				class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-slate-800 px-4 py-3 sm:flex-nowrap"
+			>
+				<div class="flex shrink-0 items-center gap-2 whitespace-nowrap">
 					<h2 class="text-sm font-semibold text-white">Notificaciones</h2>
 					{#if unreadCount > 0}
 						<span
@@ -157,15 +175,43 @@
 						</span>
 					{/if}
 				</div>
-				{#if unreadCount > 0}
-					<button
-						type="button"
-						onclick={onmarkallread}
-						class="text-xs font-medium text-cyan-400 transition hover:text-cyan-300"
-					>
-						Marcar todas como leídas
-					</button>
-				{/if}
+				<div class="flex shrink-0 items-center gap-2.5 sm:gap-3">
+					{#if unreadCount > 0}
+						<button
+							type="button"
+							onclick={onmarkallread}
+							class="text-xs font-medium whitespace-nowrap text-cyan-400 transition hover:text-cyan-300"
+						>
+							Marcar todas como leídas
+						</button>
+					{/if}
+					{#if userNotifications.length > 0 && onclearall}
+						<button
+							type="button"
+							onclick={handleClearAll}
+							class="inline-flex shrink-0 items-center gap-1 text-xs font-medium whitespace-nowrap text-slate-400 transition hover:text-rose-400"
+							title="Limpiar notificaciones"
+							aria-label="Limpiar notificaciones"
+						>
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								class="h-3.5 w-3.5 shrink-0"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+								stroke-width="2"
+								aria-hidden="true"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+								/>
+							</svg>
+							<span>Limpiar</span>
+						</button>
+					{/if}
+				</div>
 			</header>
 
 			{#if notificationError}
@@ -222,19 +268,29 @@
 					<ul class="divide-y divide-slate-800" aria-label="Lista de notificaciones">
 						{#each userNotifications as notification (notification.id)}
 							{@const isUnread = notification.readAt === null}
+							{@const isReopened = notification.type === 'incident_reopened'}
 							<li>
 								<button
 									type="button"
 									onclick={() => handlePersistentClick(notification)}
-									class="flex w-full items-start gap-3 p-3 text-left transition hover:bg-slate-800/60 {isUnread
-										? 'bg-slate-850/50'
-										: 'opacity-75'}"
+									class="flex w-full items-start gap-3 p-3 text-left transition {isReopened
+										? `border-l-2 border-rose-500 ${isUnread ? 'bg-rose-950/25 hover:bg-rose-950/35' : 'bg-rose-950/10 opacity-80 hover:bg-rose-950/20'}`
+										: isUnread
+											? 'bg-slate-850/50 hover:bg-slate-800/60'
+											: 'opacity-75 hover:bg-slate-800/60'}"
 								>
 									<div class="mt-1 flex-shrink-0">
 										{#if isUnread}
 											<span
-												class="block h-2 w-2 rounded-full bg-cyan-400 shadow-sm shadow-cyan-400"
-												aria-label="No leída"
+												class="block h-2 w-2 rounded-full {isReopened
+													? 'bg-rose-500 shadow-sm shadow-rose-500'
+													: 'bg-cyan-400 shadow-sm shadow-cyan-400'}"
+												aria-label={isReopened ? 'Reapertura no leída' : 'No leída'}
+											></span>
+										{:else if isReopened}
+											<span
+												class="block h-2 w-2 rounded-full border border-rose-500/50 bg-rose-500/20"
+												aria-hidden="true"
 											></span>
 										{:else}
 											<span class="block h-2 w-2 rounded-full bg-transparent" aria-hidden="true"
@@ -244,9 +300,13 @@
 									<div class="min-w-0 flex-1">
 										<div class="flex items-baseline justify-between gap-2">
 											<p
-												class="truncate text-xs font-semibold {isUnread
-													? 'text-white'
-													: 'text-slate-300'}"
+												class="truncate text-xs font-semibold {isReopened
+													? isUnread
+														? 'text-rose-300'
+														: 'text-rose-400/90'
+													: isUnread
+														? 'text-white'
+														: 'text-slate-300'}"
 											>
 												{notification.title}
 											</p>

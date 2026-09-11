@@ -1,11 +1,19 @@
 import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 import { supportLevels } from '$lib/types/support';
 
+/**
+ * Transitional system actor identifier for client-side v1 automatic actions (e.g. auto-close).
+ * In future backend iterations with audit logs, this will transition to a dedicated actorType ('user' | 'system').
+ */
+export const SYSTEM_ACTOR_ID = 'system';
+
 const object = (v: unknown): v is Record<string, unknown> =>
 	typeof v === 'object' && v !== null && !Array.isArray(v);
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim();
 const optionalText = (v: unknown) => v === undefined || typeof v === 'string';
-const status = (v: unknown) => v === 'open' || v === 'pending' || v === 'resolved';
+const status = (v: unknown) =>
+	v === 'open' || v === 'pending' || v === 'resolved' || v === 'closed';
+const closureType = (v: unknown) => v === 'client_confirmed' || v === 'auto_closed';
 const priority = (v: unknown) => v === 'low' || v === 'medium' || v === 'high';
 const nullableId = (v: unknown) => v === null || text(v);
 const routing = (v: unknown) =>
@@ -38,6 +46,24 @@ function validValue(event: string, value: unknown): boolean {
 			);
 		case 'resolved':
 			return object(value) && status(value.status) && optionalText(value.solution);
+		case 'resolution_accepted':
+			return (
+				object(value) &&
+				value.status === 'closed' &&
+				text(value.closedAt) &&
+				value.closureType === 'client_confirmed'
+			);
+		case 'resolution_rejected':
+			return object(value) && value.status === 'open' && text(value.comment);
+		case 'closed':
+			return (
+				object(value) &&
+				value.status === 'closed' &&
+				text(value.closedAt) &&
+				closureType(value.closureType)
+			);
+		case 'reopened':
+			return object(value) && value.status === 'open' && optionalText(value.reason);
 		default:
 			return false;
 	}
@@ -66,7 +92,11 @@ export function isIncidentHistory(value: unknown): value is IncidentHistoryEntry
 				'status_changed',
 				'priority_changed',
 				'category_changed',
-				'resolved'
+				'resolved',
+				'resolution_accepted',
+				'resolution_rejected',
+				'closed',
+				'reopened'
 			].includes(entry.eventType) ||
 			!optionalText(entry.reason) ||
 			!optionalText(entry.comment) ||

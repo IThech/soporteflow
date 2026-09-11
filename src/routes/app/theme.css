@@ -23,6 +23,8 @@ html[data-app-theme='light'] .support-app {
 	--color-slate-400: #475569;
 	--color-slate-300: #334155;
 	--color-slate-200: #1e293b;
+	--color-slate-100: #0f172a;
+	--color-slate-50: #020617;
 	--color-cyan-300: #0e7490;
 	--color-cyan-400: #0e7490;
 	--color-cyan-500: #0891b2;
@@ -43,6 +45,41 @@ html[data-app-theme='light'] .support-app .bg-cyan-500 {
 }
 html[data-app-theme='light'] .support-app .bg-cyan-500:hover {
 	background: #155e75;
+}
+
+/* High-contrast styles for rejecting solution in both light and dark themes */
+.support-app .btn-reject-solution {
+	background-color: rgba(69, 10, 10, 0.55);
+	border: 1px solid rgba(239, 68, 68, 0.6);
+	color: #fecaca;
+	transition:
+		background-color 150ms ease-in-out,
+		border-color 150ms ease-in-out,
+		color 150ms ease-in-out;
+}
+.support-app .btn-reject-solution:hover {
+	background-color: rgba(127, 29, 29, 0.7);
+	border-color: #f87171;
+	color: #ffffff;
+}
+.support-app .btn-reject-solution:focus-visible {
+	outline: 2px solid #ef4444;
+	outline-offset: 2px;
+}
+
+html[data-app-theme='light'] .support-app .btn-reject-solution {
+	background-color: #fee2e2;
+	border: 1px solid #dc2626;
+	color: #991b1b;
+}
+html[data-app-theme='light'] .support-app .btn-reject-solution:hover {
+	background-color: #fecaca;
+	border-color: #b91c1c;
+	color: #7f1d1d;
+}
+html[data-app-theme='light'] .support-app .btn-reject-solution:focus-visible {
+	outline: 2px solid #dc2626;
+	outline-offset: 2px;
 }
 .support-app :is(input, select, textarea, button):focus-visible {
 	outline: 2px solid #0891b2;

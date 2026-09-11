@@ -1,4 +1,4 @@
-import type { Incident, IncidentPriority, IncidentStatus } from './incident';
+import type { Incident, IncidentClosureType, IncidentPriority, IncidentStatus } from './incident';
 import type { SupportLevel } from './support';
 
 // Null means explicitly unassigned; an absent property means not recorded.
@@ -17,6 +17,10 @@ type HistoryValues = {
 	priority_changed: IncidentPriority;
 	category_changed: string | null;
 	resolved: { status: IncidentStatus; solution?: string };
+	resolution_accepted: { status: 'closed'; closedAt: string; closureType: 'client_confirmed' };
+	resolution_rejected: { status: 'open'; comment: string };
+	closed: { status: 'closed'; closedAt: string; closureType: IncidentClosureType };
+	reopened: { status: 'open'; reason?: string };
 };
 
 export type IncidentHistoryEventType = keyof HistoryValues;

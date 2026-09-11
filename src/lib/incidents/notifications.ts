@@ -22,7 +22,8 @@ export interface EventNotificationInput {
 const statusDisplayLabels: Record<IncidentStatus, string> = {
 	open: 'abierta',
 	pending: 'pendiente',
-	resolved: 'resuelta'
+	resolved: 'resuelta',
+	closed: 'cerrada'
 };
 
 function truncate(text: string, maxLength = 100): string {
@@ -151,7 +152,28 @@ export function buildIncidentNotification(
 			}
 			recipientUserId = incident.assignedToUserId;
 			title = `Incidencia #${incident.id} reabierta`;
-			body = `La incidencia "${incident.title}" ha sido reabierta.`;
+			body = reason?.trim()
+				? `La incidencia "${incident.title}" ha sido reabierta: "${reason.trim()}"`
+				: `La incidencia "${incident.title}" ha sido reabierta.`;
+			break;
+		}
+
+		case 'incident_closed': {
+			if (actor.role === 'client') {
+				if (!incident.assignedToUserId || incident.assignedToUserId === actor.id) {
+					return null;
+				}
+				recipientUserId = incident.assignedToUserId;
+				title = `Incidencia #${incident.id} cerrada`;
+				body = `El cliente ha confirmado la solución de "${incident.title}".`;
+			} else {
+				if (!incident.clientUserId || incident.clientUserId === actor.id) {
+					return null;
+				}
+				recipientUserId = incident.clientUserId;
+				title = `Incidencia #${incident.id} cerrada`;
+				body = `La incidencia "${incident.title}" ha sido cerrada.`;
+			}
 			break;
 		}
 
@@ -238,6 +260,22 @@ export function markAllNotificationsAsRead(
 }
 
 /**
+ * Pure transition: removes persisted notifications belonging to a specific recipient and organization.
+ * Preserves notifications belonging to other users or other organizations.
+ */
+export function clearUserNotifications(
+	notifications: Notification[],
+	recipientUserId: string,
+	organizationId?: string
+): Notification[] {
+	return notifications.filter((n) => {
+		if (n.recipientUserId !== recipientUserId) return true;
+		if (organizationId && n.organizationId !== organizationId) return true;
+		return false;
+	});
+}
+
+/**
  * Calculates dynamic in-memory SLA alerts ('approaching' and 'breached') for open/active
  * incidents requiring the user's attention. Reuses the existing SLA evaluation engine
  * without persisting state to localStorage or duplicating logic.
@@ -252,7 +290,9 @@ export function deriveDynamicSlaAlerts(
 	const alerts: DynamicSlaAlert[] = [];
 
 	for (const incident of incidents) {
-		if (!incident.sla) continue;
+		if (!incident || typeof incident.id !== 'number' || !incident.sla) continue;
+		// Resolved or closed incidents are no longer in active progress and do not generate dynamic alerts
+		if (incident.status === 'resolved' || incident.status === 'closed') continue;
 		if (!canViewIncident(user, incident)) continue;
 
 		// Filter incidents requiring attention by role:
@@ -295,30 +335,28 @@ export function deriveDynamicSlaAlerts(
 			}
 		}
 
-		// Resolution target (active only if not yet resolved)
-		if (incident.status !== 'resolved') {
-			const stage = evaluation.resolution.stage;
-			if (stage === 'approaching' || stage === 'breached') {
-				const isApproaching = stage === 'approaching';
-				const rem = evaluation.resolution.remainingMinutes;
-				const message = isApproaching
-					? rem !== null && rem > 0
-						? `Quedan ${rem} minutos para resolución`
-						: 'Resolución próxima a vencer'
-					: 'Se ha superado el tiempo de resolución';
+		// Resolution target (incident is active)
+		const resolutionStage = evaluation.resolution.stage;
+		if (resolutionStage === 'approaching' || resolutionStage === 'breached') {
+			const isApproaching = resolutionStage === 'approaching';
+			const rem = evaluation.resolution.remainingMinutes;
+			const message = isApproaching
+				? rem !== null && rem > 0
+					? `Quedan ${rem} minutos para resolución`
+					: 'Resolución próxima a vencer'
+				: 'Se ha superado el tiempo de resolución';
 
-				alerts.push({
-					id: `dynamic-sla-${incident.id}-resolution-${stage}`,
-					incidentId: incident.id,
-					target: 'resolution',
-					stage,
-					title: isApproaching
-						? `SLA próximo a vencer · #${incident.id}`
-						: `SLA incumplido · #${incident.id}`,
-					message,
-					dueAt: incident.sla.resolutionDueAt
-				});
-			}
+			alerts.push({
+				id: `dynamic-sla-${incident.id}-resolution-${resolutionStage}`,
+				incidentId: incident.id,
+				target: 'resolution',
+				stage: resolutionStage,
+				title: isApproaching
+					? `SLA próximo a vencer · #${incident.id}`
+					: `SLA incumplido · #${incident.id}`,
+				message,
+				dueAt: incident.sla.resolutionDueAt
+			});
 		}
 	}
 

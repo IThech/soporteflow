@@ -28,6 +28,16 @@ function isValidSlaSnapshot(sla: unknown): boolean {
 	);
 }
 
+function isValidOptionalTimestamp(val: unknown): boolean {
+	if (val === undefined || val === null) return true;
+	return typeof val === 'string' && Number.isFinite(Date.parse(val));
+}
+
+function isValidClosureType(val: unknown): boolean {
+	if (val === undefined || val === null) return true;
+	return val === 'client_confirmed' || val === 'auto_closed';
+}
+
 export function isIncidentList(parsed: unknown): parsed is Incident[] {
 	return !(
 		!Array.isArray(parsed) ||
@@ -38,7 +48,7 @@ export function isIncidentList(parsed: unknown): parsed is Incident[] {
 				Number.isSafeInteger(item.id) &&
 				(item.assignedToUserId == null || typeof item.assignedToUserId === 'string') &&
 				['title', 'client', 'createdAt'].every((key) => typeof item[key] === 'string') &&
-				['open', 'pending', 'resolved'].includes(item.status) &&
+				['open', 'pending', 'resolved', 'closed'].includes(item.status) &&
 				['low', 'medium', 'high'].includes(item.priority) &&
 				(item.supportLevel === undefined || supportLevels.includes(item.supportLevel)) &&
 				[
@@ -51,6 +61,9 @@ export function isIncidentList(parsed: unknown): parsed is Incident[] {
 					'categoryId',
 					'updatedAt'
 				].every((key) => item[key] === undefined || typeof item[key] === 'string') &&
+				isValidOptionalTimestamp(item.resolvedAt) &&
+				isValidOptionalTimestamp(item.closedAt) &&
+				isValidClosureType(item.closureType) &&
 				isValidSlaSnapshot(item.sla)
 		) ||
 		new Set(parsed.map((item) => item.id)).size !== parsed.length

@@ -1,6 +1,7 @@
 import { canViewIncident } from '$lib/auth/record-access';
 import { demoOrganization } from '$lib/data/organizations';
 import { incidentOrganizationId } from './assignment';
+import { SYSTEM_ACTOR_ID } from './history';
 import type { Incident } from '$lib/types/incident';
 import type { IncidentHistoryEntry, IncidentRoutingSnapshot } from '$lib/types/incident-history';
 import type { AppUser } from '$lib/types/user';
@@ -32,14 +33,24 @@ export function describeHistoryEvent(
 	categories: IncidentCategory[] = [],
 	teams: SupportTeam[] = []
 ): string {
-	const userName = (id: string | null | undefined, actor = false) =>
-		users.find(
-			(user) =>
-				user.id === id &&
-				(user.organizationId === entry.organizationId || (actor && user.role === 'platform_admin'))
-		)?.name || 'Usuario no disponible';
+	const userName = (id: string | null | undefined, actor = false) => {
+		if (id === SYSTEM_ACTOR_ID) return 'Sistema';
+		return (
+			users.find(
+				(user) =>
+					user.id === id &&
+					(user.organizationId === entry.organizationId ||
+						(actor && user.role === 'platform_admin'))
+			)?.name || 'Usuario no disponible'
+		);
+	};
 	const actor = userName(entry.actorUserId, true);
-	const statuses = { open: 'Abierta', pending: 'Pendiente', resolved: 'Resuelta' };
+	const statuses: Record<string, string> = {
+		open: 'Abierta',
+		pending: 'Pendiente',
+		resolved: 'Resuelta',
+		closed: 'Cerrada'
+	};
 	const priorities = { low: 'Baja', medium: 'Media', high: 'Alta' };
 	const categoryName = (id: string | null | undefined) =>
 		id === null
@@ -81,5 +92,15 @@ export function describeHistoryEvent(
 			return `${actor} cambió la categoría de ${categoryName(entry.previousValue)} a ${categoryName(entry.newValue)}`;
 		case 'resolved':
 			return `${actor} resolvió la incidencia${entry.previousValue ? ` (estado anterior: ${statuses[entry.previousValue.status]})` : ''}`;
+		case 'resolution_accepted':
+			return `${actor} confirmó la solución`;
+		case 'resolution_rejected':
+			return `${actor} rechazó la solución y reabrió la incidencia`;
+		case 'closed':
+			return entry.actorUserId === SYSTEM_ACTOR_ID
+				? 'La incidencia se cerró automáticamente por inactividad (24 h)'
+				: `${actor} cerró la incidencia`;
+		case 'reopened':
+			return `${actor} reabrió la incidencia`;
 	}
 }

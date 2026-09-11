@@ -6,7 +6,8 @@ export type NotificationType =
 	| 'incident_internal_note'
 	| 'incident_status_changed'
 	| 'incident_resolved'
-	| 'incident_reopened';
+	| 'incident_reopened'
+	| 'incident_closed';
 
 export interface Notification {
 	id: string;

@@ -45,8 +45,22 @@
 		filterIncidentQueue,
 		normalizeSearchText,
 		validQueue,
-		type IncidentQueue
+		type IncidentQueue,
+		type QueueStatusFilter
 	} from '$lib/incidents/queue';
+	import type { IncidentRating } from '$lib/types/incident-rating';
+	import { loadIncidentRatings, saveIncidentRatings } from '$lib/storage/ratings';
+	import {
+		synchronizeIncidentClosures,
+		canClientConfirmOrReject,
+		canClientReopenIncident,
+		canClientRateIncident,
+		getRatingForResolution,
+		getIncidentResolvedAt,
+		getAutoCloseRemainingMinutes,
+		getReopenRemainingMinutes
+	} from '$lib/incidents/closure';
+	import IncidentRatingModal from '$lib/components/IncidentRatingModal.svelte';
 	import { isIncidentList } from '$lib/incidents/validation';
 	import {
 		assignmentCandidates,
@@ -70,7 +84,11 @@
 	import IncidentMessages from '$lib/components/IncidentMessages.svelte';
 	import { loadMessages, MESSAGES_KEY } from '$lib/storage/messages';
 	import { recoverFirstResponse, FIRST_RESPONSE_RECOVERY_KEY } from '$lib/storage/first-response';
-	import { applyCreationSla, recordStatusTransition } from '$lib/incidents/lifecycle';
+	import {
+		applyCreationSla,
+		recordStatusTransition,
+		isIncidentReopened
+	} from '$lib/incidents/lifecycle';
 	import { demoSupportTeams } from '$lib/data/teams';
 	import SlaBadge from '$lib/components/SlaBadge.svelte';
 	import IncidentSlaPanel from '$lib/components/IncidentSlaPanel.svelte';
@@ -95,7 +113,8 @@
 	import {
 		buildIncidentNotification,
 		markNotificationAsRead,
-		markAllNotificationsAsRead
+		markAllNotificationsAsRead,
+		clearUserNotifications
 	} from '$lib/incidents/notifications';
 	import { incidents as initialIncidents } from '$lib/data/incidents';
 	import type { Incident, IncidentPriority, IncidentStatus } from '$lib/types/incident';
@@ -166,7 +185,7 @@
 		description = '';
 		priority = 'medium';
 		searchQuery = '';
-		selectedStatus = 'all';
+		selectedStatus = user.role === 'technician' ? 'active' : 'all';
 		selectedQueue = validQueue(user, 'all');
 		activeUser = user;
 	}
@@ -175,17 +194,26 @@
 		{
 			label: 'Incidencias abiertas',
 			value: visibleIncidents.filter((incident) => incident.status === 'open').length,
-			color: 'text-cyan-400'
+			color: 'text-cyan-400',
+			badge: 'bg-cyan-400'
 		},
 		{
 			label: 'Pendientes',
 			value: visibleIncidents.filter((incident) => incident.status === 'pending').length,
-			color: 'text-amber-400'
+			color: 'text-amber-400',
+			badge: 'bg-amber-400'
 		},
 		{
 			label: 'Resueltas',
 			value: visibleIncidents.filter((incident) => incident.status === 'resolved').length,
-			color: 'text-emerald-400'
+			color: 'text-emerald-400',
+			badge: 'bg-emerald-400'
+		},
+		{
+			label: 'Cerradas',
+			value: visibleIncidents.filter((incident) => incident.status === 'closed').length,
+			color: 'text-slate-400',
+			badge: 'bg-slate-400'
 		}
 	]);
 
@@ -196,14 +224,16 @@
 
 	const STORAGE_KEY = INCIDENTS_KEY;
 
-	let selectedStatus = $state<'all' | IncidentStatus>('all');
+	let selectedStatus = $state<QueueStatusFilter>('active');
 
 	const statusFilters = [
-		{ value: 'all', label: 'Todas' },
+		{ value: 'active', label: 'Activas' },
 		{ value: 'open', label: 'Abiertas' },
 		{ value: 'pending', label: 'Pendientes' },
-		{ value: 'resolved', label: 'Resueltas' }
-	] satisfies { value: 'all' | IncidentStatus; label: string }[];
+		{ value: 'resolved', label: 'Resueltas' },
+		{ value: 'closed', label: 'Cerradas' },
+		{ value: 'all', label: 'Todas' }
+	] satisfies { value: QueueStatusFilter; label: string }[];
 
 	let searchQuery = $state('');
 	const filteredIncidents = $derived(
@@ -408,6 +438,20 @@
 		}
 	}
 
+	function handleClearNotifications() {
+		if (!notificationsReady) return;
+		try {
+			const orgId = activeUser.organizationId;
+			const next = clearUserNotifications(notificationList, activeUser.id, orgId);
+			notificationSnapshot = saveNotifications(localStorage, next, notificationSnapshot);
+			notificationList = next;
+			notificationError = '';
+		} catch (error) {
+			notificationError =
+				error instanceof Error ? error.message : 'No se pudieron eliminar las notificaciones.';
+		}
+	}
+
 	function handleMessageSent(incident: Incident | undefined, message: IncidentMessage) {
 		if (!incident) return;
 		const notifType: NotificationType =
@@ -419,6 +463,262 @@
 			message
 		});
 		recordNotification(notif);
+	}
+
+	// Rejection modal state
+	let rejectModalOpen = $state(false);
+	let rejectIncident = $state<Incident | null>(null);
+	let rejectComment = $state('');
+
+	// Reopen modal state
+	let reopenModalOpen = $state(false);
+	let reopenIncident = $state<Incident | null>(null);
+	let reopenReason = $state('');
+
+	// Ratings state
+	let incidentRatings = $state<IncidentRating[]>([]);
+	let ratingModalOpen = $state(false);
+	let ratingIncident = $state<Incident | null>(null);
+
+	function openRejectModal(incident: Incident) {
+		rejectIncident = incident;
+		rejectComment = '';
+		rejectModalOpen = true;
+	}
+
+	function openReopenModal(incident: Incident) {
+		reopenIncident = incident;
+		reopenReason = '';
+		reopenModalOpen = true;
+	}
+
+	function handleConfirmResolution(incident: Incident) {
+		if (!canClientConfirmOrReject(incident, activeUser) || incidentLoadError) return;
+
+		const closeTime = new Date().toISOString();
+		const updated = recordStatusTransition(incident, 'closed', closeTime, {
+			closureType: 'client_confirmed'
+		});
+
+		const historyEntry: IncidentHistoryEntry = {
+			id: crypto.randomUUID(),
+			incidentId: incident.id,
+			organizationId: incidentOrganizationId(incident),
+			actorUserId: activeUser.id,
+			timestamp: closeTime,
+			eventType: 'resolution_accepted',
+			newValue: {
+				status: 'closed',
+				closedAt: closeTime,
+				closureType: 'client_confirmed'
+			}
+		};
+
+		const nextList = incidentList.map((i) => (i.id === incident.id ? updated : i));
+		const nextHistory = [...history, historyEntry];
+
+		commitAssignment(
+			localStorage,
+			nextList,
+			nextHistory,
+			storedIncidentSnapshot,
+			storedHistorySnapshot
+		);
+		incidentList = nextList;
+		history = nextHistory;
+		storedIncidentSnapshot = JSON.stringify(nextList);
+		storedHistorySnapshot = JSON.stringify(nextHistory);
+
+		if (editingIncident && editingIncident.id === incident.id) {
+			editingIncident = { ...updated };
+		}
+
+		// Notification to technician
+		const notif = buildIncidentNotification({
+			type: 'incident_closed',
+			incident: updated,
+			actor: activeUser
+		});
+		recordNotification(notif);
+
+		// Open rating modal if eligible
+		if (canClientRateIncident(updated, activeUser, incidentRatings)) {
+			ratingIncident = updated;
+			ratingModalOpen = true;
+		}
+	}
+
+	function handleRejectResolution(e: SubmitEvent) {
+		e.preventDefault();
+		if (!rejectIncident || !rejectComment.trim() || incidentLoadError) return;
+
+		const incident = rejectIncident;
+		const commentText = rejectComment.trim();
+		const reopenTime = new Date().toISOString();
+		const updated = recordStatusTransition(incident, 'open', reopenTime);
+
+		const historyEntry: IncidentHistoryEntry = {
+			id: crypto.randomUUID(),
+			incidentId: incident.id,
+			organizationId: incidentOrganizationId(incident),
+			actorUserId: activeUser.id,
+			timestamp: reopenTime,
+			eventType: 'resolution_rejected',
+			newValue: {
+				status: 'open',
+				comment: commentText
+			}
+		};
+
+		// Also add a public comment to messages so the technician can see why it was rejected
+		const message: IncidentMessage = {
+			id: crypto.randomUUID(),
+			incidentId: incident.id,
+			organizationId: incidentOrganizationId(incident),
+			authorUserId: activeUser.id,
+			content: `[Solución rechazada]: ${commentText}`,
+			visibility: 'public',
+			createdAt: reopenTime
+		};
+
+		const rawMessages = localStorage.getItem(MESSAGES_KEY);
+		const currentMessages = rawMessages ? loadMessages(rawMessages) : [];
+		const nextMessages = [...currentMessages, message];
+		localStorage.setItem(MESSAGES_KEY, JSON.stringify(nextMessages));
+
+		const nextList = incidentList.map((i) => (i.id === incident.id ? updated : i));
+		const nextHistory = [...history, historyEntry];
+
+		commitAssignment(
+			localStorage,
+			nextList,
+			nextHistory,
+			storedIncidentSnapshot,
+			storedHistorySnapshot
+		);
+		incidentList = nextList;
+		history = nextHistory;
+		storedIncidentSnapshot = JSON.stringify(nextList);
+		storedHistorySnapshot = JSON.stringify(nextHistory);
+
+		if (editingIncident && editingIncident.id === incident.id) {
+			editingIncident = { ...updated };
+		}
+
+		// Notify technician with the rejection comment
+		const notif = buildIncidentNotification({
+			type: 'incident_reopened',
+			incident: updated,
+			actor: activeUser,
+			reason: commentText
+		});
+		recordNotification(notif);
+
+		rejectModalOpen = false;
+		rejectIncident = null;
+		rejectComment = '';
+	}
+
+	function handleReopenClosed(e: SubmitEvent) {
+		e.preventDefault();
+		if (!reopenIncident || !reopenReason.trim() || incidentLoadError) return;
+
+		const incident = reopenIncident;
+		if (!canClientReopenIncident(incident, activeUser, now)) {
+			window.alert('La ventana de reapertura de 24 horas ha expirado.');
+			reopenModalOpen = false;
+			return;
+		}
+
+		const reasonText = reopenReason.trim();
+		const reopenTime = new Date().toISOString();
+		const updated = recordStatusTransition(incident, 'open', reopenTime);
+
+		const historyEntry: IncidentHistoryEntry = {
+			id: crypto.randomUUID(),
+			incidentId: incident.id,
+			organizationId: incidentOrganizationId(incident),
+			actorUserId: activeUser.id,
+			timestamp: reopenTime,
+			eventType: 'reopened',
+			newValue: {
+				status: 'open',
+				reason: reasonText
+			}
+		};
+
+		// Also add a public comment to messages
+		const message: IncidentMessage = {
+			id: crypto.randomUUID(),
+			incidentId: incident.id,
+			organizationId: incidentOrganizationId(incident),
+			authorUserId: activeUser.id,
+			content: `[Incidencia reabierta]: ${reasonText}`,
+			visibility: 'public',
+			createdAt: reopenTime
+		};
+
+		const rawMessages = localStorage.getItem(MESSAGES_KEY);
+		const currentMessages = rawMessages ? loadMessages(rawMessages) : [];
+		const nextMessages = [...currentMessages, message];
+		localStorage.setItem(MESSAGES_KEY, JSON.stringify(nextMessages));
+
+		const nextList = incidentList.map((i) => (i.id === incident.id ? updated : i));
+		const nextHistory = [...history, historyEntry];
+
+		commitAssignment(
+			localStorage,
+			nextList,
+			nextHistory,
+			storedIncidentSnapshot,
+			storedHistorySnapshot
+		);
+		incidentList = nextList;
+		history = nextHistory;
+		storedIncidentSnapshot = JSON.stringify(nextList);
+		storedHistorySnapshot = JSON.stringify(nextHistory);
+
+		if (editingIncident && editingIncident.id === incident.id) {
+			editingIncident = { ...updated };
+		}
+
+		// Notify technician with reason
+		const notif = buildIncidentNotification({
+			type: 'incident_reopened',
+			incident: updated,
+			actor: activeUser,
+			reason: reasonText
+		});
+		recordNotification(notif);
+
+		reopenModalOpen = false;
+		reopenIncident = null;
+		reopenReason = '';
+	}
+
+	function handleSaveRating(ratingValue: number, ratingComment?: string) {
+		if (!ratingIncident) return;
+		const resolvedAt = getIncidentResolvedAt(ratingIncident);
+		if (!resolvedAt) return;
+
+		const orgId = incidentOrganizationId(ratingIncident);
+		const newRating: IncidentRating = {
+			id: crypto.randomUUID(),
+			organizationId: orgId,
+			incidentId: ratingIncident.id,
+			resolvedAt,
+			technicianUserId: ratingIncident.assignedToUserId || '',
+			clientUserId: activeUser.id,
+			rating: ratingValue,
+			comment: ratingComment,
+			createdAt: new Date().toISOString()
+		};
+
+		const nextRatings = [...incidentRatings, newRating];
+		saveIncidentRatings(nextRatings, localStorage);
+		incidentRatings = nextRatings;
+		ratingModalOpen = false;
+		ratingIncident = null;
 	}
 
 	onMount(() => {
@@ -435,6 +735,21 @@
 					throw new Error('Formato de incidencias no válido');
 				}
 				incidentList = parsed;
+			}
+			// Sincronizar auto-cierre determinista para incidencias resueltas >= 24h
+			const sync = synchronizeIncidentClosures(incidentList, history, now);
+			if (sync.changed) {
+				incidentList = sync.updatedIncidents;
+				history = [...history, ...sync.newHistoryEntries];
+				commitAssignment(
+					localStorage,
+					incidentList,
+					history,
+					storedIncidentSnapshot,
+					storedHistorySnapshot
+				);
+				storedIncidentSnapshot = JSON.stringify(incidentList);
+				storedHistorySnapshot = JSON.stringify(history);
 			}
 			assignmentReady = true;
 		} catch {
@@ -493,13 +808,56 @@
 			notificationsReady = false;
 		}
 
+		try {
+			const ratingsResult = loadIncidentRatings(localStorage);
+			if (ratingsResult.status === 'valid') {
+				incidentRatings = ratingsResult.ratings;
+			} else {
+				incidentRatings = [];
+			}
+		} catch {
+			incidentRatings = [];
+		}
+
 		const intervalId = setInterval(() => {
 			now = new Date();
+			if (assignmentReady && !incidentLoadError) {
+				const sync = synchronizeIncidentClosures(incidentList, history, now);
+				if (sync.changed) {
+					incidentList = sync.updatedIncidents;
+					history = [...history, ...sync.newHistoryEntries];
+					commitAssignment(
+						localStorage,
+						incidentList,
+						history,
+						storedIncidentSnapshot,
+						storedHistorySnapshot
+					);
+					storedIncidentSnapshot = JSON.stringify(incidentList);
+					storedHistorySnapshot = JSON.stringify(history);
+				}
+			}
 		}, 60_000);
 
 		function handleVisibility() {
 			if (document.visibilityState === 'visible') {
 				now = new Date();
+				if (assignmentReady && !incidentLoadError) {
+					const sync = synchronizeIncidentClosures(incidentList, history, now);
+					if (sync.changed) {
+						incidentList = sync.updatedIncidents;
+						history = [...history, ...sync.newHistoryEntries];
+						commitAssignment(
+							localStorage,
+							incidentList,
+							history,
+							storedIncidentSnapshot,
+							storedHistorySnapshot
+						);
+						storedIncidentSnapshot = JSON.stringify(incidentList);
+						storedHistorySnapshot = JSON.stringify(history);
+					}
+				}
 			}
 		}
 
@@ -567,6 +925,12 @@
 		if (!incident || incidentLoadError || !canActOnIncident(activeUser, incident, 'incidents:edit'))
 			return;
 
+		// Closed status cannot be manually selected
+		if (status === 'closed') {
+			select.value = incident.status;
+			return;
+		}
+
 		const missingDescription = !incident.description?.trim();
 		const missingSolution = status === 'resolved' && !incident.solution?.trim();
 
@@ -605,7 +969,7 @@
 			let notifType: NotificationType = 'incident_status_changed';
 			if (status === 'resolved') {
 				notifType = 'incident_resolved';
-			} else if (oldStatus === 'resolved') {
+			} else if (oldStatus === 'resolved' || oldStatus === 'closed') {
 				notifType = 'incident_reopened';
 			}
 			const notif = buildIncidentNotification({
@@ -792,7 +1156,9 @@
 			let notifType: NotificationType = 'incident_status_changed';
 			if (editingIncident.status === 'resolved') {
 				notifType = 'incident_resolved';
-			} else if (previousStatus === 'resolved') {
+			} else if (editingIncident.status === 'closed') {
+				notifType = 'incident_closed';
+			} else if (previousStatus === 'resolved' || previousStatus === 'closed') {
 				notifType = 'incident_reopened';
 			}
 			const notif = buildIncidentNotification({
@@ -974,6 +1340,7 @@
 					onopenincident={(id) => openEditIncident(id)}
 					onmarkread={handleMarkNotificationRead}
 					onmarkallread={handleMarkAllNotificationsRead}
+					onclearall={handleClearNotifications}
 				/>
 				<ThemeSelector />
 				{#if canCreate && !incidentLoadError}
@@ -1006,10 +1373,15 @@
 			<p class="mt-2 text-slate-400">Consulta rápidamente el estado del soporte técnico.</p>
 		</section>
 
-		<section class="mt-8 grid gap-4 sm:grid-cols-2 md:grid-cols-3">
+		<section class="mt-8 grid grid-cols-1 gap-4 min-[420px]:grid-cols-2 lg:grid-cols-4">
 			{#each summary as item (item.label)}
-				<article class="rounded-xl border border-slate-800 bg-slate-900 p-6">
-					<p class="text-sm text-slate-400">{item.label}</p>
+				<article
+					class="flex min-h-[110px] flex-col justify-between rounded-xl border border-slate-800 bg-slate-900 p-5"
+				>
+					<div class="flex items-center justify-between gap-2">
+						<p class="text-sm font-medium text-slate-400">{item.label}</p>
+						<span class={`h-2.5 w-2.5 shrink-0 rounded-full ${item.badge}`}></span>
+					</div>
 					<p class={`mt-2 text-4xl font-bold ${item.color}`}>{item.value}</p>
 				</article>
 			{/each}
@@ -1148,12 +1520,29 @@
 
 								<td class="incident-sla px-6 py-4 text-sm">
 									<span class="mobile-field-label" aria-hidden="true">SLA</span>
-									<SlaBadge {incident} {now} />
+									<div class="flex flex-wrap items-center gap-1.5">
+										{#if isIncidentReopened(incident, history)}
+											<span
+												class="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 text-xs font-bold tracking-wide text-rose-400 uppercase shadow-xs"
+												data-testid="reopened-badge"
+											>
+												<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-500"></span>
+												Reabierta
+											</span>
+										{/if}
+										<SlaBadge {incident} {now} />
+									</div>
 								</td>
 
 								<td class="incident-state px-6 py-4"
 									><span class="mobile-field-label" aria-hidden="true">Estado</span>
-									{#if canEdit}
+									{#if incident.status === 'closed'}
+										<span
+											class="inline-flex items-center rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-300"
+										>
+											Cerrada
+										</span>
+									{:else if canEdit}
 										<select
 											value={incident.status}
 											onchange={(event) => updateIncidentStatus(incident.id, event)}
@@ -1463,9 +1852,20 @@
 		>
 			<div class="flex items-start justify-between gap-4">
 				<div>
-					<p class="text-sm font-medium text-cyan-400">
-						Incidencia #{editingIncident.id}
-					</p>
+					<div class="flex items-center gap-2">
+						<p class="text-sm font-medium text-cyan-400">
+							Incidencia #{editingIncident.id}
+						</p>
+						{#if managedIncident && isIncidentReopened(managedIncident, history)}
+							<span
+								class="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 text-xs font-bold tracking-wide text-rose-400 uppercase shadow-xs"
+								data-testid="detail-reopened-badge"
+							>
+								<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-500"></span>
+								Reabierta
+							</span>
+						{/if}
+					</div>
 					<h2 id="edit-incident-title" class="mt-1 text-2xl font-bold">
 						{managedIncident?.title || 'Sin título'}
 					</h2>
@@ -1546,28 +1946,40 @@
 								<label for="edit-status" class="mb-2 block text-sm font-medium text-slate-300">
 									Estado
 								</label>
-								<select
-									id="edit-status"
-									bind:value={editingIncident.status}
-									class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-								>
-									<option value="open">Abierta</option>
-									<option value="pending">Pendiente</option>
-									<option value="resolved">Resuelta</option>
-								</select>
+								{#if editingIncident.status === 'closed'}
+									<div
+										class="flex h-[50px] items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-4 text-xs text-slate-300"
+									>
+										<span class="h-2 w-2 rounded-full bg-slate-400"></span>
+										<span>Cerrada (confirmada por cliente o auto-cierre tras 24 h)</span>
+									</div>
+								{:else}
+									<select
+										id="edit-status"
+										bind:value={editingIncident.status}
+										class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+									>
+										<option value="open">Abierta</option>
+										<option value="pending">Pendiente</option>
+										<option value="resolved">Resuelta</option>
+									</select>
+								{/if}
 							</div>
 						</div>
 
-						{#if solutionExpanded || editingIncident.status === 'resolved' || editingIncident.solution?.trim()}
+						{#if solutionExpanded || editingIncident.status === 'resolved' || editingIncident.status === 'closed' || editingIncident.solution?.trim()}
 							<div>
 								<label for="edit-solution" class="mb-2 block text-sm font-medium text-slate-300">
 									Solución aplicada
-									{editingIncident.status === 'resolved' ? '(obligatoria)' : '(opcional)'}
+									{editingIncident.status === 'resolved' || editingIncident.status === 'closed'
+										? '(obligatoria)'
+										: '(opcional)'}
 								</label>
 								<textarea
 									id="edit-solution"
 									bind:value={editingIncident.solution}
-									required={editingIncident.status === 'resolved'}
+									required={editingIncident.status === 'resolved' ||
+										editingIncident.status === 'closed'}
 									aria-describedby="edit-solution-help"
 									rows="3"
 									placeholder="Describe las acciones realizadas y el resultado."
@@ -1605,6 +2017,196 @@
 					</form>
 				{:else}
 					<section class="incident-information space-y-3" aria-label="Información de la incidencia">
+						{#if managedIncident.status === 'resolved'}
+							<div class="space-y-3 rounded-xl border border-emerald-500/40 bg-emerald-950/30 p-4">
+								<div class="flex items-center gap-2 text-sm font-semibold text-emerald-300">
+									<svg
+										class="h-5 w-5 shrink-0"
+										fill="none"
+										viewBox="0 0 24 24"
+										stroke="currentColor"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+										/>
+									</svg>
+									<span>Solución propuesta · Esperando confirmación del cliente</span>
+								</div>
+								{#if canClientConfirmOrReject(managedIncident, activeUser)}
+									<p class="text-xs text-slate-300">
+										El equipo de soporte ha registrado la solución propuesta. Por favor, revisa si
+										resuelve tu consulta o problema. Si confirmas, la incidencia quedará cerrada.
+										{#if getAutoCloseRemainingMinutes(managedIncident, now) !== null}
+											<span class="mt-1 block font-medium text-amber-300">
+												(Se cerrará automáticamente si no hay respuesta en {Math.max(
+													1,
+													Math.round((getAutoCloseRemainingMinutes(managedIncident, now) ?? 0) / 60)
+												)} h).
+											</span>
+										{/if}
+									</p>
+									<div class="flex flex-wrap items-center gap-3 pt-1">
+										<button
+											type="button"
+											onclick={() => handleConfirmResolution(managedIncident)}
+											class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-emerald-500 px-3.5 py-1.5 text-xs font-semibold text-slate-950 shadow-sm transition-colors hover:bg-emerald-400"
+										>
+											✓ Confirmar solución
+										</button>
+										<button
+											type="button"
+											onclick={() => openRejectModal(managedIncident)}
+											class="btn-reject-solution inline-flex cursor-pointer items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold shadow-xs"
+										>
+											✕ Rechazar solución
+										</button>
+									</div>
+								{:else}
+									<p class="text-xs text-slate-300">
+										La incidencia se encuentra resuelta a la espera de que el cliente valide la
+										solución propuesta.
+										{#if getAutoCloseRemainingMinutes(managedIncident, now) !== null}
+											<span class="mt-1 block text-slate-400">
+												Cierre automático programado por inactividad tras 24 h (restan aprox. {Math.max(
+													1,
+													Math.round((getAutoCloseRemainingMinutes(managedIncident, now) ?? 0) / 60)
+												)} h si no responde).
+											</span>
+										{/if}
+									</p>
+								{/if}
+							</div>
+						{/if}
+
+						{#if managedIncident.status === 'closed'}
+							<div class="space-y-2.5 rounded-xl border border-slate-700/80 bg-slate-950/60 p-4">
+								<div class="flex items-center justify-between">
+									<div class="flex items-center gap-2 text-sm font-semibold text-slate-200">
+										<span class="inline-block h-2 w-2 rounded-full bg-slate-400"></span>
+										<span>
+											{managedIncident.closureType === 'auto_closed'
+												? 'Incidencia cerrada automáticamente (por inactividad tras 24 h)'
+												: 'Incidencia cerrada · Solución confirmada por el cliente'}
+										</span>
+									</div>
+									{#if managedIncident.closedAt}
+										<span class="text-xs text-slate-400">
+											{new Date(managedIncident.closedAt).toLocaleString('es-ES')}
+										</span>
+									{/if}
+								</div>
+								{#if activeUser.role === 'client' && managedIncident.clientUserId === activeUser.id}
+									{#if canClientReopenIncident(managedIncident, activeUser, now)}
+										{@const reopenDeadline = new Date(
+											Date.parse(
+												managedIncident.closedAt ||
+													managedIncident.updatedAt ||
+													managedIncident.createdAt
+											) +
+												24 * 60 * 60 * 1000
+										)}
+										<div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+											<p class="text-xs text-slate-400">
+												Si el problema persiste, puedes reabrirla hasta el <strong
+													class="text-slate-200">{reopenDeadline.toLocaleString('es-ES')}</strong
+												>
+												(restan aprox. {Math.max(
+													1,
+													Math.round((getReopenRemainingMinutes(managedIncident, now) ?? 0) / 60)
+												)} h).
+											</p>
+											<button
+												type="button"
+												onclick={() => openReopenModal(managedIncident)}
+												class="shrink-0 cursor-pointer rounded-lg border border-amber-500/50 bg-amber-950/30 px-3 py-1.5 text-xs font-semibold text-amber-300 transition-colors hover:bg-amber-900/40"
+											>
+												Reabrir incidencia
+											</button>
+										</div>
+									{:else}
+										<p class="text-xs text-slate-500 italic">
+											La ventana de reapertura de 24 horas ha expirado. Incidencia cerrada
+											definitivamente.
+										</p>
+									{/if}
+								{:else if managedIncident.closedAt}
+									{@const remainingMinutes = getReopenRemainingMinutes(managedIncident, now) ?? 0}
+									{#if remainingMinutes > 0}
+										<p class="text-xs text-slate-400">
+											Ventana de reapertura del cliente activa (restan aprox. {Math.max(
+												1,
+												Math.round(remainingMinutes / 60)
+											)} h).
+										</p>
+									{:else}
+										<p class="text-xs text-slate-500 italic">
+											Ventana de reapertura finalizada. Caso cerrado de forma definitiva.
+										</p>
+									{/if}
+								{/if}
+							</div>
+						{/if}
+
+						{#if activeUser.role === 'client' && canClientRateIncident(managedIncident, activeUser, incidentRatings)}
+							<div
+								class="flex items-center justify-between gap-4 rounded-xl border border-amber-500/30 bg-amber-950/20 p-4"
+							>
+								<div>
+									<p class="text-sm font-semibold text-amber-300">Valoración del servicio</p>
+									<p class="mt-0.5 text-xs text-slate-400">
+										¿Qué te ha parecido la atención recibida en esta resolución?
+									</p>
+								</div>
+								<button
+									type="button"
+									onclick={() => {
+										ratingIncident = managedIncident;
+										ratingModalOpen = true;
+									}}
+									class="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-amber-500 px-3.5 py-1.5 text-xs font-semibold text-slate-950 shadow-sm transition-colors hover:bg-amber-400"
+								>
+									★ Valorar atención
+								</button>
+							</div>
+						{/if}
+
+						{#if getRatingForResolution(managedIncident, incidentRatings)}
+							{@const r = getRatingForResolution(managedIncident, incidentRatings)!}
+							<div class="space-y-2 rounded-xl border border-amber-500/30 bg-amber-950/20 p-4">
+								<div class="flex items-center justify-between">
+									<div class="flex items-center gap-2">
+										<span class="text-sm font-semibold text-amber-300"
+											>Satisfacción del cliente:</span
+										>
+										<div class="flex text-amber-400" aria-label="{r.rating} de 5 estrellas">
+											{#each [1, 2, 3, 4, 5] as star (star)}
+												<span>{star <= r.rating ? '★' : '☆'}</span>
+											{/each}
+										</div>
+										<span class="text-xs font-medium text-amber-200">({r.rating}/5)</span>
+									</div>
+									<span class="text-xs text-slate-400"
+										>{new Date(r.createdAt).toLocaleDateString('es-ES')}</span
+									>
+								</div>
+								{#if r.comment}
+									<p
+										class="border-l-2 border-amber-400/60 py-0.5 pl-2 text-xs text-slate-300 italic"
+									>
+										"{r.comment}"
+									</p>
+								{/if}
+								<p class="text-[11px] text-slate-400">
+									Técnico evaluado: <strong class="text-slate-200"
+										>{demoUsers.find((u) => u.id === r.technicianUserId)?.name || 'Técnico'}</strong
+									>
+								</p>
+							</div>
+						{/if}
+
 						<p class="text-sm text-slate-300">Cliente: {managedIncident.client}</p>
 						<p class="text-sm text-slate-400">Categoría: {categoryName(managedIncident)}</p>
 						<p class="text-sm text-slate-300">
@@ -1713,5 +2315,169 @@
 				</details>
 			{/if}
 		</dialog>
+	{/if}
+
+	<!-- Modal de Rechazo de Solución -->
+	{#if rejectModalOpen && rejectIncident}
+		<dialog
+			use:showEditDialog
+			class="fixed inset-0 m-auto w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-xs"
+			aria-labelledby="reject-modal-title"
+			oncancel={(e) => {
+				e.preventDefault();
+				rejectModalOpen = false;
+				rejectIncident = null;
+			}}
+		>
+			<div class="flex items-center justify-between border-b border-slate-800 pb-3">
+				<h2 id="reject-modal-title" class="text-lg font-semibold text-white">
+					Rechazar solución propuesta
+				</h2>
+				<button
+					type="button"
+					onclick={() => {
+						rejectModalOpen = false;
+						rejectIncident = null;
+					}}
+					class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+					aria-label="Cerrar modal"
+				>
+					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M6 18L18 6M6 6l12 12"
+						/>
+					</svg>
+				</button>
+			</div>
+			<p class="mt-2 text-xs text-slate-400">
+				Indica qué problema persiste o por qué la solución propuesta no es suficiente. Este
+				comentario se añadirá a la incidencia y notificará al responsable.
+			</p>
+			<form onsubmit={handleRejectResolution} class="mt-4 space-y-4">
+				<div>
+					<label for="reject-comment" class="mb-1 block text-xs font-medium text-slate-300">
+						Motivo del rechazo <span class="text-red-400">*</span>
+					</label>
+					<textarea
+						id="reject-comment"
+						bind:value={rejectComment}
+						required
+						rows="3"
+						placeholder="Explica qué sigue fallando o qué falta por resolver..."
+						class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-red-400 focus:ring-1 focus:ring-red-400 focus:outline-hidden"
+					></textarea>
+				</div>
+				<div class="flex items-center justify-end gap-3 border-t border-slate-800 pt-3">
+					<button
+						type="button"
+						onclick={() => {
+							rejectModalOpen = false;
+							rejectIncident = null;
+						}}
+						class="cursor-pointer rounded-xl px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+					>
+						Cancelar
+					</button>
+					<button
+						type="submit"
+						disabled={!rejectComment.trim()}
+						class="cursor-pointer rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						Rechazar y reabrir
+					</button>
+				</div>
+			</form>
+		</dialog>
+	{/if}
+
+	<!-- Modal de Reapertura de Incidencia Cerrada -->
+	{#if reopenModalOpen && reopenIncident}
+		<dialog
+			use:showEditDialog
+			class="fixed inset-0 m-auto w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-black/60 backdrop:backdrop-blur-xs"
+			aria-labelledby="reopen-modal-title"
+			oncancel={(e) => {
+				e.preventDefault();
+				reopenModalOpen = false;
+				reopenIncident = null;
+			}}
+		>
+			<div class="flex items-center justify-between border-b border-slate-800 pb-3">
+				<h2 id="reopen-modal-title" class="text-lg font-semibold text-white">Reabrir incidencia</h2>
+				<button
+					type="button"
+					onclick={() => {
+						reopenModalOpen = false;
+						reopenIncident = null;
+					}}
+					class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+					aria-label="Cerrar modal"
+				>
+					<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M6 18L18 6M6 6l12 12"
+						/>
+					</svg>
+				</button>
+			</div>
+			<p class="mt-2 text-xs text-slate-400">
+				Explica el motivo por el que necesitas reabrir la incidencia. Se reanudará la atención
+				técnica y se notificará al técnico.
+			</p>
+			<form onsubmit={handleReopenClosed} class="mt-4 space-y-4">
+				<div>
+					<label for="reopen-reason" class="mb-1 block text-xs font-medium text-slate-300">
+						Motivo de reapertura <span class="text-amber-400">*</span>
+					</label>
+					<textarea
+						id="reopen-reason"
+						bind:value={reopenReason}
+						required
+						rows="3"
+						placeholder="Describe la razón por la que solicitas reabrir..."
+						class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400 focus:outline-hidden"
+					></textarea>
+				</div>
+				<div class="flex items-center justify-end gap-3 border-t border-slate-800 pt-3">
+					<button
+						type="button"
+						onclick={() => {
+							reopenModalOpen = false;
+							reopenIncident = null;
+						}}
+						class="cursor-pointer rounded-xl px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+					>
+						Cancelar
+					</button>
+					<button
+						type="submit"
+						disabled={!reopenReason.trim()}
+						class="cursor-pointer rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-cyan-500 disabled:cursor-not-allowed disabled:opacity-50"
+					>
+						Reabrir incidencia
+					</button>
+				</div>
+			</form>
+		</dialog>
+	{/if}
+
+	<!-- Modal de Encuesta de Satisfacción -->
+	{#if ratingIncident}
+		<IncidentRatingModal
+			open={ratingModalOpen}
+			incident={ratingIncident}
+			technicianName={demoUsers.find((u) => u.id === ratingIncident?.assignedToUserId)?.name}
+			onSave={handleSaveRating}
+			onClose={() => {
+				ratingModalOpen = false;
+				ratingIncident = null;
+			}}
+		/>
 	{/if}
 </div>
