@@ -3,7 +3,8 @@
 	import './theme.css';
 	import EscalationDialog from '$lib/components/EscalationDialog.svelte';
 	import { canEscalate, prepareEscalation, type EscalationInput } from '$lib/incidents/escalation';
-	import ReassignmentReasons from '$lib/components/ReassignmentReasons.svelte';
+	import SettingsView from '$lib/components/settings/SettingsView.svelte';
+	import { canAccessSettings } from '$lib/settings/sections';
 	import {
 		loadReasons,
 		changeReason,
@@ -43,7 +44,6 @@
 	import {
 		queueIncidents,
 		filterIncidentQueue,
-		normalizeSearchText,
 		validQueue,
 		type IncidentQueue,
 		type QueueStatusFilter
@@ -92,7 +92,6 @@
 	import { demoSupportTeams } from '$lib/data/teams';
 	import SlaBadge from '$lib/components/SlaBadge.svelte';
 	import IncidentSlaPanel from '$lib/components/IncidentSlaPanel.svelte';
-	import SlaPolicyManagement from '$lib/components/SlaPolicyManagement.svelte';
 	import {
 		SLA_POLICIES_KEY,
 		loadSlaPoliciesResult,
@@ -126,7 +125,7 @@
 	import DemoSessionSelector from '$lib/components/DemoSessionSelector.svelte';
 	import { defaultDemoUser, demoSessionUsers } from '$lib/auth/demo-session';
 	import { hasPermission, canAccessOrganization } from '$lib/auth/permissions';
-	import { canViewIncident, canActOnIncident, canAccessRecord } from '$lib/auth/record-access';
+	import { canViewIncident, canActOnIncident } from '$lib/auth/record-access';
 	import type { AppUser } from '$lib/types/user';
 
 	let incidentList = $state<Incident[]>([...initialIncidents]);
@@ -134,11 +133,16 @@
 		initialCategories.map((category) => ({ ...category }))
 	);
 	let activeUser = $state<AppUser>(defaultDemoUser);
+	let currentView = $state<'incidents' | 'settings'>('incidents');
+
+	$effect(() => {
+		if (currentView === 'settings' && !canAccessSettings(activeUser)) {
+			currentView = 'incidents';
+		}
+	});
+
 	const visibleIncidents = $derived(
 		incidentList.filter((incident) => canViewIncident(activeUser, incident))
-	);
-	const visibleCategories = $derived(
-		categoryList.filter((category) => canAccessRecord(activeUser, category))
 	);
 	let selectedQueue = $state<IncidentQueue>('all');
 	const queueOptions = [
@@ -168,7 +172,6 @@
 	const canEdit = $derived(hasPermission(activeUser, 'incidents:edit'));
 	const canDelete = $derived(hasPermission(activeUser, 'incidents:delete'));
 	const canCreate = $derived(hasPermission(activeUser, 'incidents:create'));
-	const canManageCategories = $derived(hasPermission(activeUser, 'categories:manage'));
 
 	function changeDemoUser(user: AppUser) {
 		if (!demoSessionUsers.includes(user)) return;
@@ -177,7 +180,6 @@
 		escalationIncident = null;
 		escalationError = '';
 		assignmentError = '';
-		categoryDraft = null;
 		categorySaveError = '';
 		isFormOpen = false;
 		title = '';
@@ -187,6 +189,9 @@
 		searchQuery = '';
 		selectedStatus = user.role === 'technician' ? 'active' : 'all';
 		selectedQueue = validQueue(user, 'all');
+		if (!canAccessSettings(user)) {
+			currentView = 'incidents';
+		}
 		activeUser = user;
 	}
 
@@ -1179,28 +1184,6 @@
 	let categoryLoaded = $state(false);
 	let categoryLoadError = $state('');
 	let categorySaveError = $state('');
-	let categoryDraft = $state<{ id?: string; name: string; description: string } | null>(null);
-
-	function mayManageCategory(category?: IncidentCategory): boolean {
-		return (
-			categoryLoaded &&
-			!categoryLoadError &&
-			hasPermission(activeUser, 'categories:manage') &&
-			(category
-				? canAccessRecord(activeUser, category)
-				: !!activeUser.organizationId &&
-					canAccessOrganization(activeUser, activeUser.organizationId))
-		);
-	}
-
-	function openCategoryForm(id?: string) {
-		const category = id === undefined ? undefined : categoryList.find((item) => item.id === id);
-		if ((id !== undefined && !category) || !mayManageCategory(category)) return;
-		categorySaveError = '';
-		categoryDraft = category
-			? { id: category.id, name: category.name, description: category.description }
-			: { name: '', description: '' };
-	}
 
 	function persistCategories(next: IncidentCategory[]): boolean {
 		if (!categoryLoaded || categoryLoadError || !hasPermission(activeUser, 'categories:manage'))
@@ -1215,54 +1198,6 @@
 				'No se pudieron guardar los cambios. El catálogo no se ha modificado. Inténtalo de nuevo.';
 			return false;
 		}
-	}
-
-	function saveCategory(event: SubmitEvent) {
-		event.preventDefault();
-		if (!categoryDraft) return;
-		const draft = categoryDraft;
-		const original =
-			draft.id === undefined ? undefined : categoryList.find((item) => item.id === draft.id);
-		if ((draft.id !== undefined && !original) || !mayManageCategory(original)) return;
-		const name = draft.name.trim();
-		const description = draft.description.trim();
-		if (!name) {
-			categorySaveError = 'Escribe un nombre para la categoría.';
-			return;
-		}
-		// Compare only within the target organization, including legacy Nodhouses data.
-		if (
-			categoryList.some(
-				(item) =>
-					item.id !== original?.id &&
-					canAccessRecord(activeUser, item) &&
-					normalizeSearchText(item.name) === normalizeSearchText(name)
-			)
-		) {
-			categorySaveError = 'Ya existe una categoría con ese nombre, activa o inactiva.';
-			return;
-		}
-		const category: IncidentCategory = original
-			? { ...original, name, description }
-			: {
-					id: crypto.randomUUID(),
-					organizationId: activeUser.organizationId,
-					name,
-					description,
-					active: true
-				};
-		const next = original
-			? categoryList.map((item) => (item.id === original.id ? category : item))
-			: [...categoryList, category];
-		if (persistCategories(next)) categoryDraft = null;
-	}
-
-	function toggleCategory(id: string) {
-		const category = categoryList.find((item) => item.id === id);
-		if (!category || !mayManageCategory(category)) return;
-		persistCategories(
-			categoryList.map((item) => (item.id === id ? { ...item, active: !item.active } : item))
-		);
 	}
 
 	function isCategoryList(value: unknown): value is IncidentCategory[] {
@@ -1343,6 +1278,36 @@
 					onclearall={handleClearNotifications}
 				/>
 				<ThemeSelector />
+				{#if canAccessSettings(activeUser)}
+					<button
+						type="button"
+						onclick={() => (currentView = currentView === 'settings' ? 'incidents' : 'settings')}
+						class="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-700 hover:text-white focus-visible:outline-2 focus-visible:outline-cyan-400"
+						aria-label={currentView === 'settings' ? 'Volver a incidencias' : 'Configuración'}
+					>
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							class="h-4 w-4 text-cyan-400"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+							stroke-width="2"
+							aria-hidden="true"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+							/>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+							/>
+						</svg>
+						<span>Configuración</span>
+					</button>
+				{/if}
 				{#if canCreate && !incidentLoadError}
 					<button
 						type="button"
@@ -1357,358 +1322,245 @@
 	</header>
 
 	<main class="app-main mx-auto max-w-7xl px-6 py-10">
-		{#if !reasonsReady && reasonError && activeUser.role !== 'client'}<p
-				role="alert"
-				class="mb-4 text-sm text-red-300"
-			>
-				{reasonError}
-			</p>{/if}
-		{#if incidentLoadError}<p role="alert" class="mb-6 text-red-400">{incidentLoadError}</p>{/if}
-		{#if activeUser.role === 'client'}<p class="mb-6 text-sm text-cyan-300">
-				Solo se muestran tus incidencias. Las antiguas sin un cliente vinculado no se incluyen.
-			</p>{/if}
-		<section>
-			<p class="text-sm font-medium text-cyan-400">Panel principal</p>
-			<h1 class="mt-1 text-3xl font-bold">Resumen de incidencias</h1>
-			<p class="mt-2 text-slate-400">Consulta rápidamente el estado del soporte técnico.</p>
-		</section>
-
-		<section class="mt-8 grid grid-cols-1 gap-4 min-[420px]:grid-cols-2 lg:grid-cols-4">
-			{#each summary as item (item.label)}
-				<article
-					class="flex min-h-[110px] flex-col justify-between rounded-xl border border-slate-800 bg-slate-900 p-5"
+		{#if currentView === 'settings' && canAccessSettings(activeUser)}
+			{#key activeUser.id}
+				<SettingsView
+					actor={activeUser}
+					categories={categoryList}
+					categoriesReady={categoryLoaded}
+					categoryError={categoryLoadError || categorySaveError}
+					onCategoryChange={persistCategories}
+					reasons={reasonList}
+					{reasonsReady}
+					{reasonError}
+					onReasonChange={updateReason}
+					slaPolicies={slaCatalogState.status === 'valid' ? slaCatalogState.policies : []}
+					{slaPoliciesReady}
+					{slaPolicyError}
+					onSlaPolicyChange={updateSlaPolicy}
+					onClose={() => (currentView = 'incidents')}
+				/>
+			{/key}
+		{:else}
+			{#if !reasonsReady && reasonError && activeUser.role !== 'client'}<p
+					role="alert"
+					class="mb-4 text-sm text-red-300"
 				>
-					<div class="flex items-center justify-between gap-2">
-						<p class="text-sm font-medium text-slate-400">{item.label}</p>
-						<span class={`h-2.5 w-2.5 shrink-0 rounded-full ${item.badge}`}></span>
-					</div>
-					<p class={`mt-2 text-4xl font-bold ${item.color}`}>{item.value}</p>
-				</article>
-			{/each}
-		</section>
+					{reasonError}
+				</p>{/if}
+			{#if incidentLoadError}<p role="alert" class="mb-6 text-red-400">{incidentLoadError}</p>{/if}
+			{#if activeUser.role === 'client'}<p class="mb-6 text-sm text-cyan-300">
+					Solo se muestran tus incidencias. Las antiguas sin un cliente vinculado no se incluyen.
+				</p>{/if}
+			<section>
+				<p class="text-sm font-medium text-cyan-400">Panel principal</p>
+				<h1 class="mt-1 text-3xl font-bold">Resumen de incidencias</h1>
+				<p class="mt-2 text-slate-400">Consulta rápidamente el estado del soporte técnico.</p>
+			</section>
 
-		<section class="mt-8 rounded-xl border border-slate-800 bg-slate-900">
-			<div class="border-b border-slate-800 px-6 py-5">
-				<h2 class="text-lg font-semibold">
-					{activeUser.role === 'technician'
-						? queueOptions.find((option) => option.value === selectedQueue)?.label
-						: 'Incidencias recientes'}
-				</h2>
-				{#if activeUser.role === 'technician'}
-					<div class="mt-4 flex flex-wrap gap-2" role="group" aria-label="Cola de trabajo">
-						{#each queueOptions as option (option.value)}<button
+			<section class="mt-8 grid grid-cols-1 gap-4 min-[420px]:grid-cols-2 lg:grid-cols-4">
+				{#each summary as item (item.label)}
+					<article
+						class="flex min-h-[110px] flex-col justify-between rounded-xl border border-slate-800 bg-slate-900 p-5"
+					>
+						<div class="flex items-center justify-between gap-2">
+							<p class="text-sm font-medium text-slate-400">{item.label}</p>
+							<span class={`h-2.5 w-2.5 shrink-0 rounded-full ${item.badge}`}></span>
+						</div>
+						<p class={`mt-2 text-4xl font-bold ${item.color}`}>{item.value}</p>
+					</article>
+				{/each}
+			</section>
+
+			<section class="mt-8 rounded-xl border border-slate-800 bg-slate-900">
+				<div class="border-b border-slate-800 px-6 py-5">
+					<h2 class="text-lg font-semibold">
+						{activeUser.role === 'technician'
+							? queueOptions.find((option) => option.value === selectedQueue)?.label
+							: 'Incidencias recientes'}
+					</h2>
+					{#if activeUser.role === 'technician'}
+						<div class="mt-4 flex flex-wrap gap-2" role="group" aria-label="Cola de trabajo">
+							{#each queueOptions as option (option.value)}<button
+									type="button"
+									aria-pressed={selectedQueue === option.value}
+									onclick={() => (selectedQueue = option.value)}
+									class={`rounded-lg border px-4 py-2 text-sm font-semibold ${selectedQueue === option.value ? 'border-cyan-400 bg-cyan-500 text-slate-950' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}
+									>{option.label}</button
+								>{/each}
+						</div>
+						<p class="mt-3 text-sm text-slate-300" role="status">
+							Asignadas a mí: {mineCount} · Sin asignar: {unassignedCount}
+						</p>
+						<p class="mt-1 text-xs text-slate-400">
+							Totales de tu organización, sin aplicar búsqueda ni estado.
+						</p>
+						{#if selectedQueue === 'mine'}<p class="mt-2 text-sm text-slate-400">
+								Primero abiertas y pendientes, después resueltas. En cada grupo: prioridad alta
+								primero y las más antiguas antes.
+							</p>{/if}
+					{/if}
+
+					<p class="text-sm text-slate-400">Aquí aparecerán los últimos casos registrados.</p>
+
+					<div class="mt-4">
+						<label for="incident-search" class="mb-2 block text-sm font-medium text-slate-300">
+							Buscar incidencias
+						</label>
+
+						<input
+							id="incident-search"
+							type="search"
+							bind:value={searchQuery}
+							placeholder="Buscar por ID, título o cliente..."
+							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
+						/>
+
+						<p class="mt-2 text-xs text-slate-400" role="status">
+							Resultados: {filteredIncidents.length} de {currentQueue.length}
+						</p>
+					</div>
+
+					<div class="mt-4 flex flex-wrap gap-2" role="group" aria-label="Estado de la incidencia">
+						{#each statusFilters as filter (filter.value)}
+							<button
 								type="button"
-								aria-pressed={selectedQueue === option.value}
-								onclick={() => (selectedQueue = option.value)}
-								class={`rounded-lg border px-4 py-2 text-sm font-semibold ${selectedQueue === option.value ? 'border-cyan-400 bg-cyan-500 text-slate-950' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}
-								>{option.label}</button
-							>{/each}
-					</div>
-					<p class="mt-3 text-sm text-slate-300" role="status">
-						Asignadas a mí: {mineCount} · Sin asignar: {unassignedCount}
-					</p>
-					<p class="mt-1 text-xs text-slate-400">
-						Totales de tu organización, sin aplicar búsqueda ni estado.
-					</p>
-					{#if selectedQueue === 'mine'}<p class="mt-2 text-sm text-slate-400">
-							Primero abiertas y pendientes, después resueltas. En cada grupo: prioridad alta
-							primero y las más antiguas antes.
-						</p>{/if}
-				{/if}
-
-				<p class="text-sm text-slate-400">Aquí aparecerán los últimos casos registrados.</p>
-
-				<div class="mt-4">
-					<label for="incident-search" class="mb-2 block text-sm font-medium text-slate-300">
-						Buscar incidencias
-					</label>
-
-					<input
-						id="incident-search"
-						type="search"
-						bind:value={searchQuery}
-						placeholder="Buscar por ID, título o cliente..."
-						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-cyan-400"
-					/>
-
-					<p class="mt-2 text-xs text-slate-400" role="status">
-						Resultados: {filteredIncidents.length} de {currentQueue.length}
-					</p>
-				</div>
-
-				<div class="mt-4 flex flex-wrap gap-2" role="group" aria-label="Estado de la incidencia">
-					{#each statusFilters as filter (filter.value)}
-						<button
-							type="button"
-							onclick={() => (selectedStatus = filter.value)}
-							aria-pressed={selectedStatus === filter.value}
-							class={`rounded-lg px-3 py-2 text-sm font-medium transition ${
-								selectedStatus === filter.value
-									? 'bg-cyan-500 text-slate-950'
-									: 'bg-slate-800 text-slate-400 hover:text-white'
-							}`}
-						>
-							{filter.label}
-						</button>
-					{/each}
-				</div>
-			</div>
-
-			<div class="overflow-x-auto">
-				<table aria-label="Incidencias" class="incident-list w-full text-left">
-					<thead class="text-xs text-slate-500 uppercase">
-						<tr class="border-b border-slate-800">
-							<th scope="col" class="px-6 py-4 font-medium">Incidencia</th>
-							<th scope="col" class="px-6 py-4 font-medium">Cliente</th>
-							<th scope="col" class="px-6 py-4 font-medium">Prioridad</th>
-							<th scope="col" class="px-6 py-4 font-medium">SLA</th>
-							<th scope="col" class="px-6 py-4 font-medium">Estado</th>
-							<th scope="col" class="px-6 py-4 font-medium">Fecha</th>
-						</tr>
-					</thead>
-
-					<tbody>
-						{#each filteredIncidents as incident (incident.id)}
-							<tr
-								class="incident-row border-b border-slate-800/70 last:border-0 hover:bg-slate-800/30"
+								onclick={() => (selectedStatus = filter.value)}
+								aria-pressed={selectedStatus === filter.value}
+								class={`rounded-lg px-3 py-2 text-sm font-medium transition ${
+									selectedStatus === filter.value
+										? 'bg-cyan-500 text-slate-950'
+										: 'bg-slate-800 text-slate-400 hover:text-white'
+								}`}
 							>
-								<td class="incident-title px-6 py-4">
-									{#if canViewIncident(activeUser, incident)}
-										<button
-											type="button"
-											onclick={() => openEditIncident(incident.id)}
-											aria-label={`${canEdit ? 'Editar' : 'Abrir'} incidencia ${incident.id}: ${incident.title}`}
-											class="rounded text-left font-medium text-cyan-400 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-400"
-										>
-											{incident.title}
-										</button>
-									{:else}<p class="font-medium">{incident.title}</p>
-										<p class="mt-2 text-sm text-slate-400">
-											{incident.description ?? 'Sin descripción'}
-										</p>
-										{#if incident.solution}<p class="mt-1 text-sm text-slate-400">
-												Solución: {incident.solution}
-											</p>{/if}{/if}
-									<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
+								{filter.label}
+							</button>
+						{/each}
+					</div>
+				</div>
 
-									<p class="mt-2 text-sm text-slate-400">Categoría: {categoryName(incident)}</p>
-									<p class="mt-2 text-sm text-slate-300">
-										{incident.assignedToUserId ? 'Asignado a: ' : ''}{assigneeName(incident)}
-									</p>
-									{#if assignmentReady && reasonsReady && !incidentLoadError && activeUser.role === 'technician' && !incident.assignedToUserId && canAssignTo(activeUser, incident, activeUser.id)}
-										<button
-											type="button"
-											onclick={() => openAssignment(incident, true)}
-											class="mt-2 rounded border border-slate-700 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
-											>Asignarme</button
-										>
-									{/if}
-								</td>
+				<div class="overflow-x-auto">
+					<table aria-label="Incidencias" class="incident-list w-full text-left">
+						<thead class="text-xs text-slate-500 uppercase">
+							<tr class="border-b border-slate-800">
+								<th scope="col" class="px-6 py-4 font-medium">Incidencia</th>
+								<th scope="col" class="px-6 py-4 font-medium">Cliente</th>
+								<th scope="col" class="px-6 py-4 font-medium">Prioridad</th>
+								<th scope="col" class="px-6 py-4 font-medium">SLA</th>
+								<th scope="col" class="px-6 py-4 font-medium">Estado</th>
+								<th scope="col" class="px-6 py-4 font-medium">Fecha</th>
+							</tr>
+						</thead>
 
-								<td class="px-6 py-4 text-sm text-slate-400">
-									<span class="mobile-field-label" aria-hidden="true">Cliente</span
-									>{incident.client}
-								</td>
-
-								<td
-									role="cell"
-									class={`px-6 py-4 text-sm font-medium ${priorityClasses[incident.priority]}`}
+						<tbody>
+							{#each filteredIncidents as incident (incident.id)}
+								<tr
+									class="incident-row border-b border-slate-800/70 last:border-0 hover:bg-slate-800/30"
 								>
-									<span class="mobile-field-label" aria-hidden="true">Prioridad</span
-									>{priorityLabels[incident.priority]}
-								</td>
-
-								<td class="incident-sla px-6 py-4 text-sm">
-									<span class="mobile-field-label" aria-hidden="true">SLA</span>
-									<div class="flex flex-wrap items-center gap-1.5">
-										{#if isIncidentReopened(incident, history)}
-											<span
-												class="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 text-xs font-bold tracking-wide text-rose-400 uppercase shadow-xs"
-												data-testid="reopened-badge"
+									<td class="incident-title px-6 py-4">
+										{#if canViewIncident(activeUser, incident)}
+											<button
+												type="button"
+												onclick={() => openEditIncident(incident.id)}
+												aria-label={`${canEdit ? 'Editar' : 'Abrir'} incidencia ${incident.id}: ${incident.title}`}
+												class="rounded text-left font-medium text-cyan-400 hover:underline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-400"
 											>
-												<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-500"></span>
-												Reabierta
-											</span>
+												{incident.title}
+											</button>
+										{:else}<p class="font-medium">{incident.title}</p>
+											<p class="mt-2 text-sm text-slate-400">
+												{incident.description ?? 'Sin descripción'}
+											</p>
+											{#if incident.solution}<p class="mt-1 text-sm text-slate-400">
+													Solución: {incident.solution}
+												</p>{/if}{/if}
+										<p class="mt-1 text-xs text-slate-500">#{incident.id}</p>
+
+										<p class="mt-2 text-sm text-slate-400">Categoría: {categoryName(incident)}</p>
+										<p class="mt-2 text-sm text-slate-300">
+											{incident.assignedToUserId ? 'Asignado a: ' : ''}{assigneeName(incident)}
+										</p>
+										{#if assignmentReady && reasonsReady && !incidentLoadError && activeUser.role === 'technician' && !incident.assignedToUserId && canAssignTo(activeUser, incident, activeUser.id)}
+											<button
+												type="button"
+												onclick={() => openAssignment(incident, true)}
+												class="mt-2 rounded border border-slate-700 px-3 py-2 text-sm text-cyan-300 hover:bg-slate-800"
+												>Asignarme</button
+											>
 										{/if}
-										<SlaBadge {incident} {now} />
-									</div>
-								</td>
+									</td>
 
-								<td class="incident-state px-6 py-4"
-									><span class="mobile-field-label" aria-hidden="true">Estado</span>
-									{#if incident.status === 'closed'}
-										<span
-											class="inline-flex items-center rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-300"
-										>
-											Cerrada
-										</span>
-									{:else if canEdit}
-										<select
-											value={incident.status}
-											onchange={(event) => updateIncidentStatus(incident.id, event)}
-											class="rounded-full border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
-											aria-label={`Cambiar estado de ${incident.title}`}
-										>
-											<option value="open">Abierta</option>
-											<option value="pending">Pendiente</option>
-											<option value="resolved">Resuelta</option>
-										</select>
-									{:else}<span class="text-sm text-slate-300"
-											>{statusFilters.find((filter) => filter.value === incident.status)
-												?.label}</span
-										>{/if}
-								</td>
+									<td class="px-6 py-4 text-sm text-slate-400">
+										<span class="mobile-field-label" aria-hidden="true">Cliente</span
+										>{incident.client}
+									</td>
 
-								<td class="incident-date px-6 py-4 text-sm text-slate-500"
-									><span class="mobile-field-label" aria-hidden="true">Fecha</span>
-									{new Date(incident.createdAt).toLocaleDateString('es-ES')}
-								</td>
-							</tr>
-						{:else}
-							<tr>
-								<td colspan="6" class="px-6 py-10 text-center text-sm text-slate-400">
-									No hay incidencias que coincidan con los filtros actuales.
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-		</section>
-
-		{#if canManageCategories}
-			<section
-				aria-labelledby="categories-title"
-				class="mt-8 rounded-xl border border-slate-800 bg-slate-900 p-6"
-			>
-				<h2 id="categories-title" class="text-lg font-semibold">Categorías de incidencias</h2>
-
-				<p class="mt-1 text-sm text-slate-400">
-					Catálogo de categorías para clasificar los casos de soporte.
-				</p>
-
-				{#if categoryLoaded && !categoryLoadError}
-					<button
-						type="button"
-						onclick={() => openCategoryForm()}
-						class="mt-4 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
-						>Nueva categoría</button
-					>
-				{/if}
-				{#if categorySaveError}<p role="alert" class="mt-4 text-sm text-red-400">
-						{categorySaveError}
-					</p>{/if}
-				{#if categoryDraft && categoryLoaded && !categoryLoadError}
-					<form
-						onsubmit={saveCategory}
-						class="mt-4 space-y-4 rounded-lg border border-slate-700 bg-slate-950 p-4"
-						aria-labelledby="category-form-title"
-					>
-						<h3 id="category-form-title" class="font-semibold">
-							{categoryDraft.id ? 'Editar categoría' : 'Nueva categoría'}
-						</h3>
-						<div>
-							<label for="category-name" class="mb-2 block text-sm text-slate-300"
-								>Nombre (obligatorio)</label
-							>
-							<input
-								id="category-name"
-								bind:value={categoryDraft.name}
-								required
-								class="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-white outline-none focus:border-cyan-400"
-							/>
-						</div>
-						<div>
-							<label for="category-description" class="mb-2 block text-sm text-slate-300"
-								>Descripción (opcional)</label
-							>
-							<textarea
-								id="category-description"
-								bind:value={categoryDraft.description}
-								rows="3"
-								class="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-white outline-none focus:border-cyan-400"
-							></textarea>
-						</div>
-						<div class="flex gap-3">
-							<button
-								type="submit"
-								class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
-								>Guardar categoría</button
-							>
-							<button
-								type="button"
-								onclick={() => {
-									categoryDraft = null;
-									categorySaveError = '';
-								}}
-								class="rounded-lg px-4 py-2 text-sm text-slate-300 hover:bg-slate-800"
-								>Cancelar</button
-							>
-						</div>
-					</form>
-				{/if}
-				{#if categoryLoadError}
-					<p role="alert" class="mt-4 text-sm text-red-400">
-						{categoryLoadError}
-					</p>
-				{:else}
-					<ul class="mt-5 grid gap-3 sm:grid-cols-2">
-						{#each visibleCategories as category (category.id)}
-							<li class="rounded-lg border border-slate-700 bg-slate-950 p-4">
-								<div class="flex items-center justify-between gap-3">
-									<h3 class="font-medium text-slate-200">{category.name}</h3>
-
-									<span
-										class={`text-xs ${category.active ? 'text-emerald-400' : 'text-slate-500'}`}
+									<td
+										role="cell"
+										class={`px-6 py-4 text-sm font-medium ${priorityClasses[incident.priority]}`}
 									>
-										{category.active ? 'Activa' : 'Inactiva'}
-									</span>
-								</div>
+										<span class="mobile-field-label" aria-hidden="true">Prioridad</span
+										>{priorityLabels[incident.priority]}
+									</td>
 
-								<p class="mt-2 text-sm text-slate-400">
-									{category.description}
-								</p>
-								{#if categoryLoaded}
-									<div class="mt-4 flex flex-wrap gap-3">
-										<button
-											type="button"
-											onclick={() => openCategoryForm(category.id)}
-											aria-label={`Editar categoría ${category.name}`}
-											class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-cyan-400 hover:bg-slate-800"
-											>Editar</button
-										>
-										<button
-											type="button"
-											onclick={() => toggleCategory(category.id)}
-											aria-label={`${category.active ? 'Desactivar' : 'Reactivar'} categoría ${category.name}`}
-											class="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
-											>{category.active ? 'Desactivar' : 'Reactivar'}</button
-										>
-									</div>
-								{/if}
-							</li>
-						{:else}
-							<li class="text-sm text-slate-400">Todavía no hay categorías configuradas.</li>
-						{/each}
-					</ul>
-				{/if}
+									<td class="incident-sla px-6 py-4 text-sm">
+										<span class="mobile-field-label" aria-hidden="true">SLA</span>
+										<div class="flex flex-wrap items-center gap-1.5">
+											{#if isIncidentReopened(incident, history)}
+												<span
+													class="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 text-xs font-bold tracking-wide text-rose-400 uppercase shadow-xs"
+													data-testid="reopened-badge"
+												>
+													<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-500"></span>
+													Reabierta
+												</span>
+											{/if}
+											<SlaBadge {incident} {now} />
+										</div>
+									</td>
+
+									<td class="incident-state px-6 py-4"
+										><span class="mobile-field-label" aria-hidden="true">Estado</span>
+										{#if incident.status === 'closed'}
+											<span
+												class="inline-flex items-center rounded-full bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-300"
+											>
+												Cerrada
+											</span>
+										{:else if canEdit}
+											<select
+												value={incident.status}
+												onchange={(event) => updateIncidentStatus(incident.id, event)}
+												class="rounded-full border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400"
+												aria-label={`Cambiar estado de ${incident.title}`}
+											>
+												<option value="open">Abierta</option>
+												<option value="pending">Pendiente</option>
+												<option value="resolved">Resuelta</option>
+											</select>
+										{:else}<span class="text-sm text-slate-300"
+												>{statusFilters.find((filter) => filter.value === incident.status)
+													?.label}</span
+											>{/if}
+									</td>
+
+									<td class="incident-date px-6 py-4 text-sm text-slate-500"
+										><span class="mobile-field-label" aria-hidden="true">Fecha</span>
+										{new Date(incident.createdAt).toLocaleDateString('es-ES')}
+									</td>
+								</tr>
+							{:else}
+								<tr>
+									<td colspan="6" class="px-6 py-10 text-center text-sm text-slate-400">
+										No hay incidencias que coincidan con los filtros actuales.
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			</section>
 		{/if}
-		{#key activeUser.id}<ReassignmentReasons
-				actor={activeUser}
-				reasons={reasonList}
-				ready={reasonsReady}
-				error={reasonError}
-				onchange={updateReason}
-			/>{/key}
-		{#key activeUser.id}<SlaPolicyManagement
-				actor={activeUser}
-				policies={slaCatalogState.status === 'valid' ? slaCatalogState.policies : []}
-				categories={categoryList}
-				ready={slaPoliciesReady}
-				error={slaPolicyError}
-				onchange={updateSlaPolicy}
-			/>{/key}
 	</main>
 	{#if escalationIncident && assignmentReady && !incidentLoadError && canEscalate(activeUser, escalationIncident)}
 		<EscalationDialog
