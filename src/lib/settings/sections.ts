@@ -40,7 +40,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDefinition[] = [
 				groupId: 'organization',
 				label: 'Usuarios',
 				description: 'Gestión de técnicos, administradores y clientes de la organización.',
-				status: 'coming_soon',
+				status: 'active',
 				requiredPermission: 'users:manage'
 			},
 			{

@@ -90,6 +90,8 @@
 		isIncidentReopened
 	} from '$lib/incidents/lifecycle';
 	import { demoSupportTeams } from '$lib/data/teams';
+	import { supportLevels } from '$lib/types/support';
+	import { USERS_STORAGE_KEY, loadUsersResult, saveUsers } from '$lib/users/catalog';
 	import SlaBadge from '$lib/components/SlaBadge.svelte';
 	import IncidentSlaPanel from '$lib/components/IncidentSlaPanel.svelte';
 	import {
@@ -123,7 +125,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 
 	import DemoSessionSelector from '$lib/components/DemoSessionSelector.svelte';
-	import { defaultDemoUser, demoSessionUsers } from '$lib/auth/demo-session';
+	import { defaultDemoUser } from '$lib/auth/demo-session';
 	import { hasPermission, canAccessOrganization } from '$lib/auth/permissions';
 	import { canViewIncident, canActOnIncident } from '$lib/auth/record-access';
 	import type { AppUser } from '$lib/types/user';
@@ -132,8 +134,40 @@
 	let categoryList = $state<IncidentCategory[]>(
 		initialCategories.map((category) => ({ ...category }))
 	);
+	let userList = $state<AppUser[]>([...demoUsers]);
+	let usersLoaded = $state(false);
+	let userLoadError = $state('');
+	let userSaveError = $state('');
+
+	function persistUsers(next: AppUser[]): boolean {
+		if (!usersLoaded || userLoadError || !hasPermission(activeUser, 'users:manage')) {
+			return false;
+		}
+		try {
+			saveUsers(localStorage, next);
+			userList = next;
+			userSaveError = '';
+			return true;
+		} catch (err) {
+			userSaveError = err instanceof Error ? err.message : 'No se pudieron guardar los usuarios.';
+			return false;
+		}
+	}
+
 	let activeUser = $state<AppUser>(defaultDemoUser);
 	let currentView = $state<'incidents' | 'settings'>('incidents');
+
+	$effect(() => {
+		const current = userList.find((u) => u.id === activeUser.id);
+		if (
+			current &&
+			(current.name !== activeUser.name ||
+				current.email !== activeUser.email ||
+				current.role !== activeUser.role)
+		) {
+			activeUser = current;
+		}
+	});
 
 	$effect(() => {
 		if (currentView === 'settings' && !canAccessSettings(activeUser)) {
@@ -174,13 +208,14 @@
 	const canCreate = $derived(hasPermission(activeUser, 'incidents:create'));
 
 	function changeDemoUser(user: AppUser) {
-		if (!demoSessionUsers.includes(user)) return;
+		if (!user?.active || !userList.some((u) => u.id === user.id && u.active)) return;
 		editingIncident = null;
 		assignmentIncident = null;
 		escalationIncident = null;
 		escalationError = '';
 		assignmentError = '';
 		categorySaveError = '';
+		userSaveError = '';
 		isFormOpen = false;
 		title = '';
 		client = '';
@@ -261,7 +296,7 @@
 			const id = escalationIncident.id;
 			const original = incidentList.find((item) => item.id === id);
 			if (!original) throw new Error('La incidencia ya no existe.');
-			const change = prepareEscalation(activeUser, original, demoUsers, demoSupportTeams, input);
+			const change = prepareEscalation(activeUser, original, userList, demoSupportTeams, input);
 			if (!change) {
 				escalationIncident = null;
 				return;
@@ -303,7 +338,7 @@
 	let storedHistorySnapshot: string | null = null;
 	function assigneeName(incident: Incident): string {
 		if (!incident.assignedToUserId) return 'Sin asignar';
-		const user = demoUsers.find(
+		const user = userList.find(
 			(item) =>
 				item.id === incident.assignedToUserId &&
 				item.organizationId === incidentOrganizationId(incident)
@@ -345,7 +380,7 @@
 			const change = prepareCatalogAssignment(
 				activeUser,
 				original,
-				demoUsers,
+				userList,
 				targetId,
 				reasonList,
 				selection,
@@ -1231,6 +1266,22 @@
 
 	onMount(() => {
 		try {
+			const storedUsers = localStorage.getItem(USERS_STORAGE_KEY);
+			const result = loadUsersResult(storedUsers);
+			if (result.status === 'missing') {
+				userList = result.seededUsers;
+			} else if (result.status === 'valid') {
+				userList = result.users;
+			} else if (result.status === 'corrupt') {
+				userLoadError = result.error;
+			}
+		} catch {
+			userLoadError = 'No se pudieron cargar los usuarios guardados.';
+		} finally {
+			usersLoaded = true;
+		}
+
+		try {
 			const storedCategories = localStorage.getItem(CATEGORY_STORAGE_KEY);
 
 			if (storedCategories !== null) {
@@ -1257,7 +1308,7 @@
 </svelte:head>
 
 <div class="support-app min-h-screen bg-slate-950 text-white">
-	<DemoSessionSelector user={activeUser} onchange={changeDemoUser} />
+	<DemoSessionSelector user={activeUser} users={userList} onchange={changeDemoUser} />
 	<header class="app-header border-b border-slate-800 bg-slate-900">
 		<div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-4">
 			<div>
@@ -1326,6 +1377,12 @@
 			{#key activeUser.id}
 				<SettingsView
 					actor={activeUser}
+					users={userList}
+					usersReady={usersLoaded}
+					userError={userLoadError || userSaveError}
+					onUserChange={persistUsers}
+					availableSupportLevels={supportLevels}
+					availableTeams={demoSupportTeams}
 					categories={categoryList}
 					categoriesReady={categoryLoaded}
 					categoryError={categoryLoadError || categorySaveError}
@@ -1566,7 +1623,7 @@
 		<EscalationDialog
 			incident={escalationIncident}
 			teams={demoSupportTeams}
-			users={demoUsers}
+			users={userList}
 			currentAssignee={assigneeName(escalationIncident)}
 			error={escalationError}
 			onconfirm={confirmEscalation}
@@ -1582,7 +1639,7 @@
 			reasons={reasonList}
 			actor={activeUser}
 			incident={assignmentIncident}
-			candidates={assignmentCandidates(assignmentIncident, demoUsers).filter(
+			candidates={assignmentCandidates(assignmentIncident, userList).filter(
 				(user) =>
 					assignmentIncident !== null && canAssignTo(activeUser, assignmentIncident, user.id)
 			)}
@@ -2053,7 +2110,7 @@
 								{/if}
 								<p class="text-[11px] text-slate-400">
 									Técnico evaluado: <strong class="text-slate-200"
-										>{demoUsers.find((u) => u.id === r.technicianUserId)?.name || 'Técnico'}</strong
+										>{userList.find((u) => u.id === r.technicianUserId)?.name || 'Técnico'}</strong
 									>
 								</p>
 							</div>
@@ -2138,7 +2195,7 @@
 						incident={managedIncident}
 						actor={activeUser}
 						{history}
-						users={demoUsers}
+						users={userList}
 						categories={categoryList}
 						teams={demoSupportTeams}
 						incidents={incidentList}
@@ -2324,7 +2381,7 @@
 		<IncidentRatingModal
 			open={ratingModalOpen}
 			incident={ratingIncident}
-			technicianName={demoUsers.find((u) => u.id === ratingIncident?.assignedToUserId)?.name}
+			technicianName={userList.find((u) => u.id === ratingIncident?.assignedToUserId)?.name}
 			onSave={handleSaveRating}
 			onClose={() => {
 				ratingModalOpen = false;

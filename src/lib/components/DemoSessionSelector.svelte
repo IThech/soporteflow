@@ -1,15 +1,37 @@
 <script lang="ts">
 	import { demoSessionUsers } from '$lib/auth/demo-session';
-	import { organizations } from '$lib/data/organizations';
+	import { organizations, demoOrganization } from '$lib/data/organizations';
 	import type { AppUser, UserRole } from '$lib/types/user';
-	let { user, onchange }: { user: AppUser; onchange: (user: AppUser) => void } = $props();
+
+	let {
+		user,
+		users,
+		onchange
+	}: {
+		user: AppUser;
+		users?: AppUser[];
+		onchange: (user: AppUser) => void;
+	} = $props();
+
 	const roles: Record<UserRole, string> = {
 		platform_admin: 'Administrador de plataforma',
 		organization_admin: 'Administrador de organización',
 		technician: 'Técnico',
 		client: 'Cliente'
 	};
+
 	const organization = $derived(organizations.find((item) => item.id === user.organizationId));
+
+	const selectableUsers = $derived(
+		users
+			? users.filter(
+					(u) =>
+						u.active &&
+						u.organizationId === (user.organizationId ?? demoOrganization.id) &&
+						['organization_admin', 'technician', 'client'].includes(u.role)
+				)
+			: demoSessionUsers
+	);
 </script>
 
 <section
@@ -25,12 +47,12 @@
 			id="demo-user"
 			value={user.id}
 			onchange={(event) => {
-				const selected = demoSessionUsers.find((item) => item.id === event.currentTarget.value);
+				const selected = selectableUsers.find((item) => item.id === event.currentTarget.value);
 				if (selected) onchange(selected);
 			}}
 			class="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white sm:w-auto"
 		>
-			{#each demoSessionUsers as option (option.id)}<option value={option.id}>{option.name}</option
+			{#each selectableUsers as option (option.id)}<option value={option.id}>{option.name}</option
 				>{/each}
 		</select>
 		<p class="text-sm text-slate-400">

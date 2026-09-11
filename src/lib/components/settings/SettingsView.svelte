@@ -10,6 +10,8 @@
 		canManageSettingsSection,
 		type SettingsSectionId
 	} from '$lib/settings/sections';
+	import type { SupportLevel, SupportTeam } from '$lib/types/support';
+	import UserManagement from './UserManagement.svelte';
 	import CategoryManagement from './CategoryManagement.svelte';
 	import ReassignmentReasons from '$lib/components/ReassignmentReasons.svelte';
 	import SlaPolicyManagement from '$lib/components/SlaPolicyManagement.svelte';
@@ -17,6 +19,12 @@
 
 	let {
 		actor,
+		users,
+		usersReady,
+		userError = '',
+		onUserChange,
+		availableSupportLevels = [],
+		availableTeams = [],
 		categories,
 		categoriesReady,
 		categoryError = '',
@@ -32,6 +40,12 @@
 		onClose
 	}: {
 		actor: AppUser;
+		users: AppUser[];
+		usersReady: boolean;
+		userError?: string;
+		onUserChange: (next: AppUser[]) => boolean;
+		availableSupportLevels?: readonly SupportLevel[];
+		availableTeams?: readonly SupportTeam[];
 		categories: IncidentCategory[];
 		categoriesReady: boolean;
 		categoryError?: string;
@@ -131,7 +145,7 @@
 	<div class="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
 		<!-- Sidebar Navigation -->
 		<nav
-			class="space-y-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-4 xl:col-span-3"
+			class="space-y-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-4 lg:col-span-3 xl:col-span-3"
 			aria-label="Menú de configuración"
 		>
 			{#each SETTINGS_GROUPS as group (group.id)}
@@ -175,7 +189,7 @@
 		</nav>
 
 		<!-- Content Panel -->
-		<section class="min-w-0 lg:col-span-8 xl:col-span-9" aria-live="polite">
+		<section class="min-w-0 lg:col-span-9 xl:col-span-9" aria-live="polite">
 			{#if !isCurrentSectionPermitted}
 				<div
 					role="alert"
@@ -185,6 +199,16 @@
 				</div>
 			{:else if currentSection.status === 'coming_soon'}
 				<SettingsPlaceholder section={currentSection} />
+			{:else if selectedSection === 'users'}
+				<UserManagement
+					{actor}
+					{users}
+					ready={usersReady}
+					error={userError}
+					{availableSupportLevels}
+					{availableTeams}
+					onchange={onUserChange}
+				/>
 			{:else if selectedSection === 'categories'}
 				<CategoryManagement
 					{actor}

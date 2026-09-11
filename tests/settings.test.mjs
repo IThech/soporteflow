@@ -41,15 +41,15 @@ test('Administración v1 — Fase A: shell de Configuración y permisos', async 
 
 			// Verificar secciones activas
 			const activeSections = allSections.filter((s) => s.status === 'active');
-			assert.equal(activeSections.length, 3, 'Debe haber 3 secciones activas en Fase A');
+			assert.equal(activeSections.length, 4, 'Debe haber 4 secciones activas en Fase B');
 			const activeIds = activeSections.map((s) => s.id).sort();
-			assert.deepEqual(activeIds, ['categories', 'reassignment_reasons', 'sla_policies']);
+			assert.deepEqual(activeIds, ['categories', 'reassignment_reasons', 'sla_policies', 'users']);
 
 			// Verificar secciones de próxima fase (coming_soon)
 			const comingSoonSections = allSections.filter((s) => s.status === 'coming_soon');
-			assert.equal(comingSoonSections.length, 4, 'Debe haber 4 secciones de próxima fase');
+			assert.equal(comingSoonSections.length, 3, 'Debe haber 3 secciones de próxima fase');
 			const comingSoonIds = comingSoonSections.map((s) => s.id).sort();
-			assert.deepEqual(comingSoonIds, ['locations', 'support_levels', 'teams', 'users']);
+			assert.deepEqual(comingSoonIds, ['locations', 'support_levels', 'teams']);
 
 			// Todas las secciones deben tener campos requeridos
 			for (const section of allSections) {
@@ -112,11 +112,12 @@ test('Administración v1 — Fase A: shell de Configuración y permisos', async 
 
 				// getPermittedSettingsSections excluye coming_soon por defecto
 				const activePermitted = getPermittedSettingsSections(orgAdmin);
-				assert.equal(activePermitted.length, 3);
+				assert.equal(activePermitted.length, 4);
 				assert.deepEqual(activePermitted.map((s) => s.id).sort(), [
 					'categories',
 					'reassignment_reasons',
-					'sla_policies'
+					'sla_policies',
+					'users'
 				]);
 
 				// getPermittedSettingsSections incluye coming_soon si se solicita explícitamente
