@@ -24,7 +24,8 @@
 		teams,
 		incidents,
 		incidentsSnapshot,
-		onincidentupdate
+		onincidentupdate,
+		onmessagesent
 	}: {
 		incident: Incident;
 		actor: AppUser;
@@ -35,6 +36,7 @@
 		incidents?: Incident[];
 		incidentsSnapshot?: string | null;
 		onincidentupdate?: (updatedIncident: Incident) => void;
+		onmessagesent?: (sentMessage: IncidentMessage) => void;
 	} = $props();
 	let messages = $state<IncidentMessage[]>([]);
 	let ready = $state(false);
@@ -92,6 +94,7 @@
 			if (result.updatedIncident) {
 				onincidentupdate?.(result.updatedIncident);
 			}
+			onmessagesent?.(message);
 			if (visibility === 'public') publicDraft = '';
 			else internalDraft = '';
 			announcement = visibility === 'public' ? 'Comentario enviado.' : 'Nota interna añadida.';

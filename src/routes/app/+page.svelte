@@ -66,6 +66,7 @@
 	import { demoOrganization } from '$lib/data/organizations';
 	import { demoUsers } from '$lib/data/users';
 	import type { IncidentHistoryEntry } from '$lib/types/incident-history';
+	import type { IncidentMessage } from '$lib/types/incident-message';
 	import IncidentMessages from '$lib/components/IncidentMessages.svelte';
 	import { loadMessages, MESSAGES_KEY } from '$lib/storage/messages';
 	import { recoverFirstResponse, FIRST_RESPONSE_RECOVERY_KEY } from '$lib/storage/first-response';
@@ -84,6 +85,18 @@
 		type SlaPolicyChange
 	} from '$lib/incidents/sla-catalog';
 	import AssignmentDialog from '$lib/components/AssignmentDialog.svelte';
+	import NotificationCenter from '$lib/components/NotificationCenter.svelte';
+	import type { Notification, NotificationType } from '$lib/types/notification';
+	import {
+		NOTIFICATIONS_KEY,
+		loadNotificationsResult,
+		saveNotifications
+	} from '$lib/storage/notifications';
+	import {
+		buildIncidentNotification,
+		markNotificationAsRead,
+		markAllNotificationsAsRead
+	} from '$lib/incidents/notifications';
 	import { incidents as initialIncidents } from '$lib/data/incidents';
 	import type { Incident, IncidentPriority, IncidentStatus } from '$lib/types/incident';
 	import { onMount } from 'svelte';
@@ -235,6 +248,14 @@
 			storedIncidentSnapshot = JSON.stringify(next);
 			storedHistorySnapshot = JSON.stringify(nextHistory);
 			escalationIncident = null;
+			const notif = buildIncidentNotification({
+				type: 'incident_escalated',
+				incident: change.incident,
+				actor: activeUser,
+				newAssigneeId: input.assignedToUserId,
+				reason: input.reason
+			});
+			recordNotification(notif);
 		} catch (error) {
 			escalationError = error instanceof Error ? error.message : 'No se pudo guardar el escalado.';
 		}
@@ -314,6 +335,21 @@
 			storedIncidentSnapshot = JSON.stringify(next);
 			storedHistorySnapshot = JSON.stringify(nextHistory);
 			assignmentIncident = null;
+			const notifType: NotificationType = original.assignedToUserId
+				? 'incident_reassigned'
+				: 'incident_assigned';
+			const reasonText =
+				selection === '__other__'
+					? manual
+					: (reasonList.find((r) => r.id === selection)?.name ?? manual);
+			const notif = buildIncidentNotification({
+				type: notifType,
+				incident: change.incident,
+				actor: activeUser,
+				newAssigneeId: targetId,
+				reason: reasonText
+			});
+			recordNotification(notif);
 		} catch (error) {
 			assignmentError =
 				error instanceof Error ? error.message : 'No se pudo guardar la asignación.';
@@ -326,6 +362,64 @@
 	let slaPoliciesReady = $state(false);
 	let slaPolicyError = $state('');
 	let slaPolicySnapshot: string | null = null;
+
+	let notificationList = $state<Notification[]>([]);
+	let notificationsReady = $state(false);
+	let notificationError = $state('');
+	let notificationSnapshot: string | null = null;
+
+	function recordNotification(notification: Notification | null) {
+		if (!notification || !notificationsReady) return;
+		try {
+			const next = [...notificationList, notification];
+			notificationSnapshot = saveNotifications(localStorage, next, notificationSnapshot);
+			notificationList = next;
+			notificationError = '';
+		} catch (error) {
+			notificationError =
+				error instanceof Error ? error.message : 'No se pudo guardar la notificación.';
+		}
+	}
+
+	function handleMarkNotificationRead(id: string) {
+		if (!notificationsReady) return;
+		try {
+			const next = markNotificationAsRead(notificationList, id);
+			notificationSnapshot = saveNotifications(localStorage, next, notificationSnapshot);
+			notificationList = next;
+			notificationError = '';
+		} catch (error) {
+			notificationError =
+				error instanceof Error ? error.message : 'No se pudo actualizar la notificación.';
+		}
+	}
+
+	function handleMarkAllNotificationsRead() {
+		if (!notificationsReady) return;
+		try {
+			const orgId = activeUser.organizationId;
+			const next = markAllNotificationsAsRead(notificationList, activeUser.id, orgId);
+			notificationSnapshot = saveNotifications(localStorage, next, notificationSnapshot);
+			notificationList = next;
+			notificationError = '';
+		} catch (error) {
+			notificationError =
+				error instanceof Error ? error.message : 'No se pudieron actualizar las notificaciones.';
+		}
+	}
+
+	function handleMessageSent(incident: Incident | undefined, message: IncidentMessage) {
+		if (!incident) return;
+		const notifType: NotificationType =
+			message.visibility === 'internal' ? 'incident_internal_note' : 'incident_comment';
+		const notif = buildIncidentNotification({
+			type: notifType,
+			incident,
+			actor: activeUser,
+			message
+		});
+		recordNotification(notif);
+	}
 
 	onMount(() => {
 		try {
@@ -380,6 +474,23 @@
 			slaPolicyError =
 				'No se pudo cargar el catálogo de políticas SLA. Los datos guardados se han conservado; la administración y asignación SLA están bloqueadas.';
 			slaPoliciesReady = false;
+		}
+
+		try {
+			notificationSnapshot = localStorage.getItem(NOTIFICATIONS_KEY);
+			const notifResult = loadNotificationsResult(notificationSnapshot);
+			if (notifResult.status === 'corrupt') {
+				notificationError =
+					'No se pudieron cargar las notificaciones guardadas porque los datos están corruptos. Los datos se han conservado.';
+				notificationsReady = false;
+			} else {
+				notificationList = notifResult.notifications;
+				notificationsReady = true;
+			}
+		} catch {
+			notificationError =
+				'Error inesperado al leer las notificaciones guardadas. Los datos se han conservado.';
+			notificationsReady = false;
 		}
 
 		const intervalId = setInterval(() => {
@@ -477,11 +588,35 @@
 			return;
 		}
 
-		incidentList = incidentList.map((item) =>
-			item.id === id ? recordStatusTransition(item, status) : item
-		);
+		const oldStatus = incident.status;
+		let updatedItem: Incident | undefined;
+
+		incidentList = incidentList.map((item) => {
+			if (item.id === id) {
+				updatedItem = recordStatusTransition(item, status);
+				return updatedItem;
+			}
+			return item;
+		});
 
 		saveIncidents();
+
+		if (oldStatus !== status && updatedItem) {
+			let notifType: NotificationType = 'incident_status_changed';
+			if (status === 'resolved') {
+				notifType = 'incident_resolved';
+			} else if (oldStatus === 'resolved') {
+				notifType = 'incident_reopened';
+			}
+			const notif = buildIncidentNotification({
+				type: notifType,
+				incident: updatedItem,
+				actor: activeUser,
+				previousStatus: oldStatus,
+				nextStatus: status
+			});
+			recordNotification(notif);
+		}
 	}
 
 	function deleteIncident(id: number) {
@@ -632,7 +767,10 @@
 			return;
 		}
 
-		if (original.status !== editingIncident.status) {
+		const statusChanged = original.status !== editingIncident.status;
+		const previousStatus = original.status;
+
+		if (statusChanged) {
 			const transitioned = recordStatusTransition(original, editingIncident.status);
 			updatedIncident = {
 				...transitioned,
@@ -649,6 +787,24 @@
 		);
 
 		saveIncidents();
+
+		if (statusChanged) {
+			let notifType: NotificationType = 'incident_status_changed';
+			if (editingIncident.status === 'resolved') {
+				notifType = 'incident_resolved';
+			} else if (previousStatus === 'resolved') {
+				notifType = 'incident_reopened';
+			}
+			const notif = buildIncidentNotification({
+				type: notifType,
+				incident: updatedIncident,
+				actor: activeUser,
+				previousStatus,
+				nextStatus: editingIncident.status
+			});
+			recordNotification(notif);
+		}
+
 		editingIncident = null;
 	}
 
@@ -809,6 +965,16 @@
 			</div>
 
 			<div class="header-actions">
+				<NotificationCenter
+					user={activeUser}
+					incidents={incidentList}
+					{now}
+					notifications={notificationList}
+					{notificationError}
+					onopenincident={(id) => openEditIncident(id)}
+					onmarkread={handleMarkNotificationRead}
+					onmarkallread={handleMarkAllNotificationsRead}
+				/>
 				<ThemeSelector />
 				{#if canCreate && !incidentLoadError}
 					<button
@@ -1527,6 +1693,7 @@
 							incidentList = incidentList.map((i) => (i.id === updated.id ? updated : i));
 							storedIncidentSnapshot = JSON.stringify(incidentList);
 						}}
+						onmessagesent={(sentMsg) => handleMessageSent(managedIncident, sentMsg)}
 					/>
 				{/key}
 			</div>
