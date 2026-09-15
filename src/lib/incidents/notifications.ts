@@ -6,6 +6,7 @@ import { canAccessOrganization } from '$lib/auth/permissions';
 import { canViewIncident } from '$lib/auth/record-access';
 import { incidentOrganizationId } from './assignment';
 import { evaluateIncidentSla } from './sla';
+import { generateId } from '$lib/utils/id';
 
 export interface EventNotificationInput {
 	type: NotificationType;
@@ -184,7 +185,7 @@ export function buildIncidentNotification(
 	if (!recipientUserId) return null;
 
 	return {
-		id: crypto.randomUUID(),
+		id: generateId(),
 		organizationId: orgId,
 		recipientUserId,
 		type,

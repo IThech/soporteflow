@@ -15,6 +15,7 @@ import type { Incident } from '$lib/types/incident';
 import type { IncidentCategory } from '$lib/types/category';
 import type { IncidentHistoryEntry, IncidentRoutingSnapshot } from '$lib/types/incident-history';
 import type { AppUser } from '$lib/types/user';
+import { generateId } from '$lib/utils/id';
 
 export interface UnifiedAssignmentInput {
 	assignedToUserId?: string;
@@ -152,7 +153,7 @@ export function prepareEscalation(
 	return {
 		incident: updated,
 		event: {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			incidentId: incident.id,
 			organizationId: incidentOrganizationId(incident),
 			actorUserId: actor.id,
@@ -251,7 +252,7 @@ export function prepareClassificationChange(
 		return {
 			incident: updated,
 			event: {
-				id: crypto.randomUUID(),
+				id: generateId(),
 				incidentId: incident.id,
 				organizationId: incidentOrganizationId(incident),
 				actorUserId: actor.id,
@@ -269,7 +270,7 @@ export function prepareClassificationChange(
 	return {
 		incident: updated,
 		event: {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			incidentId: incident.id,
 			organizationId: incidentOrganizationId(incident),
 			actorUserId: actor.id,

@@ -72,8 +72,10 @@
 		canManageAssignment,
 		canAssignTo,
 		incidentOrganizationId,
-		getAssigneeLevelIncompatibility
+		getAssigneeLevelIncompatibility,
+		isCandidateLevelCompatible
 	} from '$lib/incidents/assignment';
+	import TechnicianDashboard from '$lib/components/dashboard/TechnicianDashboard.svelte';
 	import {
 		loadHistory,
 		recoverAssignment,
@@ -151,6 +153,7 @@
 
 	import DemoSessionSelector from '$lib/components/DemoSessionSelector.svelte';
 	import { defaultDemoUser } from '$lib/auth/demo-session';
+	import { generateId } from '$lib/utils/id';
 	import { hasPermission, canAccessOrganization } from '$lib/auth/permissions';
 	import { canViewIncident, canActOnIncident, canAccessRecord } from '$lib/auth/record-access';
 	import type { AppUser } from '$lib/types/user';
@@ -240,7 +243,18 @@
 	}
 
 	let activeUser = $state<AppUser>(defaultDemoUser);
-	let currentView = $state<'incidents' | 'settings'>('incidents');
+	let currentView = $state<'home' | 'incidents' | 'settings'>(
+		defaultDemoUser.role === 'technician' ? 'home' : 'incidents'
+	);
+	let messageList = $state<IncidentMessage[]>([]);
+
+	function refreshMessages() {
+		try {
+			messageList = loadMessages(localStorage.getItem(MESSAGES_KEY));
+		} catch {
+			// keep current messageList
+		}
+	}
 
 	$effect(() => {
 		const current = userList.find((u) => u.id === activeUser.id);
@@ -256,6 +270,9 @@
 
 	$effect(() => {
 		if (currentView === 'settings' && !canAccessSettings(activeUser)) {
+			currentView = activeUser.role === 'technician' ? 'home' : 'incidents';
+		}
+		if (currentView === 'home' && activeUser.role !== 'technician') {
 			currentView = 'incidents';
 		}
 	});
@@ -314,7 +331,9 @@
 		searchQuery = '';
 		selectedStatus = user.role === 'technician' ? 'active' : 'all';
 		selectedQueue = validQueue(user, 'all');
-		if (!canAccessSettings(user)) {
+		if (user.role === 'technician') {
+			currentView = 'home';
+		} else if (currentView === 'home' || !canAccessSettings(user)) {
 			currentView = 'incidents';
 		}
 		activeUser = user;
@@ -417,6 +436,54 @@
 		assignmentError = '';
 		assignmentTarget = self ? activeUser.id : (incident.assignedToUserId ?? '');
 		assignmentIncident = incident;
+	}
+
+	function handleAssumeIncident(incident: Incident) {
+		if (!assignmentReady || incidentLoadError || activeUser.role !== 'technician') return;
+		if (!isCandidateLevelCompatible(activeUser, incident, levelList)) {
+			window.alert(
+				'Tu nivel de soporte no tiene la capacidad técnica requerida para asumir esta incidencia.'
+			);
+			return;
+		}
+		try {
+			const id = incident.id;
+			const original = incidentList.find((i) => i.id === id);
+			if (!original) throw new Error('La incidencia ya no existe.');
+			const change = prepareUnifiedAssignment(
+				activeUser,
+				original,
+				userList,
+				teamList,
+				{ assignedToUserId: activeUser.id },
+				levelList
+			);
+			if (!change) return;
+			const next = incidentList.map((item) => (item.id === id ? change.incident : item));
+			const nextHistory = [...history, change.event];
+			commitAssignment(
+				localStorage,
+				next,
+				nextHistory,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+			incidentList = next;
+			history = nextHistory;
+			storedIncidentSnapshot = JSON.stringify(next);
+			storedHistorySnapshot = JSON.stringify(nextHistory);
+
+			const notif = buildIncidentNotification({
+				type: 'incident_assigned',
+				incident: change.incident,
+				actor: activeUser,
+				newAssigneeId: activeUser.id,
+				reason: 'Asumida desde el panel operativo'
+			});
+			recordNotification(notif);
+		} catch (error) {
+			window.alert(error instanceof Error ? error.message : 'No se pudo asumir la incidencia.');
+		}
 	}
 
 	let classificationIncident = $state<Incident | null>(null);
@@ -667,6 +734,7 @@
 
 	function handleMessageSent(incident: Incident | undefined, message: IncidentMessage) {
 		if (!incident) return;
+		messageList = [...messageList, message];
 		const notifType: NotificationType =
 			message.visibility === 'internal' ? 'incident_internal_note' : 'incident_comment';
 		const notif = buildIncidentNotification({
@@ -714,7 +782,7 @@
 		});
 
 		const historyEntry: IncidentHistoryEntry = {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			incidentId: incident.id,
 			organizationId: incidentOrganizationId(incident),
 			actorUserId: activeUser.id,
@@ -771,7 +839,7 @@
 		const updated = recordStatusTransition(incident, 'open', reopenTime);
 
 		const historyEntry: IncidentHistoryEntry = {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			incidentId: incident.id,
 			organizationId: incidentOrganizationId(incident),
 			actorUserId: activeUser.id,
@@ -785,7 +853,7 @@
 
 		// Also add a public comment to messages so the technician can see why it was rejected
 		const message: IncidentMessage = {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			incidentId: incident.id,
 			organizationId: incidentOrganizationId(incident),
 			authorUserId: activeUser.id,
@@ -848,7 +916,7 @@
 		const updated = recordStatusTransition(incident, 'open', reopenTime);
 
 		const historyEntry: IncidentHistoryEntry = {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			incidentId: incident.id,
 			organizationId: incidentOrganizationId(incident),
 			actorUserId: activeUser.id,
@@ -862,7 +930,7 @@
 
 		// Also add a public comment to messages
 		const message: IncidentMessage = {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			incidentId: incident.id,
 			organizationId: incidentOrganizationId(incident),
 			authorUserId: activeUser.id,
@@ -916,7 +984,7 @@
 
 		const orgId = incidentOrganizationId(ratingIncident);
 		const newRating: IncidentRating = {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			organizationId: orgId,
 			incidentId: ratingIncident.id,
 			resolvedAt,
@@ -1031,6 +1099,8 @@
 		} catch {
 			incidentRatings = [];
 		}
+
+		refreshMessages();
 
 		const intervalId = setInterval(() => {
 			now = new Date();
@@ -1305,6 +1375,7 @@
 
 	function openEditIncident(id: number) {
 		solutionExpanded = false;
+		refreshMessages();
 		const incident = incidentList.find((item) => item.id === id);
 
 		if (!incident || incidentLoadError || !canViewIncident(activeUser, incident)) return;
@@ -1394,6 +1465,7 @@
 		}
 
 		editingIncident = null;
+		refreshMessages();
 	}
 
 	let categoryLoaded = $state(false);
@@ -1510,9 +1582,44 @@
 	<DemoSessionSelector user={activeUser} users={userList} onchange={changeDemoUser} />
 	<header class="app-header border-b border-slate-800 bg-slate-900">
 		<div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-4">
-			<div>
-				<p class="text-xl font-bold">Soporte<span class="text-cyan-400">Flow</span></p>
-				<p class="text-xs text-slate-400">Gestión de soporte técnico</p>
+			<div class="flex flex-wrap items-center gap-4 sm:gap-6">
+				<div>
+					<p class="text-xl font-bold">Soporte<span class="text-cyan-400">Flow</span></p>
+					<p class="text-xs text-slate-400">Gestión de soporte técnico</p>
+				</div>
+				{#if activeUser.role === 'technician'}
+					<nav
+						class="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-950/60 p-1"
+						aria-label="Vistas principales"
+					>
+						<button
+							type="button"
+							onclick={() => (currentView = 'home')}
+							class={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+								currentView === 'home'
+									? 'bg-cyan-500 text-slate-950 shadow-xs'
+									: 'text-slate-300 hover:bg-slate-800 hover:text-white'
+							}`}
+							aria-current={currentView === 'home' ? 'page' : undefined}
+							data-testid="nav-tab-home"
+						>
+							Mi trabajo
+						</button>
+						<button
+							type="button"
+							onclick={() => (currentView = 'incidents')}
+							class={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+								currentView === 'incidents'
+									? 'bg-cyan-500 text-slate-950 shadow-xs'
+									: 'text-slate-300 hover:bg-slate-800 hover:text-white'
+							}`}
+							aria-current={currentView === 'incidents' ? 'page' : undefined}
+							data-testid="nav-tab-incidents"
+						>
+							Incidencias
+						</button>
+					</nav>
+				{/if}
 			</div>
 
 			<div class="header-actions">
@@ -1531,9 +1638,15 @@
 				{#if canAccessSettings(activeUser)}
 					<button
 						type="button"
-						onclick={() => (currentView = currentView === 'settings' ? 'incidents' : 'settings')}
+						onclick={() =>
+							(currentView =
+								currentView === 'settings'
+									? activeUser.role === 'technician'
+										? 'home'
+										: 'incidents'
+									: 'settings')}
 						class="inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-700 hover:text-white focus-visible:outline-2 focus-visible:outline-cyan-400"
-						aria-label={currentView === 'settings' ? 'Volver a incidencias' : 'Configuración'}
+						aria-label={currentView === 'settings' ? 'Volver' : 'Configuración'}
 					>
 						<svg
 							xmlns="http://www.w3.org/2000/svg"
@@ -1608,9 +1721,28 @@
 					{slaPoliciesReady}
 					{slaPolicyError}
 					onSlaPolicyChange={updateSlaPolicy}
-					onClose={() => (currentView = 'incidents')}
+					onClose={() => (currentView = activeUser.role === 'technician' ? 'home' : 'incidents')}
 				/>
 			{/key}
+		{:else if currentView === 'home' && activeUser.role === 'technician'}
+			<TechnicianDashboard
+				technician={activeUser}
+				incidents={incidentList}
+				{history}
+				messages={messageList}
+				users={userList}
+				levels={levelList}
+				teams={teamList}
+				sites={siteList}
+				categories={categoryList}
+				{now}
+				onopenincident={(id) => openEditIncident(id)}
+				onassumeincident={(inc) => handleAssumeIncident(inc)}
+				onviewallmine={() => {
+					selectedQueue = 'mine';
+					currentView = 'incidents';
+				}}
+			/>
 		{:else}
 			{#if !reasonsReady && reasonError && activeUser.role !== 'client'}<p
 					role="alert"
@@ -2045,7 +2177,10 @@
 	{#if editingIncident && managedIncident && canViewIncident(activeUser, managedIncident)}
 		<dialog
 			use:showEditDialog
-			onclose={() => (editingIncident = null)}
+			onclose={() => {
+				editingIncident = null;
+				refreshMessages();
+			}}
 			aria-labelledby="edit-incident-title"
 			class="incident-workspace fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%-2rem)] max-w-5xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-slate-950/80"
 		>
@@ -2072,7 +2207,10 @@
 
 				<button
 					type="button"
-					onclick={() => (editingIncident = null)}
+					onclick={() => {
+						editingIncident = null;
+						refreshMessages();
+					}}
 					aria-label="Cerrar incidencia"
 					class="rounded-lg px-3 py-2 text-slate-400 hover:bg-slate-800 hover:text-white"
 				>

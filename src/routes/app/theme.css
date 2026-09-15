@@ -550,3 +550,97 @@ html[data-app-theme='light'] .support-app .badge-default-policy {
 		}
 	}
 }
+
+/* Technician Dashboard V1 Styles */
+.support-app .badge-attention-breached {
+	border: 1px solid rgba(244, 63, 94, 0.45);
+	background-color: rgba(225, 29, 72, 0.2);
+	color: #fda4af;
+}
+
+.support-app .badge-attention-approaching {
+	border: 1px solid rgba(245, 158, 11, 0.45);
+	background-color: rgba(217, 119, 6, 0.2);
+	color: #fcd34d;
+}
+
+.support-app .badge-attention-reopened {
+	border: 1px solid rgba(217, 70, 239, 0.45);
+	background-color: rgba(192, 38, 211, 0.2);
+	color: #f0abfc;
+}
+
+.support-app .badge-attention-client {
+	border: 1px solid rgba(14, 165, 233, 0.45);
+	background-color: rgba(2, 132, 199, 0.2);
+	color: #7dd3fc;
+}
+
+.support-app .badge-attention-incompatible {
+	border: 1px solid rgba(249, 115, 22, 0.45);
+	background-color: rgba(234, 88, 12, 0.2);
+	color: #fdba74;
+}
+
+.support-app .badge-attention-high {
+	border: 1px solid rgba(239, 68, 68, 0.45);
+	background-color: rgba(220, 38, 38, 0.2);
+	color: #fca5a5;
+}
+
+/* Light Theme Overrides for Dashboard */
+html[data-app-theme='light'] .support-app .badge-attention-breached {
+	border: 1px solid #fecdd3;
+	background-color: #fff1f2;
+	color: #be123c;
+}
+
+html[data-app-theme='light'] .support-app .badge-attention-approaching {
+	border: 1px solid #fde68a;
+	background-color: #fffbeb;
+	color: #b45309;
+}
+
+html[data-app-theme='light'] .support-app .badge-attention-reopened {
+	border: 1px solid #f5d0fe;
+	background-color: #fdf4ff;
+	color: #a21caf;
+}
+
+html[data-app-theme='light'] .support-app .badge-attention-client {
+	border: 1px solid #bae6fd;
+	background-color: #f0f9ff;
+	color: #0369a1;
+}
+
+html[data-app-theme='light'] .support-app .badge-attention-incompatible {
+	border: 1px solid #fed7aa;
+	background-color: #fff7ed;
+	color: #c2410c;
+}
+
+html[data-app-theme='light'] .support-app .badge-attention-high {
+	border: 1px solid #fecaca;
+	background-color: #fef2f2;
+	color: #b91c1c;
+}
+
+html[data-app-theme='light'] .support-app .technician-dashboard .kpi-card {
+	background-color: #ffffff;
+	border-color: #e2e8f0;
+}
+
+html[data-app-theme='light'] .support-app .technician-dashboard .dashboard-section {
+	background-color: #ffffff;
+	border-color: #e2e8f0;
+}
+
+html[data-app-theme='light'] .support-app .technician-dashboard .attention-card {
+	background-color: #f8fafc;
+	border-color: #e2e8f0;
+}
+
+html[data-app-theme='light'] .support-app .technician-dashboard .attention-card:hover {
+	background-color: #f1f5f9;
+	border-color: #cbd5e1;
+}

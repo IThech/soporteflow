@@ -8,6 +8,7 @@ import type {
 	CreateUserInput,
 	UpdateUserInput
 } from '$lib/types/user';
+import { generateId } from '$lib/utils/id';
 
 export const USERS_STORAGE_KEY = 'soporteflow-users';
 
@@ -297,7 +298,7 @@ export function createUser(
 			? [...new Set(input.siteIds.map((s) => s.trim()).filter(Boolean))]
 			: undefined;
 		const newTechnicalUser: AppUser = {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			organizationId: targetOrgId,
 			name,
 			email,
@@ -313,7 +314,7 @@ export function createUser(
 
 	// client (no technical fields permitted)
 	const newStandardUser: AppUser = {
-		id: crypto.randomUUID(),
+		id: generateId(),
 		organizationId: targetOrgId,
 		name,
 		email,

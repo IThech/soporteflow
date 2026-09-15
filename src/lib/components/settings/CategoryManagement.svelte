@@ -6,6 +6,7 @@
 	import type { AppUser } from '$lib/types/user';
 	import type { IncidentCategory } from '$lib/types/category';
 	import type { SupportLevelDefinition, SupportTeam } from '$lib/types/support';
+	import { generateId } from '$lib/utils/id';
 
 	let {
 		actor,
@@ -128,7 +129,7 @@
 					defaultTeamId: rawTeam
 				}
 			: {
-					id: crypto.randomUUID(),
+					id: generateId(),
 					organizationId: actor.organizationId,
 					name,
 					description,

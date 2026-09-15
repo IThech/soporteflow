@@ -4,6 +4,7 @@ import { demoOrganization } from '$lib/data/organizations';
 import type { Incident } from '$lib/types/incident';
 import type { CreateSiteInput, Site, SiteReferences, UpdateSiteInput } from '$lib/types/site';
 import type { AppUser } from '$lib/types/user';
+import { generateId } from '$lib/utils/id';
 
 export const SITES_STORAGE_KEY = 'soporteflow-sites';
 
@@ -141,7 +142,7 @@ export function createSite(actor: AppUser, sites: Site[], input: CreateSiteInput
 	const description = input.description?.trim() || undefined;
 
 	const newSite: Site = {
-		id: crypto.randomUUID(),
+		id: generateId(),
 		organizationId: targetOrgId,
 		name,
 		...(description ? { description } : {}),

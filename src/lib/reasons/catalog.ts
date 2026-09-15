@@ -3,6 +3,7 @@ import { normalizeSearchText } from '$lib/incidents/queue';
 import { initialReassignmentReasons } from '$lib/data/reassignment-reasons';
 import type { ReassignmentReason } from '$lib/types/reassignment-reason';
 import type { AppUser } from '$lib/types/user';
+import { generateId } from '$lib/utils/id';
 
 export const REASONS_KEY = 'soporteflow-reassignment-reasons';
 export const OTHER_REASON = '__other__';
@@ -96,7 +97,7 @@ export function changeReason(
 	const reason: ReassignmentReason = original
 		? { ...original, name, description: change.description.trim(), updatedAt: timestamp }
 		: {
-				id: crypto.randomUUID(),
+				id: generateId(),
 				organizationId,
 				name,
 				description: change.description.trim(),

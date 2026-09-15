@@ -8,6 +8,7 @@ import type { Incident } from '$lib/types/incident';
 import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 import type { AppUser } from '$lib/types/user';
 import type { SupportLevel, SupportLevelDefinition, SupportTeam } from '$lib/types/support';
+import { generateId } from '$lib/utils/id';
 
 export const incidentOrganizationId = (incident: Incident) =>
 	incident.organizationId ?? demoOrganization.id;
@@ -259,7 +260,7 @@ export function prepareAssignment(
 			...routing
 		},
 		event: {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			incidentId: incident.id,
 			organizationId: incidentOrganizationId(incident),
 			actorUserId: actor.id,

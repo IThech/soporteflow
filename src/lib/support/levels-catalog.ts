@@ -9,6 +9,7 @@ import type {
 	UpdateSupportLevelInput
 } from '$lib/types/support';
 import type { AppUser } from '$lib/types/user';
+import { generateId } from '$lib/utils/id';
 
 export const SUPPORT_LEVELS_STORAGE_KEY = 'soporteflow-support-levels';
 
@@ -188,7 +189,7 @@ export function createSupportLevel(
 
 	const nextOrder = orgLevels.length + 1;
 	const newLevel: SupportLevelDefinition = {
-		id: crypto.randomUUID(),
+		id: generateId(),
 		organizationId: targetOrgId,
 		code,
 		name,

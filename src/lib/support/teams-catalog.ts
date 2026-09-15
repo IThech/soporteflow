@@ -9,6 +9,7 @@ import type {
 	UpdateSupportTeamInput
 } from '$lib/types/support';
 import type { AppUser } from '$lib/types/user';
+import { generateId } from '$lib/utils/id';
 
 export const SUPPORT_TEAMS_STORAGE_KEY = 'soporteflow-teams';
 
@@ -150,7 +151,7 @@ export function createSupportTeam(
 	const description = input.description?.trim() || undefined;
 
 	const newTeam: SupportTeam = {
-		id: crypto.randomUUID(),
+		id: generateId(),
 		organizationId: targetOrgId,
 		name,
 		...(description ? { description } : {}),

@@ -5,6 +5,7 @@ import type { IncidentRating } from '$lib/types/incident-rating';
 import { incidentOrganizationId } from './assignment';
 import { SYSTEM_ACTOR_ID } from './history';
 import { recordStatusTransition } from './lifecycle';
+import { generateId } from '$lib/utils/id';
 
 export const CLOSURE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 natural hours
 export const REOPEN_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 natural hours
@@ -195,7 +196,7 @@ export function synchronizeIncidentClosures(
 		});
 
 		const historyEntry: IncidentHistoryEntry = {
-			id: crypto.randomUUID(),
+			id: generateId(),
 			incidentId: incident.id,
 			organizationId: incidentOrganizationId(incident),
 			actorUserId: SYSTEM_ACTOR_ID,

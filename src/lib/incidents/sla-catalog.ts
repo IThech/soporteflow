@@ -2,6 +2,7 @@ import { canAccessOrganization, hasPermission } from '$lib/auth/permissions';
 import { normalizeSearchText } from '$lib/incidents/queue';
 import { demoSlaPolicies } from '$lib/data/sla';
 import { isSlaPolicyList } from '$lib/incidents/sla';
+import { generateId } from '$lib/utils/id';
 import type { SlaPolicy } from '$lib/types/sla';
 import type { AppUser } from '$lib/types/user';
 import type { IncidentCategory } from '$lib/types/category';
@@ -238,7 +239,7 @@ export function changeSlaPolicy(
 	}
 
 	const candidate: SlaPolicy = {
-		id: original ? original.id : crypto.randomUUID(),
+		id: original ? original.id : generateId(),
 		organizationId,
 		name: change.name.trim(),
 		description: change.description?.trim() || undefined,

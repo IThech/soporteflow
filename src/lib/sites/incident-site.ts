@@ -4,6 +4,7 @@ import type { Incident } from '$lib/types/incident';
 import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 import type { Site } from '$lib/types/site';
 import type { AppUser } from '$lib/types/user';
+import { generateId } from '$lib/utils/id';
 
 export interface ChangeIncidentSiteInput {
 	targetSiteId: string | null;
@@ -68,7 +69,7 @@ export function changeIncidentSite(
 	};
 
 	const event: IncidentHistoryEntry = {
-		id: crypto.randomUUID(),
+		id: generateId(),
 		incidentId: incident.id,
 		organizationId: orgId,
 		actorUserId: actor.id,

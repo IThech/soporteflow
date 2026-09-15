@@ -3,6 +3,7 @@ import { incidentOrganizationId } from './assignment';
 import type { AppUser } from '$lib/types/user';
 import type { Incident } from '$lib/types/incident';
 import type { IncidentMessage, IncidentMessageVisibility } from '$lib/types/incident-message';
+import { generateId } from '$lib/utils/id';
 
 export function canUseMessages(
 	actor: AppUser,
@@ -43,7 +44,7 @@ export function createMessage(
 		throw new Error('No tienes permiso para enviar este mensaje.');
 	const clean = content.trim();
 	if (!clean) throw new Error('Escribe un mensaje antes de enviarlo.');
-	const id = crypto.randomUUID();
+	const id = generateId();
 	if (existing.some((message) => message.id === id))
 		throw new Error('No se pudo generar un identificador único. Inténtalo de nuevo.');
 	return {
