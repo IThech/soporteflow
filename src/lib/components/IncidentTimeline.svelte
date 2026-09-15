@@ -6,13 +6,15 @@
 	import type { AppUser } from '$lib/types/user';
 	import type { IncidentCategory } from '$lib/types/category';
 	import type { SupportTeam } from '$lib/types/support';
+	import type { Site } from '$lib/types/site';
 	let {
 		incident,
 		viewer,
 		entries,
 		users,
 		categories = [],
-		teams = []
+		teams = [],
+		sites = []
 	}: {
 		incident: Incident;
 		viewer: AppUser;
@@ -20,6 +22,7 @@
 		users: AppUser[];
 		categories?: IncidentCategory[];
 		teams?: SupportTeam[];
+		sites?: Site[];
 	} = $props();
 	const allowed = $derived(viewer.role !== 'client' && canViewIncident(viewer, incident));
 	const events = $derived(visibleIncidentHistory(viewer, incident, entries));
@@ -41,7 +44,7 @@
 						>{formatDate(event.timestamp)}</time
 					>
 					<p class="mt-1 text-sm text-slate-200">
-						{describeHistoryEvent(event, users, categories, teams)}
+						{describeHistoryEvent(event, users, categories, teams, sites)}
 					</p>
 					{#if event.reason?.trim()}<p class="mt-2 text-sm whitespace-pre-wrap text-slate-300">
 							<span class="font-semibold">Motivo:</span>

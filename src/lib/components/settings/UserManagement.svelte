@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { AppUser, AdministrableUserRole } from '$lib/types/user';
 	import type { SupportLevel, SupportLevelDefinition, SupportTeam } from '$lib/types/support';
+	import type { Site } from '$lib/types/site';
 	import { hasPermission } from '$lib/auth/permissions';
 	import {
 		createUser,
@@ -17,6 +18,7 @@
 		error = '',
 		availableSupportLevels = [],
 		availableTeams = [],
+		availableSites = [],
 		onchange
 	}: {
 		actor: AppUser;
@@ -25,6 +27,7 @@
 		error?: string;
 		availableSupportLevels?: readonly (string | SupportLevelDefinition)[];
 		availableTeams?: readonly SupportTeam[];
+		availableSites?: readonly Site[];
 		onchange: (next: AppUser[]) => boolean;
 	} = $props();
 
@@ -49,6 +52,7 @@
 		role: AdministrableUserRole;
 		supportLevel?: SupportLevel | '';
 		teamId?: string;
+		siteIds: string[];
 		active: boolean;
 	}
 
@@ -59,7 +63,8 @@
 
 	const supportContext = $derived<SupportContext>({
 		availableLevels: availableSupportLevels,
-		availableTeams
+		availableTeams,
+		availableSites
 	});
 
 	// Filtered users
@@ -126,6 +131,18 @@
 		return `${team.name}${!team.active ? ' (inactivo)' : ''}`;
 	}
 
+	function siteObj(siteId?: string): Site | undefined {
+		if (!siteId) return undefined;
+		return availableSites.find((s) => s.id === siteId);
+	}
+
+	function siteName(siteId?: string): string {
+		if (!siteId) return '—';
+		const site = siteObj(siteId);
+		if (!site) return '—';
+		return `${site.name}${!site.active ? ' (inactiva)' : ''}`;
+	}
+
 	const activeLevels = $derived(
 		availableSupportLevels.filter((l) => {
 			if (typeof l === 'string') return true;
@@ -135,6 +152,14 @@
 
 	const activeTeams = $derived(
 		availableTeams.filter((t) => t.active && t.organizationId === actor.organizationId)
+	);
+
+	const selectableSites = $derived(
+		availableSites.filter(
+			(s) =>
+				s.organizationId === actor.organizationId &&
+				(s.active || (draft?.siteIds ?? []).includes(s.id))
+		)
 	);
 
 	function openCreateDialog() {
@@ -147,6 +172,7 @@
 			role: 'technician',
 			supportLevel: '',
 			teamId: '',
+			siteIds: [],
 			active: true
 		};
 		dialogElement?.showModal();
@@ -167,6 +193,10 @@
 					: '',
 			teamId:
 				user.role === 'technician' || user.role === 'organization_admin' ? (user.teamId ?? '') : '',
+			siteIds:
+				user.role === 'technician' || user.role === 'organization_admin'
+					? [...(user.siteIds ?? [])]
+					: [],
 			active: user.active
 		};
 		dialogElement?.showModal();
@@ -200,6 +230,7 @@
 						role: draft.role,
 						supportLevel: isTechnical && draft.supportLevel ? draft.supportLevel : undefined,
 						teamId: isTechnical && draft.teamId ? draft.teamId : undefined,
+						siteIds: isTechnical ? draft.siteIds : undefined,
 						active: draft.active
 					},
 					supportContext
@@ -215,6 +246,7 @@
 						role: draft.role,
 						supportLevel: isTechnical && draft.supportLevel ? draft.supportLevel : undefined,
 						teamId: isTechnical && draft.teamId ? draft.teamId : undefined,
+						siteIds: isTechnical ? draft.siteIds : undefined,
 						active: draft.active
 					},
 					supportContext
@@ -363,42 +395,47 @@
 				</span>
 			</div>
 
-			<!-- Desktop Table View (visible on large screens and up) -->
-			<div class="mt-6 hidden overflow-hidden rounded-xl border border-slate-800 lg:block">
+			<!-- Desktop Table View -->
+			<div class="admin-table-container mt-6 overflow-hidden rounded-xl border border-slate-800">
 				<table class="w-full table-fixed text-left text-sm text-slate-300">
 					<thead
 						class="border-b border-slate-800 bg-slate-950 text-xs tracking-wider text-slate-400 uppercase"
 					>
 						<tr>
-							<th scope="col" class="w-[18%] px-3 py-3 font-semibold text-slate-400">Nombre</th>
-							<th scope="col" class="w-[22%] px-3 py-3 font-semibold text-slate-400">Email</th>
+							<th scope="col" class="w-[25%] px-3 py-3 font-semibold text-slate-400">Usuario</th>
 							<th
 								scope="col"
-								class="w-[15%] px-2.5 py-3 font-semibold whitespace-nowrap text-slate-400"
+								class="w-[13%] px-2.5 py-3 font-semibold whitespace-nowrap text-slate-400"
 							>
 								Rol
 							</th>
 							<th
 								scope="col"
-								class="w-[6%] px-1 py-3 text-center font-semibold whitespace-nowrap text-slate-400"
+								class="w-[8%] px-1 py-3 text-center font-semibold whitespace-nowrap text-slate-400"
 							>
 								Nivel
 							</th>
 							<th
 								scope="col"
-								class="w-[12%] px-2.5 py-3 font-semibold whitespace-nowrap text-slate-400"
+								class="w-[13%] px-2.5 py-3 font-semibold whitespace-nowrap text-slate-400"
 							>
 								Equipo
 							</th>
 							<th
 								scope="col"
-								class="w-[9%] px-1.5 py-3 text-center font-semibold whitespace-nowrap text-slate-400"
+								class="w-[16%] px-2.5 py-3 font-semibold whitespace-nowrap text-slate-400"
+							>
+								Sedes
+							</th>
+							<th
+								scope="col"
+								class="w-[10%] px-1.5 py-3 text-center font-semibold whitespace-nowrap text-slate-400"
 							>
 								Estado
 							</th>
 							<th
 								scope="col"
-								class="w-[18%] px-3 py-3 text-right font-semibold whitespace-nowrap text-slate-400"
+								class="w-[15%] px-3 py-3 text-right font-semibold whitespace-nowrap text-slate-400"
 							>
 								Acciones
 							</th>
@@ -407,7 +444,7 @@
 					<tbody class="divide-y divide-slate-800">
 						{#each filteredUsers as user (user.id)}
 							<tr class="transition hover:bg-slate-800/40">
-								<td class="px-3 py-3 font-medium text-white">
+								<td class="px-3 py-3">
 									<div class="flex min-w-0 items-center gap-1.5">
 										<span class="truncate font-medium text-white" title={user.name}>
 											{user.name}
@@ -420,9 +457,7 @@
 											</span>
 										{/if}
 									</div>
-								</td>
-								<td class="px-3 py-3 text-slate-300">
-									<div class="truncate text-slate-300" title={user.email}>
+									<div class="mt-0.5 truncate text-xs text-slate-400" title={user.email}>
 										{user.email}
 									</div>
 								</td>
@@ -454,9 +489,31 @@
 								</td>
 								<td class="px-2.5 py-3 whitespace-nowrap text-slate-300">
 									{#if (user.role === 'technician' || user.role === 'organization_admin') && user.teamId}
-										<span class="block truncate align-bottom" title={teamName(user.teamId)}>
+										<span class="truncate" title={teamName(user.teamId)}>
 											{teamName(user.teamId)}
 										</span>
+									{:else}
+										<span class="whitespace-nowrap text-slate-500">—</span>
+									{/if}
+								</td>
+								<td class="px-2.5 py-3 text-slate-300">
+									{#if (user.role === 'technician' || user.role === 'organization_admin') && user.siteIds && user.siteIds.length > 0}
+										<div class="flex flex-wrap gap-1">
+											{#each user.siteIds as sId (sId)}
+												{@const s = siteObj(sId)}
+												<span
+													class="inline-flex items-center rounded bg-slate-800 px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap {s &&
+													!s.active
+														? 'text-amber-400/80 ring-1 ring-amber-500/30'
+														: 'text-slate-300 ring-1 ring-slate-700/50'}"
+													title={siteName(sId)}
+												>
+													{s?.name ?? sId}{s && !s.active ? ' (inactiva)' : ''}
+												</span>
+											{/each}
+										</div>
+									{:else if user.role === 'technician' || user.role === 'organization_admin'}
+										<span class="text-xs text-slate-500">Sin sedes</span>
 									{:else}
 										<span class="whitespace-nowrap text-slate-500">—</span>
 									{/if}
@@ -505,8 +562,8 @@
 				</table>
 			</div>
 
-			<!-- Mobile & Tablet Cards View (visible below lg breakpoint) -->
-			<div class="mt-6 space-y-3 lg:hidden">
+			<!-- Mobile & Tablet Cards View -->
+			<div class="admin-cards-container mt-6 space-y-3">
 				{#each filteredUsers as user (user.id)}
 					<article class="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
 						<div class="flex items-start justify-between gap-2">
@@ -560,6 +617,24 @@
 									>
 										{teamName(user.teamId)}
 									</span>
+								{/if}
+								{#if user.siteIds && user.siteIds.length > 0}
+									<div class="flex flex-wrap items-center gap-1">
+										<span class="text-slate-400">Sedes:</span>
+										{#each user.siteIds as sId (sId)}
+											{@const s = siteObj(sId)}
+											<span
+												class="inline-flex items-center rounded bg-slate-800 px-1.5 py-0.5 text-[11px] font-medium {s &&
+												!s.active
+													? 'text-amber-400/80 ring-1 ring-amber-500/30'
+													: 'text-slate-300 ring-1 ring-slate-700/50'}"
+											>
+												{s?.name ?? sId}{s && !s.active ? ' (inactiva)' : ''}
+											</span>
+										{/each}
+									</div>
+								{:else}
+									<span class="text-slate-500">Sin sedes asignadas</span>
 								{/if}
 							{/if}
 						</div>
@@ -740,6 +815,56 @@
 										<option value={team.id}>{team.name}</option>
 									{/each}
 								</select>
+							</div>
+
+							<div>
+								<span
+									id="user-sites-group-label"
+									class="mb-1 block text-xs font-medium text-slate-300"
+								>
+									Sedes asignadas
+								</span>
+								<p class="mb-1.5 text-xs text-slate-400">
+									Selecciona las ubicaciones asignadas a este técnico (opcional).
+								</p>
+								<div
+									role="group"
+									aria-labelledby="user-sites-group-label"
+									class="max-h-48 space-y-0.5 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 p-1.5"
+								>
+									{#if selectableSites.length === 0}
+										<p class="p-2 text-xs text-slate-500">
+											No hay sedes disponibles en la organización.
+										</p>
+									{:else}
+										{#each selectableSites as site (site.id)}
+											<label
+												class="flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 transition select-none hover:bg-slate-900 hover:text-white"
+											>
+												<input
+													type="checkbox"
+													checked={draft.siteIds.includes(site.id)}
+													onchange={(e) => {
+														if (!draft) return;
+														const checked = e.currentTarget.checked;
+														if (checked) {
+															draft.siteIds = [...draft.siteIds, site.id];
+														} else {
+															draft.siteIds = draft.siteIds.filter((id) => id !== site.id);
+														}
+													}}
+													class="h-4 min-h-0 w-4 shrink-0 rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-400"
+												/>
+												<span class="truncate">
+													{site.name}
+													{#if !site.active}
+														<span class="text-amber-400/80">(inactiva)</span>
+													{/if}
+												</span>
+											</label>
+										{/each}
+									{/if}
+								</div>
 							</div>
 						</div>
 					{/if}

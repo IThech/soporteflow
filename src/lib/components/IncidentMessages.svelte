@@ -14,6 +14,7 @@
 	import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 	import type { IncidentCategory } from '$lib/types/category';
 	import type { SupportTeam } from '$lib/types/support';
+	import type { Site } from '$lib/types/site';
 	import { sendIncidentMessage } from '$lib/storage/first-response';
 	let {
 		incident,
@@ -22,6 +23,7 @@
 		history,
 		categories,
 		teams,
+		sites = [],
 		incidents,
 		incidentsSnapshot,
 		onincidentupdate,
@@ -33,6 +35,7 @@
 		history: IncidentHistoryEntry[];
 		categories: IncidentCategory[];
 		teams: SupportTeam[];
+		sites?: Site[];
 		incidents?: Incident[];
 		incidentsSnapshot?: string | null;
 		onincidentupdate?: (updatedIncident: Incident) => void;
@@ -241,7 +244,15 @@
 			hidden={selected !== 'history'}
 			tabindex="0"
 		>
-			<IncidentTimeline {incident} viewer={actor} entries={history} {users} {categories} {teams} />
+			<IncidentTimeline
+				{incident}
+				viewer={actor}
+				entries={history}
+				{users}
+				{categories}
+				{teams}
+				{sites}
+			/>
 		</div>
 	{/if}
 </section>

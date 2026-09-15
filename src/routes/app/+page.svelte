@@ -107,6 +107,11 @@
 		loadSupportTeamsResult,
 		saveSupportTeams
 	} from '$lib/support/teams-catalog';
+	import { SITES_STORAGE_KEY, loadSitesResult, saveSites } from '$lib/sites/catalog';
+	import { demoSites } from '$lib/data/sites';
+	import type { Site } from '$lib/types/site';
+	import ChangeSiteDialog from '$lib/components/ChangeSiteDialog.svelte';
+	import { changeIncidentSite } from '$lib/sites/incident-site';
 	import { USERS_STORAGE_KEY, loadUsersResult, saveUsers } from '$lib/users/catalog';
 	import SlaBadge from '$lib/components/SlaBadge.svelte';
 	import IncidentSlaPanel from '$lib/components/IncidentSlaPanel.svelte';
@@ -214,6 +219,26 @@
 		}
 	}
 
+	let siteList = $state<Site[]>([...demoSites]);
+	let sitesLoaded = $state(false);
+	let siteLoadError = $state('');
+	let siteSaveError = $state('');
+
+	function persistSites(next: Site[]): boolean {
+		if (!sitesLoaded || siteLoadError || !hasPermission(activeUser, 'organization:manage')) {
+			return false;
+		}
+		try {
+			saveSites(localStorage, next);
+			siteList = next;
+			siteSaveError = '';
+			return true;
+		} catch (err) {
+			siteSaveError = err instanceof Error ? err.message : 'No se pudieron guardar las sedes.';
+			return false;
+		}
+	}
+
 	let activeUser = $state<AppUser>(defaultDemoUser);
 	let currentView = $state<'incidents' | 'settings'>('incidents');
 
@@ -274,9 +299,13 @@
 		assignmentError = '';
 		classificationIncident = null;
 		classificationError = '';
+		siteChangeIncident = null;
+		siteChangeError = '';
 		newCategoryId = '';
+		newSiteId = '';
 		categorySaveError = '';
 		userSaveError = '';
+		siteSaveError = '';
 		isFormOpen = false;
 		title = '';
 		client = '';
@@ -368,6 +397,13 @@
 			)?.name ?? 'Equipo no disponible'
 		);
 	}
+	function siteNameForIncident(incident: Incident): string {
+		if (!incident.siteId) return 'Sin sede asignada';
+		const site = siteList.find(
+			(s) => s.id === incident.siteId && s.organizationId === incidentOrganizationId(incident)
+		);
+		return site ? `${site.name}${!site.active ? ' (inactiva)' : ''}` : 'Sede no disponible';
+	}
 
 	function openAssignment(incident: Incident, self = false) {
 		if (
@@ -443,6 +479,63 @@
 		} catch (error) {
 			classificationError =
 				error instanceof Error ? error.message : 'No se pudo guardar la clasificación.';
+		}
+	}
+
+	let siteChangeIncident = $state<Incident | null>(null);
+	let siteChangeError = $state('');
+
+	function openChangeSite(incident: Incident) {
+		if (
+			!assignmentReady ||
+			incidentLoadError ||
+			!canActOnIncident(activeUser, incident, 'incidents:edit')
+		)
+			return;
+		siteChangeError = '';
+		siteChangeIncident = incident;
+	}
+
+	function confirmChangeSite(input: {
+		targetSiteId: string | null;
+		reason?: string;
+		comment?: string;
+	}) {
+		if (!assignmentReady || incidentLoadError || !siteChangeIncident) return;
+		try {
+			const id = siteChangeIncident.id;
+			const original = incidentList.find((item) => item.id === id);
+			if (!original) throw new Error('La incidencia ya no existe.');
+			const change = changeIncidentSite(activeUser, original, input, siteList);
+			if (!change) {
+				siteChangeIncident = null;
+				siteChangeError = '';
+				return;
+			}
+			const next = incidentList.map((item) => (item.id === id ? change.incident : item));
+			const nextHistory = [...history, change.event];
+			commitAssignment(
+				localStorage,
+				next,
+				nextHistory,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+			incidentList = next;
+			history = nextHistory;
+			storedIncidentSnapshot = JSON.stringify(next);
+			storedHistorySnapshot = JSON.stringify(nextHistory);
+			if (editingIncident && editingIncident.id === id) {
+				editingIncident = {
+					...change.incident,
+					description: change.incident.description ?? '',
+					solution: change.incident.solution ?? ''
+				};
+			}
+			siteChangeIncident = null;
+			siteChangeError = '';
+		} catch (error) {
+			siteChangeError = error instanceof Error ? error.message : 'No se pudo cambiar la sede.';
 		}
 	}
 	function confirmAssignment(input: UnifiedAssignmentInput) {
@@ -1025,6 +1118,7 @@
 
 	let isFormOpen = $state(false);
 	let newCategoryId = $state('');
+	let newSiteId = $state('');
 
 	const priorityLabels = {
 		low: 'Baja',
@@ -1186,6 +1280,7 @@
 			status: 'open',
 			priority,
 			createdAt: new Date().toISOString(),
+			siteId: newSiteId ? newSiteId : null,
 			...categoryRouting
 		};
 
@@ -1198,6 +1293,7 @@
 		description = '';
 		priority = 'medium';
 		newCategoryId = '';
+		newSiteId = '';
 		isFormOpen = false;
 	}
 
@@ -1386,6 +1482,22 @@
 		} finally {
 			teamsLoaded = true;
 		}
+
+		try {
+			const storedSites = localStorage.getItem(SITES_STORAGE_KEY);
+			const result = loadSitesResult(storedSites);
+			if (result.status === 'missing') {
+				siteList = result.seededSites;
+			} else if (result.status === 'valid') {
+				siteList = result.sites;
+			} else if (result.status === 'corrupt') {
+				siteLoadError = result.error;
+			}
+		} catch {
+			siteLoadError = 'No se pudieron cargar las sedes guardadas.';
+		} finally {
+			sitesLoaded = true;
+		}
 	});
 </script>
 
@@ -1476,8 +1588,13 @@
 					teamsReady={teamsLoaded}
 					teamError={teamLoadError || teamSaveError}
 					onTeamChange={persistTeams}
+					sites={siteList}
+					sitesReady={sitesLoaded}
+					siteError={siteLoadError || siteSaveError}
+					onSiteChange={persistSites}
 					availableSupportLevels={levelList}
 					availableTeams={teamList}
+					availableSites={siteList}
 					incidents={incidentList}
 					categories={categoryList}
 					categoriesReady={categoryLoaded}
@@ -1766,6 +1883,18 @@
 			}}
 		/>
 	{/if}
+	{#if siteChangeIncident}
+		<ChangeSiteDialog
+			incident={siteChangeIncident}
+			sites={siteList}
+			error={siteChangeError}
+			onconfirm={confirmChangeSite}
+			oncancel={() => {
+				siteChangeIncident = null;
+				siteChangeError = '';
+			}}
+		/>
+	{/if}
 	{#if isFormOpen && canCreate && !incidentLoadError}
 		<dialog
 			use:showEditDialog
@@ -1860,6 +1989,22 @@
 							</p>
 						{/if}
 					{/if}
+				</div>
+
+				<div>
+					<label for="new-site" class="mb-2 block text-sm font-medium text-slate-300">
+						Sede / Ubicación
+					</label>
+					<select
+						id="new-site"
+						bind:value={newSiteId}
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+					>
+						<option value="">Sin sede asignada</option>
+						{#each siteList.filter((s) => s.active && canAccessRecord(activeUser, s)) as site (site.id)}
+							<option value={site.id}>{site.name}</option>
+						{/each}
+					</select>
 				</div>
 
 				<div>
@@ -2307,6 +2452,10 @@
 									<dt class="text-slate-400">Equipo</dt>
 									<dd class="mt-1">{teamName(managedIncident)}</dd>
 								</div>
+								<div>
+									<dt class="text-slate-400">Sede</dt>
+									<dd class="mt-1">{siteNameForIncident(managedIncident)}</dd>
+								</div>
 							</dl>
 							{#if incompatibility}
 								<div
@@ -2366,6 +2515,14 @@
 											>Cambiar clasificación</button
 										>
 									{/if}
+									{#if canActOnIncident(activeUser, managedIncident, 'incidents:edit')}
+										<button
+											type="button"
+											onclick={() => openChangeSite(managedIncident)}
+											class="rounded border border-slate-600 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+											>Cambiar sede</button
+										>
+									{/if}
 								{/if}
 							</div>
 						</section>
@@ -2382,6 +2539,7 @@
 						users={userList}
 						categories={categoryList}
 						teams={teamList}
+						sites={siteList}
 						incidents={incidentList}
 						incidentsSnapshot={storedIncidentSnapshot}
 						onincidentupdate={(updated) => {

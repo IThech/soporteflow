@@ -16,6 +16,7 @@ type HistoryValues = {
 	status_changed: IncidentStatus;
 	priority_changed: IncidentPriority;
 	category_changed: string | null;
+	site_changed: string | null;
 	resolved: { status: IncidentStatus; solution?: string };
 	resolution_accepted: { status: 'closed'; closedAt: string; closureType: 'client_confirmed' };
 	resolution_rejected: { status: 'open'; comment: string };

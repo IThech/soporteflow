@@ -12,7 +12,9 @@
 		type SettingsSectionId
 	} from '$lib/settings/sections';
 	import type { SupportLevelDefinition, SupportTeam } from '$lib/types/support';
+	import type { Site } from '$lib/types/site';
 	import UserManagement from './UserManagement.svelte';
+	import SiteManagement from './SiteManagement.svelte';
 	import SupportLevelManagement from './SupportLevelManagement.svelte';
 	import TeamManagement from './TeamManagement.svelte';
 	import CategoryManagement from './CategoryManagement.svelte';
@@ -34,8 +36,13 @@
 		teamsReady = true,
 		teamError = '',
 		onTeamChange,
+		sites = [],
+		sitesReady = true,
+		siteError = '',
+		onSiteChange,
 		availableSupportLevels,
 		availableTeams,
+		availableSites,
 		incidents = [],
 		categories,
 		categoriesReady,
@@ -64,8 +71,13 @@
 		teamsReady?: boolean;
 		teamError?: string;
 		onTeamChange?: (next: SupportTeam[]) => boolean;
+		sites?: Site[];
+		sitesReady?: boolean;
+		siteError?: string;
+		onSiteChange?: (next: Site[]) => boolean;
 		availableSupportLevels?: readonly (string | SupportLevelDefinition)[];
 		availableTeams?: readonly SupportTeam[];
+		availableSites?: readonly Site[];
 		incidents?: Incident[];
 		categories: IncidentCategory[];
 		categoriesReady: boolean;
@@ -112,6 +124,10 @@
 
 	const effectiveTeams = $derived<SupportTeam[]>(
 		teams.length > 0 ? [...teams] : [...(availableTeams ?? [])]
+	);
+
+	const effectiveSites = $derived<Site[]>(
+		sites.length > 0 ? [...sites] : [...(availableSites ?? [])]
 	);
 </script>
 
@@ -242,8 +258,21 @@
 					error={userError}
 					availableSupportLevels={effectiveLevels}
 					availableTeams={effectiveTeams}
+					availableSites={effectiveSites}
 					onchange={onUserChange}
 				/>
+			{:else if selectedSection === 'locations'}
+				{#key actor.id}
+					<SiteManagement
+						{actor}
+						sites={effectiveSites}
+						{users}
+						{incidents}
+						ready={sitesReady}
+						error={siteError}
+						onchange={onSiteChange ?? (() => false)}
+					/>
+				{/key}
 			{:else if selectedSection === 'support_levels'}
 				{#key actor.id}
 					<SupportLevelManagement

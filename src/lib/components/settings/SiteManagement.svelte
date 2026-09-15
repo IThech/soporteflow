@@ -1,19 +1,19 @@
 <script lang="ts">
 	import type { AppUser } from '$lib/types/user';
 	import type { Incident } from '$lib/types/incident';
-	import type { SupportTeam } from '$lib/types/support';
+	import type { Site } from '$lib/types/site';
 	import { hasPermission } from '$lib/auth/permissions';
 	import {
-		createSupportTeam,
-		updateSupportTeam,
-		toggleSupportTeamActive,
-		getOrganizationTeams,
-		countSupportTeamReferences
-	} from '$lib/support/teams-catalog';
+		createSite,
+		updateSite,
+		toggleSiteActive,
+		getOrganizationSites,
+		countSiteReferences
+	} from '$lib/sites/catalog';
 
 	let {
 		actor,
-		teams,
+		sites,
 		users = [],
 		incidents = [],
 		ready = true,
@@ -21,47 +21,47 @@
 		onchange
 	}: {
 		actor: AppUser;
-		teams: SupportTeam[];
+		sites: Site[];
 		users?: AppUser[];
 		incidents?: Incident[];
 		ready: boolean;
 		error?: string;
-		onchange: (next: SupportTeam[]) => boolean;
+		onchange: (next: Site[]) => boolean;
 	} = $props();
 
 	const allowed = $derived(hasPermission(actor, 'organization:manage'));
 
-	const orgTeams = $derived(
-		actor.organizationId ? getOrganizationTeams(teams, actor.organizationId) : []
+	const orgSites = $derived(
+		actor.organizationId ? getOrganizationSites(sites, actor.organizationId) : []
 	);
 
 	let searchQuery = $state('');
 
-	const filteredTeams = $derived(
-		orgTeams.filter((t) => {
+	const filteredSites = $derived(
+		orgSites.filter((s) => {
 			if (!searchQuery.trim()) return true;
 			const q = searchQuery.trim().toLowerCase();
 			return (
-				t.name.toLowerCase().includes(q) ||
-				(t.description && t.description.toLowerCase().includes(q))
+				s.name.toLowerCase().includes(q) ||
+				(s.description && s.description.toLowerCase().includes(q))
 			);
 		})
 	);
 
-	interface TeamDraft {
+	interface SiteDraft {
 		id?: string;
 		name: string;
 		description: string;
 		active: boolean;
 	}
 
-	let draft = $state<TeamDraft | null>(null);
+	let draft = $state<SiteDraft | null>(null);
 	let formError = $state('');
 	let actionError = $state('');
 	let formDialog = $state<HTMLDialogElement | null>(null);
 
 	// Deactivation confirmation modal state
-	let pendingDeactivateTeam = $state<SupportTeam | null>(null);
+	let pendingDeactivateSite = $state<Site | null>(null);
 	let pendingReferences = $state<{ userCount: number; activeIncidentCount: number } | null>(null);
 	let confirmDialog = $state<HTMLDialogElement | null>(null);
 
@@ -77,15 +77,15 @@
 		formDialog?.showModal();
 	}
 
-	function openEditDialog(team: SupportTeam) {
+	function openEditDialog(site: Site) {
 		if (!allowed) return;
 		formError = '';
 		actionError = '';
 		draft = {
-			id: team.id,
-			name: team.name,
-			description: team.description || '',
-			active: team.active
+			id: site.id,
+			name: site.name,
+			description: site.description || '',
+			active: site.active
 		};
 		formDialog?.showModal();
 	}
@@ -104,16 +104,16 @@
 		actionError = '';
 
 		try {
-			let next: SupportTeam[];
+			let next: Site[];
 			if (draft.id) {
-				next = updateSupportTeam(actor, teams, {
+				next = updateSite(actor, sites, {
 					id: draft.id,
 					name: draft.name,
 					description: draft.description,
 					active: draft.active
 				});
 			} else {
-				next = createSupportTeam(actor, teams, {
+				next = createSite(actor, sites, {
 					organizationId: actor.organizationId,
 					name: draft.name,
 					description: draft.description,
@@ -125,73 +125,73 @@
 				closeFormDialog();
 			}
 		} catch (err) {
-			formError = err instanceof Error ? err.message : 'No se pudo guardar el equipo.';
+			formError = err instanceof Error ? err.message : 'No se pudo guardar la sede.';
 		}
 	}
 
-	function requestToggleActive(team: SupportTeam) {
+	function requestToggleActive(site: Site) {
 		if (!allowed || !actor.organizationId) return;
 		actionError = '';
 
 		// If activating, activate directly
-		if (!team.active) {
+		if (!site.active) {
 			try {
-				const next = toggleSupportTeamActive(actor, teams, team.id);
+				const next = toggleSiteActive(actor, sites, site.id);
 				onchange(next);
 			} catch (err) {
 				actionError =
-					err instanceof Error ? err.message : 'No se pudo cambiar el estado del equipo.';
+					err instanceof Error ? err.message : 'No se pudo cambiar el estado de la sede.';
 			}
 			return;
 		}
 
-		// If deactivating, check references (DECISIÓN 4)
-		const refs = countSupportTeamReferences(actor.organizationId, team.id, users, incidents);
+		// If deactivating, check references
+		const refs = countSiteReferences(actor.organizationId, site.id, users, incidents);
 		if (refs.userCount > 0 || refs.activeIncidentCount > 0) {
-			pendingDeactivateTeam = team;
+			pendingDeactivateSite = site;
 			pendingReferences = refs;
 			confirmDialog?.showModal();
 		} else {
 			try {
-				const next = toggleSupportTeamActive(actor, teams, team.id);
+				const next = toggleSiteActive(actor, sites, site.id);
 				onchange(next);
 			} catch (err) {
 				actionError =
-					err instanceof Error ? err.message : 'No se pudo cambiar el estado del equipo.';
+					err instanceof Error ? err.message : 'No se pudo cambiar el estado de la sede.';
 			}
 		}
 	}
 
 	function confirmDeactivation() {
-		if (!pendingDeactivateTeam) return;
+		if (!pendingDeactivateSite) return;
 		try {
-			const next = toggleSupportTeamActive(actor, teams, pendingDeactivateTeam.id);
+			const next = toggleSiteActive(actor, sites, pendingDeactivateSite.id);
 			onchange(next);
 			closeConfirmDialog();
 		} catch (err) {
-			actionError = err instanceof Error ? err.message : 'No se pudo desactivar el equipo.';
+			actionError = err instanceof Error ? err.message : 'No se pudo desactivar la sede.';
 			closeConfirmDialog();
 		}
 	}
 
 	function closeConfirmDialog() {
 		confirmDialog?.close();
-		pendingDeactivateTeam = null;
+		pendingDeactivateSite = null;
 		pendingReferences = null;
 	}
 </script>
 
 {#if allowed}
-	<div class="team-management space-y-6">
+	<div class="site-management space-y-6">
 		<section
-			aria-labelledby="teams-title"
+			aria-labelledby="sites-title"
 			class="rounded-2xl border border-slate-800 bg-slate-900 p-6"
 		>
 			<div class="flex flex-wrap items-center justify-between gap-4">
 				<div>
-					<h2 id="teams-title" class="text-lg font-semibold text-white">Equipos de soporte</h2>
+					<h2 id="sites-title" class="text-lg font-semibold text-white">Sedes y ubicaciones</h2>
 					<p class="mt-1 text-sm text-slate-400">
-						Especialidades técnicas, áreas funcionales y distribución organizativa de la carga.
+						Sedes físicas, oficinas y delegaciones organizativas de atención.
 					</p>
 				</div>
 
@@ -212,7 +212,7 @@
 						>
 							<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
 						</svg>
-						<span>Nuevo equipo</span>
+						<span>Nueva sede</span>
 					</button>
 				{/if}
 			</div>
@@ -260,15 +260,15 @@
 					<input
 						type="search"
 						bind:value={searchQuery}
-						placeholder="Buscar equipo por nombre o descripción..."
+						placeholder="Buscar sede por nombre o descripción..."
 						class="w-full rounded-xl border border-slate-700 bg-slate-950 py-2 pr-4 pl-9 text-sm text-white placeholder-slate-400 transition outline-none focus:border-cyan-400 focus:ring-1 focus:ring-cyan-400"
-						aria-label="Buscar equipos"
+						aria-label="Buscar sedes"
 					/>
 				</div>
 
 				<span class="text-xs font-medium text-slate-400">
-					{filteredTeams.length}
-					{filteredTeams.length === 1 ? 'equipo' : 'equipos'}
+					{filteredSites.length}
+					{filteredSites.length === 1 ? 'sede' : 'sedes'}
 				</span>
 			</div>
 
@@ -297,44 +297,44 @@
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-slate-800">
-						{#each filteredTeams as team (team.id)}
+						{#each filteredSites as site (site.id)}
 							<tr class="transition hover:bg-slate-800/40">
 								<td class="px-3 py-3 font-medium text-white">
-									<div class="truncate" title={team.name}>{team.name}</div>
+									<div class="truncate" title={site.name}>{site.name}</div>
 								</td>
 								<td class="px-3 py-3 text-slate-400">
-									<div class="truncate text-xs" title={team.description || ''}>
-										{team.description || '—'}
+									<div class="truncate text-xs" title={site.description || ''}>
+										{site.description || '—'}
 									</div>
 								</td>
 								<td class="px-2 py-3 text-center whitespace-nowrap">
 									<span
-										class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold whitespace-nowrap {team.active
+										class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-semibold whitespace-nowrap {site.active
 											? 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
 											: 'border border-slate-700 bg-slate-800 text-slate-400'}"
 									>
-										{team.active ? 'Activo' : 'Inactivo'}
+										{site.active ? 'Activa' : 'Inactiva'}
 									</span>
 								</td>
 								<td class="px-3 py-3 text-right whitespace-nowrap">
 									<div class="flex items-center justify-end gap-1.5 whitespace-nowrap">
 										<button
 											type="button"
-											onclick={() => openEditDialog(team)}
+											onclick={() => openEditDialog(site)}
 											class="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/80 px-2 py-1 text-xs font-medium whitespace-nowrap text-cyan-400 transition hover:bg-slate-700 hover:text-cyan-300 focus-visible:outline-2 focus-visible:outline-cyan-400"
-											aria-label={`Editar equipo ${team.name}`}
+											aria-label={`Editar sede ${site.name}`}
 										>
 											Editar
 										</button>
 										<button
 											type="button"
-											onclick={() => requestToggleActive(team)}
-											class="inline-flex items-center rounded-lg border border-slate-700 px-2 py-1 text-xs font-medium whitespace-nowrap transition hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-cyan-400 {team.active
+											onclick={() => requestToggleActive(site)}
+											class="inline-flex items-center rounded-lg border border-slate-700 px-2 py-1 text-xs font-medium whitespace-nowrap transition hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-cyan-400 {site.active
 												? 'bg-slate-900 text-slate-300 hover:border-red-500/40 hover:bg-red-950/30 hover:text-red-300'
 												: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'}"
-											aria-label={`${team.active ? 'Desactivar' : 'Activar'} equipo ${team.name}`}
+											aria-label={`${site.active ? 'Desactivar' : 'Activar'} sede ${site.name}`}
 										>
-											{team.active ? 'Desactivar' : 'Activar'}
+											{site.active ? 'Desactivar' : 'Activar'}
 										</button>
 									</div>
 								</td>
@@ -342,7 +342,7 @@
 						{:else}
 							<tr>
 								<td colspan="4" class="px-4 py-8 text-center text-sm text-slate-400">
-									No hay equipos que coincidan con la búsqueda.
+									No hay sedes que coincidan con la búsqueda.
 								</td>
 							</tr>
 						{/each}
@@ -352,49 +352,50 @@
 
 			<!-- Mobile & Tablet Cards View -->
 			<div class="admin-cards-container mt-6 space-y-3">
-				{#each filteredTeams as team (team.id)}
+				{#each filteredSites as site (site.id)}
 					<article class="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
 						<div class="flex items-start justify-between gap-2">
-							<h3 class="truncate font-semibold text-white" title={team.name}>
-								{team.name}
-							</h3>
+							<div class="min-w-0">
+								<h3 class="truncate font-semibold text-white" title={site.name}>
+									{site.name}
+								</h3>
+								{#if site.description}
+									<p class="mt-1 text-xs text-slate-400">{site.description}</p>
+								{/if}
+							</div>
 							<span
-								class="inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-semibold whitespace-nowrap {team.active
+								class="inline-flex shrink-0 items-center rounded-md px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap {site.active
 									? 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-400'
 									: 'border border-slate-700 bg-slate-800 text-slate-400'}"
 							>
-								{team.active ? 'Activo' : 'Inactivo'}
+								{site.active ? 'Activa' : 'Inactiva'}
 							</span>
 						</div>
 
-						{#if team.description}
-							<p class="text-xs text-slate-400">{team.description}</p>
-						{/if}
-
-						<div
-							class="flex items-center justify-end gap-2 border-t border-slate-800/80 pt-3 text-xs"
-						>
+						<div class="flex items-center justify-end gap-2 border-t border-slate-800/80 pt-3">
 							<button
 								type="button"
-								onclick={() => openEditDialog(team)}
-								class="rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1 font-medium text-cyan-400 transition hover:bg-slate-700"
+								onclick={() => openEditDialog(site)}
+								class="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs font-medium whitespace-nowrap text-cyan-400 transition hover:bg-slate-700 hover:text-cyan-300 focus-visible:outline-2 focus-visible:outline-cyan-400"
+								aria-label={`Editar sede ${site.name}`}
 							>
 								Editar
 							</button>
 							<button
 								type="button"
-								onclick={() => requestToggleActive(team)}
-								class="rounded-lg border border-slate-700 px-2.5 py-1 font-medium transition {team.active
+								onclick={() => requestToggleActive(site)}
+								class="inline-flex items-center rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium whitespace-nowrap transition hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-cyan-400 {site.active
 									? 'bg-slate-900 text-slate-300 hover:border-red-500/40 hover:bg-red-950/30 hover:text-red-300'
 									: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'}"
+								aria-label={`${site.active ? 'Desactivar' : 'Activar'} sede ${site.name}`}
 							>
-								{team.active ? 'Desactivar' : 'Activar'}
+								{site.active ? 'Desactivar' : 'Activar'}
 							</button>
 						</div>
 					</article>
 				{:else}
 					<p class="py-6 text-center text-sm text-slate-400">
-						No hay equipos que coincidan con la búsqueda.
+						No hay sedes que coincidan con la búsqueda.
 					</p>
 				{/each}
 			</div>
@@ -404,14 +405,14 @@
 		<dialog
 			bind:this={formDialog}
 			onclose={closeFormDialog}
-			aria-labelledby="team-dialog-title"
+			aria-labelledby="site-dialog-title"
 			class="fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-slate-950/80"
 		>
 			{#if draft}
 				<form onsubmit={handleSave} class="space-y-4">
 					<div class="flex items-center justify-between border-b border-slate-800 pb-3">
-						<h3 id="team-dialog-title" class="text-base font-semibold text-white">
-							{draft.id ? 'Editar equipo' : 'Nuevo equipo'}
+						<h3 id="site-dialog-title" class="text-base font-semibold text-white">
+							{draft.id ? 'Editar sede' : 'Nueva sede'}
 						</h3>
 						<button
 							type="button"
@@ -419,7 +420,20 @@
 							class="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"
 							aria-label="Cerrar ventana"
 						>
-							✕
+							<svg
+								xmlns="http://www.w3.org/2000/svg"
+								class="h-5 w-5"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M6 18L18 6M6 6l12 12"
+								/>
+							</svg>
 						</button>
 					</div>
 
@@ -433,42 +447,42 @@
 					{/if}
 
 					<div>
-						<label for="team-name" class="mb-1 block text-xs font-semibold text-slate-300">
-							Nombre del equipo (obligatorio)
+						<label for="site-name" class="mb-1 block text-xs font-semibold text-slate-300">
+							Nombre de la sede (obligatorio)
 						</label>
 						<input
-							id="team-name"
+							id="site-name"
 							type="text"
 							bind:value={draft.name}
 							required
-							placeholder="Ej. Soporte, Infraestructura, Aplicaciones"
+							placeholder="Ej. Sede Central, Oficina Valencia..."
 							class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 transition outline-none focus:border-cyan-400"
 						/>
 					</div>
 
 					<div>
-						<label for="team-description" class="mb-1 block text-xs font-semibold text-slate-300">
+						<label for="site-description" class="mb-1 block text-xs font-semibold text-slate-300">
 							Descripción (opcional)
 						</label>
 						<textarea
-							id="team-description"
+							id="site-description"
 							bind:value={draft.description}
 							rows="3"
-							placeholder="Área de atención, ámbito técnico o funciones..."
-							class="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 transition outline-none focus:border-cyan-400"
+							placeholder="Ej. Sede corporativa principal en Madrid."
+							class="w-full resize-y rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 transition outline-none focus:border-cyan-400"
 						></textarea>
 					</div>
 
 					{#if draft.id}
 						<div class="flex items-center gap-2 pt-1">
 							<input
-								id="team-active"
+								id="site-active"
 								type="checkbox"
 								bind:checked={draft.active}
 								class="h-4 w-4 rounded border-slate-700 bg-slate-950 text-cyan-500 focus:ring-cyan-400"
 							/>
-							<label for="team-active" class="text-sm text-slate-300 select-none">
-								Equipo activo (disponible para nuevas asignaciones y escalados)
+							<label for="site-active" class="text-sm text-slate-300 select-none">
+								Sede activa
 							</label>
 						</div>
 					{/if}
@@ -485,21 +499,21 @@
 							type="submit"
 							class="rounded-xl bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400 focus-visible:outline-2 focus-visible:outline-cyan-400"
 						>
-							Guardar equipo
+							Guardar sede
 						</button>
 					</div>
 				</form>
 			{/if}
 		</dialog>
 
-		<!-- Confirmation Modal for Deactivation with References (DECISIÓN 4) -->
+		<!-- Deactivation Confirmation Modal -->
 		<dialog
 			bind:this={confirmDialog}
 			onclose={closeConfirmDialog}
-			aria-labelledby="confirm-team-deactivate-title"
+			aria-labelledby="confirm-site-deactivate-title"
 			class="fixed inset-0 m-auto max-h-[90dvh] w-[calc(100%-2rem)] max-w-md overflow-y-auto rounded-2xl border border-amber-500/40 bg-slate-900 p-6 text-white shadow-2xl backdrop:bg-slate-950/80"
 		>
-			{#if pendingDeactivateTeam && pendingReferences}
+			{#if pendingDeactivateSite && pendingReferences}
 				<div class="space-y-4">
 					<div class="flex items-center gap-3 text-amber-400">
 						<svg
@@ -516,12 +530,12 @@
 								d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
 							/>
 						</svg>
-						<h3 id="confirm-team-deactivate-title" class="text-base font-semibold text-white">
-							Desactivar equipo {pendingDeactivateTeam.name}
+						<h3 id="confirm-site-deactivate-title" class="text-base font-semibold text-white">
+							Desactivar sede {pendingDeactivateSite.name}
 						</h3>
 					</div>
 
-					<p class="text-sm text-slate-300">Este equipo está actualmente en uso por:</p>
+					<p class="text-sm text-slate-300">Esta sede está actualmente en uso por:</p>
 
 					<div
 						class="rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-sm text-slate-300"
@@ -541,8 +555,8 @@
 					</div>
 
 					<p class="text-xs text-slate-400">
-						Si lo desactivas, seguirá visible en registros existentes, pero no podrá seleccionarse
-						para nuevas asignaciones.
+						Si la desactivas, seguirá visible en registros existentes, pero no podrá seleccionarse
+						para nuevas asignaciones ni incidencias.
 					</p>
 
 					<p class="text-xs font-medium text-slate-300">¿Quieres continuar?</p>

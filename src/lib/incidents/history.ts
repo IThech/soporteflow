@@ -28,6 +28,7 @@ function validValue(event: string, value: unknown): boolean {
 		case 'assigned':
 		case 'reassigned':
 		case 'category_changed':
+		case 'site_changed':
 			return nullableId(value);
 		case 'status_changed':
 			return status(value);
@@ -91,6 +92,7 @@ export function isIncidentHistory(value: unknown): value is IncidentHistoryEntry
 				'status_changed',
 				'priority_changed',
 				'category_changed',
+				'site_changed',
 				'resolved',
 				'resolution_accepted',
 				'resolution_rejected',

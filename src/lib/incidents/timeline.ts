@@ -7,6 +7,7 @@ import type { IncidentHistoryEntry, IncidentRoutingSnapshot } from '$lib/types/i
 import type { AppUser } from '$lib/types/user';
 import type { IncidentCategory } from '$lib/types/category';
 import type { SupportTeam } from '$lib/types/support';
+import type { Site } from '$lib/types/site';
 
 export function visibleIncidentHistory(
 	viewer: AppUser,
@@ -31,7 +32,8 @@ export function describeHistoryEvent(
 	entry: IncidentHistoryEntry,
 	users: AppUser[],
 	categories: IncidentCategory[] = [],
-	teams: SupportTeam[] = []
+	teams: SupportTeam[] = [],
+	sites: Site[] = []
 ): string {
 	const userName = (id: string | null | undefined, actor = false) => {
 		if (id === SYSTEM_ACTOR_ID) return 'Sistema';
@@ -60,6 +62,13 @@ export function describeHistoryEvent(
 						category.id === id &&
 						(category.organizationId ?? demoOrganization.id) === entry.organizationId
 				)?.name || 'Categoría no disponible';
+	const siteName = (id: string | null | undefined) =>
+		id === null
+			? 'Sin sede'
+			: sites.find(
+					(site) =>
+						site.id === id && (site.organizationId ?? demoOrganization.id) === entry.organizationId
+				)?.name || 'Sede no disponible';
 	const routing = (value: IncidentRoutingSnapshot | undefined) => {
 		if (!value) return 'Destino no registrado';
 		const level = value.supportLevel ?? 'Nivel no registrado';
@@ -90,6 +99,8 @@ export function describeHistoryEvent(
 			return `${actor} cambió la prioridad de ${entry.previousValue ? priorities[entry.previousValue] : 'Prioridad no registrada'} a ${entry.newValue ? priorities[entry.newValue] : 'Prioridad no registrada'}`;
 		case 'category_changed':
 			return `${actor} cambió la categoría de ${categoryName(entry.previousValue)} a ${categoryName(entry.newValue)}`;
+		case 'site_changed':
+			return `${actor} cambió la sede de ${siteName(entry.previousValue)} a ${siteName(entry.newValue)}`;
 		case 'resolved':
 			return `${actor} resolvió la incidencia${entry.previousValue ? ` (estado anterior: ${statuses[entry.previousValue.status]})` : ''}`;
 		case 'resolution_accepted':

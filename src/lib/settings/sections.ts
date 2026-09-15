@@ -48,7 +48,7 @@ export const SETTINGS_GROUPS: readonly SettingsGroupDefinition[] = [
 				groupId: 'organization',
 				label: 'Sedes y ubicaciones',
 				description: 'Sedes físicas, delegaciones y áreas de atención de soporte.',
-				status: 'coming_soon',
+				status: 'active',
 				requiredPermission: 'organization:manage'
 			}
 		]

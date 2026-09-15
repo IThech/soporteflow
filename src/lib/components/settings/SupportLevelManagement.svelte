@@ -243,29 +243,29 @@
 			{/if}
 
 			<!-- Desktop Table View -->
-			<div class="mt-6 hidden overflow-hidden rounded-xl border border-slate-800 lg:block">
+			<div class="admin-table-container mt-6 overflow-hidden rounded-xl border border-slate-800">
 				<table class="w-full table-fixed text-left text-sm text-slate-300">
 					<thead
 						class="border-b border-slate-800 bg-slate-950 text-xs tracking-wider text-slate-400 uppercase"
 					>
 						<tr>
-							<th scope="col" class="w-[10%] px-3 py-3 text-center font-semibold text-slate-400">
+							<th scope="col" class="w-[8%] px-2 py-3 text-center font-semibold text-slate-400">
 								Orden
 							</th>
-							<th scope="col" class="w-[12%] px-3 py-3 font-semibold text-slate-400">Código</th>
-							<th scope="col" class="w-[25%] px-3 py-3 font-semibold text-slate-400">Nombre</th>
-							<th scope="col" class="w-[28%] px-3 py-3 font-semibold text-slate-400">
+							<th scope="col" class="w-[10%] px-2.5 py-3 font-semibold text-slate-400">Código</th>
+							<th scope="col" class="w-[24%] px-3 py-3 font-semibold text-slate-400">Nombre</th>
+							<th scope="col" class="w-[30%] px-3 py-3 font-semibold text-slate-400">
 								Descripción
 							</th>
 							<th
 								scope="col"
-								class="w-[10%] px-2 py-3 text-center font-semibold whitespace-nowrap text-slate-400"
+								class="w-[12%] px-2 py-3 text-center font-semibold whitespace-nowrap text-slate-400"
 							>
 								Estado
 							</th>
 							<th
 								scope="col"
-								class="w-[15%] px-3 py-3 text-right font-semibold whitespace-nowrap text-slate-400"
+								class="w-[16%] px-3 py-3 text-right font-semibold whitespace-nowrap text-slate-400"
 							>
 								Acciones
 							</th>
@@ -382,7 +382,7 @@
 			</div>
 
 			<!-- Mobile & Tablet Cards View -->
-			<div class="mt-6 space-y-3 lg:hidden">
+			<div class="admin-cards-container mt-6 space-y-3">
 				{#each orgLevels as level, index (level.id)}
 					<article class="space-y-3 rounded-xl border border-slate-800 bg-slate-950 p-4">
 						<div class="flex items-start justify-between gap-2">

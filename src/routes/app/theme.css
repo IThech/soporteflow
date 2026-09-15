@@ -104,8 +104,11 @@ html[data-app-theme='light'] .support-app .btn-reject-solution:focus-visible {
 .support-app summary {
 	cursor: pointer;
 }
-.support-app :is(button, input, select, summary) {
+.support-app :is(button, input:not([type='checkbox']):not([type='radio']), select, summary) {
 	min-height: 2.75rem;
+}
+.support-app :is(input[type='checkbox'], input[type='radio']) {
+	min-height: 0;
 }
 .support-app :is(input, select, textarea) {
 	max-width: 100%;
@@ -513,4 +516,37 @@ html[data-app-theme='light'] .support-app .badge-default-policy {
 	border: 1px solid rgba(14, 116, 144, 0.25);
 	background-color: #ecfeff;
 	color: #0e7490;
+}
+
+/* Responsive Administration: content-aware table vs cards pattern */
+.support-app .settings-content {
+	container-type: inline-size;
+}
+
+.support-app .admin-table-container {
+	display: none;
+}
+
+.support-app .admin-cards-container {
+	display: block;
+}
+
+@container (min-width: 880px) {
+	.support-app .admin-table-container {
+		display: block;
+	}
+	.support-app .admin-cards-container {
+		display: none;
+	}
+}
+
+@supports not (container-type: inline-size) {
+	@media (min-width: 1280px) {
+		.support-app .admin-table-container {
+			display: block;
+		}
+		.support-app .admin-cards-container {
+			display: none;
+		}
+	}
 }

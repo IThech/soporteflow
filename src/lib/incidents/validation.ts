@@ -46,6 +46,9 @@ export function isIncidentList(parsed: unknown): parsed is Incident[] {
 				typeof item === 'object' &&
 				Number.isSafeInteger(item.id) &&
 				(item.assignedToUserId == null || typeof item.assignedToUserId === 'string') &&
+				(item.siteId === undefined ||
+					item.siteId === null ||
+					(typeof item.siteId === 'string' && item.siteId.trim().length > 0)) &&
 				['title', 'client', 'createdAt'].every((key) => typeof item[key] === 'string') &&
 				['open', 'pending', 'resolved', 'closed'].includes(item.status) &&
 				['low', 'medium', 'high'].includes(item.priority) &&

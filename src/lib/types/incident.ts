@@ -25,6 +25,7 @@ export interface Incident {
 	description?: string;
 	solution?: string;
 	categoryId?: string;
+	siteId?: string | null;
 	sla?: IncidentSlaSnapshot | null;
 	resolvedAt?: string | null;
 	closedAt?: string | null;

@@ -11,15 +11,21 @@ interface UserIdentity {
 	createdAt: string;
 }
 
-// Technicians and organization administrators can have optional operational support level and team assignments.
-// Platform administrators and clients cannot have support level or team.
+// Technicians and organization administrators can have optional operational support level, team, and site assignments.
+// Platform administrators and clients cannot have operational fields.
 export type AppUser = UserIdentity &
 	(
-		| { role: 'technician' | 'organization_admin'; supportLevel?: SupportLevel; teamId?: string }
+		| {
+				role: 'technician' | 'organization_admin';
+				supportLevel?: SupportLevel;
+				teamId?: string;
+				siteIds?: string[];
+		  }
 		| {
 				role: 'platform_admin' | 'client';
 				supportLevel?: never;
 				teamId?: never;
+				siteIds?: never;
 		  }
 	);
 
@@ -32,6 +38,7 @@ export interface CreateUserInput {
 	role: AdministrableUserRole;
 	supportLevel?: SupportLevel;
 	teamId?: string;
+	siteIds?: string[];
 	active?: boolean;
 }
 
@@ -42,5 +49,6 @@ export interface UpdateUserInput {
 	role: AdministrableUserRole;
 	supportLevel?: SupportLevel;
 	teamId?: string;
+	siteIds?: string[];
 	active?: boolean;
 }

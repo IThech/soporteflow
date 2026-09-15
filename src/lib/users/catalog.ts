@@ -1,6 +1,7 @@
 import { canAccessOrganization, hasPermission } from '$lib/auth/permissions';
 import { demoUsers } from '$lib/data/users';
 import type { SupportLevel, SupportLevelDefinition, SupportTeam } from '$lib/types/support';
+import type { Site } from '$lib/types/site';
 import type {
 	AdministrableUserRole,
 	AppUser,
@@ -27,6 +28,7 @@ export type UserCatalogState =
 export interface SupportContext {
 	availableLevels?: readonly (string | SupportLevelDefinition)[];
 	availableTeams?: readonly SupportTeam[];
+	availableSites?: readonly Site[];
 }
 
 export function normalizeEmail(email: string): string {
@@ -69,7 +71,8 @@ export function isUser(item: unknown): item is AppUser {
 		return (
 			(u.organizationId === undefined || typeof u.organizationId === 'string') &&
 			u.supportLevel === undefined &&
-			u.teamId === undefined
+			u.teamId === undefined &&
+			u.siteIds === undefined
 		);
 	}
 
@@ -83,11 +86,15 @@ export function isUser(item: unknown): item is AppUser {
 			(typeof u.supportLevel === 'string' && u.supportLevel.trim().length > 0);
 		const validTeam =
 			u.teamId === undefined || (typeof u.teamId === 'string' && u.teamId.trim().length > 0);
-		return validLevel && validTeam;
+		const validSites =
+			u.siteIds === undefined ||
+			(Array.isArray(u.siteIds) &&
+				u.siteIds.every((s) => typeof s === 'string' && s.trim().length > 0));
+		return validLevel && validTeam && validSites;
 	}
 
-	// client cannot have operational support level or team
-	return u.supportLevel === undefined && u.teamId === undefined;
+	// client cannot have operational support level, team, or site assignments
+	return u.supportLevel === undefined && u.teamId === undefined && u.siteIds === undefined;
 }
 
 /**
@@ -166,14 +173,14 @@ export function getOrganizationUsers(users: AppUser[], organizationId: string): 
 }
 
 /**
- * Validates technician-specific fields (supportLevel and teamId).
+ * Validates technician-specific fields (supportLevel, teamId, siteIds).
  * Enforces that for new assignments:
- * - level/team must exist and belong to the same organization.
- * - level/team must be active.
+ * - level/team/site must exist and belong to the same organization.
+ * - level/team/site must be active.
  * Existing assignments already on the user can be preserved even if currently inactive (DECISIÓN 5).
  */
 function validateTechnicalFields(
-	input: { supportLevel?: SupportLevel; teamId?: string },
+	input: { supportLevel?: SupportLevel; teamId?: string; siteIds?: string[] },
 	organizationId: string,
 	context?: SupportContext,
 	currentUser?: AppUser
@@ -210,6 +217,30 @@ function validateTechnicalFields(
 				throw new Error(
 					'El equipo seleccionado no es válido o no está activo en esta organización.'
 				);
+			}
+		}
+	}
+
+	if (input.siteIds && input.siteIds.length > 0) {
+		const currentSiteIds = new Set(currentUser?.siteIds ?? []);
+		const seenSites = new Set<string>();
+
+		for (const rawSiteId of input.siteIds) {
+			const siteId = rawSiteId.trim();
+			if (!siteId) continue;
+			if (seenSites.has(siteId)) {
+				throw new Error('No se pueden repetir sedes para el mismo usuario.');
+			}
+			seenSites.add(siteId);
+
+			const isPreservingCurrent = currentSiteIds.has(siteId);
+			if (context?.availableSites && !isPreservingCurrent) {
+				const site = context.availableSites.find((s) => s.id === siteId);
+				if (!site || site.organizationId !== organizationId || !site.active) {
+					throw new Error(
+						'Una o más sedes seleccionadas no son válidas o no están activas en esta organización.'
+					);
+				}
 			}
 		}
 	}
@@ -262,6 +293,9 @@ export function createUser(
 
 	if (input.role === 'technician' || input.role === 'organization_admin') {
 		validateTechnicalFields(input, targetOrgId, context);
+		const siteIds = input.siteIds
+			? [...new Set(input.siteIds.map((s) => s.trim()).filter(Boolean))]
+			: undefined;
 		const newTechnicalUser: AppUser = {
 			id: crypto.randomUUID(),
 			organizationId: targetOrgId,
@@ -270,6 +304,7 @@ export function createUser(
 			role: input.role,
 			...(input.supportLevel ? { supportLevel: input.supportLevel } : {}),
 			...(input.teamId ? { teamId: input.teamId } : {}),
+			...(siteIds && siteIds.length > 0 ? { siteIds } : {}),
 			active,
 			createdAt
 		};
@@ -368,8 +403,12 @@ export function updateUser(
 		const supportLevel =
 			input.supportLevel !== undefined ? input.supportLevel : target.supportLevel;
 		const teamId = input.teamId !== undefined ? input.teamId : target.teamId;
+		const siteIds =
+			input.siteIds !== undefined
+				? [...new Set(input.siteIds.map((s) => s.trim()).filter(Boolean))]
+				: target.siteIds;
 
-		validateTechnicalFields({ supportLevel, teamId }, targetOrgId, context, target);
+		validateTechnicalFields({ supportLevel, teamId, siteIds }, targetOrgId, context, target);
 
 		const updatedTechnicalUser: AppUser = {
 			id: target.id,
@@ -379,13 +418,14 @@ export function updateUser(
 			role: input.role,
 			...(supportLevel ? { supportLevel } : {}),
 			...(teamId ? { teamId } : {}),
+			...(siteIds && siteIds.length > 0 ? { siteIds } : {}),
 			active: willBeActive,
 			createdAt: target.createdAt
 		};
 		return users.map((u) => (u.id === target.id ? updatedTechnicalUser : u));
 	}
 
-	// For client: supportLevel and teamId are strictly cleaned/removed
+	// For client: supportLevel, teamId, and siteIds are strictly cleaned/removed
 	const updatedClient: AppUser = {
 		id: target.id,
 		organizationId: targetOrgId,
