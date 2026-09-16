@@ -150,6 +150,18 @@
 		CATEGORY_STORAGE_KEY
 	} from '$lib/categories/catalog';
 	import type { IncidentCategory } from '$lib/types/category';
+	import {
+		SUBCATEGORIES_STORAGE_KEY,
+		loadSubcategoriesResult
+	} from '$lib/classification/subcategories-catalog';
+	import {
+		PRIORITY_MATRICES_STORAGE_KEY,
+		loadPriorityMatricesResult
+	} from '$lib/classification/matrix-catalog';
+	import type {
+		SubcategoryLoadResult,
+		PriorityMatricesCatalogLoadResult
+	} from '$lib/types/classification';
 
 	import DemoSessionSelector from '$lib/components/DemoSessionSelector.svelte';
 	import { defaultDemoUser } from '$lib/auth/demo-session';
@@ -673,6 +685,74 @@
 	let slaPolicyError = $state('');
 	let slaPolicySnapshot: string | null = null;
 
+	// Prepared for Phase 2D.2 (form integration and classification preview)
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	let subcategoriesState = $state<SubcategoryLoadResult>({ status: 'missing', subcategories: [] });
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	let subcategoriesReady = $state(false);
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	let subcategoriesError = $state('');
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	let subcategoriesSnapshot: string | null = null;
+
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	let priorityMatricesState = $state<PriorityMatricesCatalogLoadResult>({
+		status: 'missing',
+		matrices: []
+	});
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	let priorityMatricesReady = $state(false);
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	let priorityMatricesError = $state('');
+	// eslint-disable-next-line @typescript-eslint/no-unused-vars
+	let priorityMatricesSnapshot: string | null = null;
+
+	function reloadSubcategories(raw: string | null) {
+		try {
+			subcategoriesSnapshot = raw;
+			const res = loadSubcategoriesResult(raw);
+			subcategoriesState = res;
+			if (res.status === 'corrupt') {
+				subcategoriesError = res.error;
+				subcategoriesReady = false;
+			} else {
+				subcategoriesError = '';
+				subcategoriesReady = true;
+			}
+		} catch {
+			subcategoriesState = {
+				status: 'corrupt',
+				error: 'Error inesperado al cargar las subcategorías.'
+			};
+			subcategoriesError =
+				'No se pudo cargar el catálogo de subcategorías. Los datos se han conservado.';
+			subcategoriesReady = false;
+		}
+	}
+
+	function reloadPriorityMatrices(raw: string | null) {
+		try {
+			priorityMatricesSnapshot = raw;
+			const res = loadPriorityMatricesResult(raw);
+			priorityMatricesState = res;
+			if (res.status === 'corrupt') {
+				priorityMatricesError = res.error;
+				priorityMatricesReady = false;
+			} else {
+				priorityMatricesError = '';
+				priorityMatricesReady = true;
+			}
+		} catch {
+			priorityMatricesState = {
+				status: 'corrupt',
+				error: 'Error inesperado al cargar las matrices de prioridad.'
+			};
+			priorityMatricesError =
+				'No se pudo cargar el catálogo de matrices de prioridad. Los datos se han conservado.';
+			priorityMatricesReady = false;
+		}
+	}
+
 	let notificationList = $state<Notification[]>([]);
 	let notificationsReady = $state(false);
 	let notificationError = $state('');
@@ -1102,6 +1182,30 @@
 
 		refreshMessages();
 
+		reloadSubcategories(localStorage.getItem(SUBCATEGORIES_STORAGE_KEY));
+		reloadPriorityMatrices(localStorage.getItem(PRIORITY_MATRICES_STORAGE_KEY));
+
+		function handleStorage(event: StorageEvent) {
+			if (event.key === null) {
+				reloadSubcategories(localStorage.getItem(SUBCATEGORIES_STORAGE_KEY));
+				reloadPriorityMatrices(localStorage.getItem(PRIORITY_MATRICES_STORAGE_KEY));
+			} else if (event.key === SUBCATEGORIES_STORAGE_KEY) {
+				reloadSubcategories(
+					event.newValue !== undefined
+						? event.newValue
+						: localStorage.getItem(SUBCATEGORIES_STORAGE_KEY)
+				);
+			} else if (event.key === PRIORITY_MATRICES_STORAGE_KEY) {
+				reloadPriorityMatrices(
+					event.newValue !== undefined
+						? event.newValue
+						: localStorage.getItem(PRIORITY_MATRICES_STORAGE_KEY)
+				);
+			}
+		}
+
+		window.addEventListener('storage', handleStorage);
+
 		const intervalId = setInterval(() => {
 			now = new Date();
 			if (assignmentReady && !incidentLoadError) {
@@ -1149,6 +1253,7 @@
 		return () => {
 			clearInterval(intervalId);
 			document.removeEventListener('visibilitychange', handleVisibility);
+			window.removeEventListener('storage', handleStorage);
 		};
 	});
 
