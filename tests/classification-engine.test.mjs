@@ -43,25 +43,25 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 		// =========================================================================
 		await suite.test(
 			'1. Evaluación exhaustiva de las 12 combinaciones (criticidad x impacto)',
-			() => {
+			async (st) => {
 				const expectedStandardResults = {
 					high: {
-						I1: 'critical',
-						I2: 'high',
-						I3: 'medium',
-						I4: 'low'
+						I1: 'low',
+						I2: 'medium',
+						I3: 'high',
+						I4: 'critical'
 					},
 					medium: {
-						I1: 'high',
-						I2: 'medium',
-						I3: 'low',
-						I4: 'low'
+						I1: 'low',
+						I2: 'low',
+						I3: 'medium',
+						I4: 'high'
 					},
 					low: {
-						I1: 'medium',
+						I1: 'low',
 						I2: 'low',
 						I3: 'low',
-						I4: 'low'
+						I4: 'medium'
 					}
 				};
 
@@ -101,6 +101,26 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 						assert.equal(result.override, null);
 					}
 				}
+
+				await st.test(
+					'1.1 Monotonicidad: para una misma criticidad base, la prioridad nunca disminuye de I1 a I4',
+					() => {
+						const impacts = ['I1', 'I2', 'I3', 'I4'];
+						for (const crit of VALID_BASE_CRITICALITIES) {
+							for (let i = 0; i < impacts.length - 1; i++) {
+								const currentImpact = impacts[i];
+								const nextImpact = impacts[i + 1];
+								const currentPriority = standardMatrix.matrix[crit][currentImpact];
+								const nextPriority = standardMatrix.matrix[crit][nextImpact];
+								assert.ok(
+									CALCULATED_PRIORITY_RANK[nextPriority] >=
+										CALCULATED_PRIORITY_RANK[currentPriority],
+									`Para criticidad ${crit}, el impacto ${nextImpact} (${nextPriority}) no debe ser menor que ${currentImpact} (${currentPriority})`
+								);
+							}
+						}
+					}
+				);
 			}
 		);
 
@@ -109,7 +129,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 		// =========================================================================
 		await suite.test('2. Aplicación determinista de prioridad mínima (minPriority)', async (st) => {
 			await st.test('2.1 Eleva la prioridad si el resultado de la matriz es inferior', () => {
-				// Base low + I4 -> matrix da 'low', pero minPriority es 'high'
+				// Base low + I1 -> matrix da 'low', pero minPriority es 'high'
 				const subcat = {
 					...baseSubcategory,
 					baseCriticality: 'low',
@@ -118,7 +138,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 
 				const result = classifyIncident({
 					subcategory: subcat,
-					impact: 'I4',
+					impact: 'I1',
 					matrix: standardMatrix
 				});
 
@@ -132,7 +152,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 			await st.test(
 				'2.2 No degrada la prioridad si el resultado de la matriz ya es superior',
 				() => {
-					// Base high + I1 -> matrix da 'critical', minPriority es 'medium'
+					// Base high + I4 -> matrix da 'critical', minPriority es 'medium'
 					const subcat = {
 						...baseSubcategory,
 						baseCriticality: 'high',
@@ -141,7 +161,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 
 					const result = classifyIncident({
 						subcategory: subcat,
-						impact: 'I1',
+						impact: 'I4',
 						matrix: standardMatrix
 					});
 
@@ -162,7 +182,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 
 				const result = classifyIncident({
 					subcategory: subcat,
-					impact: 'I2',
+					impact: 'I3',
 					matrix: standardMatrix
 				});
 
@@ -180,7 +200,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 			await st.test(
 				'3.1 Aplica override superior conservando snapshot del cálculo original',
 				() => {
-					// Cálculo: medium + I3 -> 'low'
+					// Cálculo: medium + I1 -> 'low'
 					const subcat = {
 						...baseSubcategory,
 						baseCriticality: 'medium',
@@ -189,7 +209,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 
 					const result = classifyIncident({
 						subcategory: subcat,
-						impact: 'I3',
+						impact: 'I1',
 						matrix: standardMatrix,
 						override: {
 							targetPriority: 'critical',
@@ -227,7 +247,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 			);
 
 			await st.test('3.2 Aplica override inferior (desescalado) cuando esté autorizado', () => {
-				// Cálculo: high + I1 -> 'critical'
+				// Cálculo: high + I4 -> 'critical'
 				const subcat = {
 					...baseSubcategory,
 					baseCriticality: 'high',
@@ -236,7 +256,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 
 				const result = classifyIncident({
 					subcategory: subcat,
-					impact: 'I1',
+					impact: 'I4',
 					matrix: standardMatrix,
 					override: {
 						targetPriority: 'low',
@@ -577,7 +597,7 @@ test('Clasificación V2 — Fase 1A: Motor puro determinista y modelos', async (
 
 			const input = deepFreeze({
 				subcategory: frozenSubcategory,
-				impact: 'I1',
+				impact: 'I4',
 				matrix: frozenMatrix,
 				override: frozenOverride
 			});

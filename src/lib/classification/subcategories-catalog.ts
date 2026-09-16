@@ -16,6 +16,7 @@ import {
 	VALID_BASE_CRITICALITIES,
 	VALID_CALCULATED_PRIORITIES
 } from './engine';
+import { demoSubcategories } from '$lib/data/subcategories';
 
 export const SUBCATEGORIES_STORAGE_KEY = 'soporteflow-subcategories';
 
@@ -95,6 +96,55 @@ export function loadSubcategoriesResult(raw: string | null): SubcategoryLoadResu
 					: 'Error al cargar subcategorías guardadas.'
 		};
 	}
+}
+
+export { demoSubcategories } from '$lib/data/subcategories';
+
+export type SubcategoryInitResult =
+	| { status: 'seeded'; subcategories: Subcategory[] }
+	| { status: 'already_exists'; subcategories: Subcategory[] }
+	| { status: 'corrupt'; error: string };
+
+/**
+ * Inicializa de forma segura el catálogo de subcategorías con las semillas demo de Nodhouses
+ * si el almacenamiento está ausente (`missing`).
+ *
+ * REGLAS OBLIGATORIAS:
+ * 1. Si el almacenamiento está ausente (`raw === null`), escribe las semillas demo en storage y devuelve status 'seeded'.
+ * 2. Si el almacenamiento es válido (incluso si está vacío `[]`), NO sobrescribe y devuelve status 'already_exists'.
+ * 3. Si el almacenamiento está corrupto, NO sobrescribe ni repara automáticamente y devuelve status 'corrupt'.
+ */
+export function initializeSubcategoriesCatalog(
+	storage: {
+		getItem: (key: string) => string | null;
+		setItem: (key: string, value: string) => void;
+	},
+	seeds: Subcategory[] = demoSubcategories
+): SubcategoryInitResult {
+	const raw = storage.getItem(SUBCATEGORIES_STORAGE_KEY);
+	if (raw === null) {
+		if (!isSubcategoryList(seeds)) {
+			throw new Error('Las semillas de subcategorías demo no tienen un formato válido.');
+		}
+		storage.setItem(SUBCATEGORIES_STORAGE_KEY, JSON.stringify(seeds));
+		return {
+			status: 'seeded',
+			subcategories: seeds.map((s) => ({ ...s }))
+		};
+	}
+
+	const loadRes = loadSubcategoriesResult(raw);
+	if (loadRes.status === 'corrupt') {
+		return {
+			status: 'corrupt',
+			error: loadRes.error
+		};
+	}
+
+	return {
+		status: 'already_exists',
+		subcategories: loadRes.subcategories
+	};
 }
 
 /**

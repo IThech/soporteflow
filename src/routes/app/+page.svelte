@@ -152,7 +152,8 @@
 	import type { IncidentCategory } from '$lib/types/category';
 	import {
 		SUBCATEGORIES_STORAGE_KEY,
-		loadSubcategoriesResult
+		loadSubcategoriesResult,
+		initializeSubcategoriesCatalog
 	} from '$lib/classification/subcategories-catalog';
 	import {
 		PRIORITY_MATRICES_STORAGE_KEY,
@@ -1182,6 +1183,9 @@
 
 		refreshMessages();
 
+		if (localStorage.getItem(SUBCATEGORIES_STORAGE_KEY) === null) {
+			initializeSubcategoriesCatalog(localStorage);
+		}
 		reloadSubcategories(localStorage.getItem(SUBCATEGORIES_STORAGE_KEY));
 		reloadPriorityMatrices(localStorage.getItem(PRIORITY_MATRICES_STORAGE_KEY));
 

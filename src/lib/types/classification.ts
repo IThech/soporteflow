@@ -2,11 +2,11 @@ import type { IncidentPriority } from './incident';
 import type { IncidentCategory } from './category';
 
 /**
- * Nivel de impacto operativo (ITIL / Operaciones).
- * I1: Crítico / Incidencia generalizada o servicio esencial caído.
- * I2: Mayor / Departamento completo o servicio importante degradado.
- * I3: Moderado / Grupo de usuarios o degradación parcial.
- * I4: Menor / Usuario individual o incidencia cosmética / sin bloqueo.
+ * Nivel de impacto operativo (ascendente por alcance).
+ * I1: Una persona (solo afecta al usuario solicitante).
+ * I2: Varias personas.
+ * I3: Equipo o departamento.
+ * I4: Sede u organización completa.
  */
 export type ImpactLevel = 'I1' | 'I2' | 'I3' | 'I4';
 

@@ -925,7 +925,8 @@ test('Clasificación V2 — Fase 1B: Catálogos de subcategorías, matrices por 
 					assert.equal(result.status, 'standard_fallback');
 					assert.equal(result.isCustom, false);
 					assert.equal(result.matrix.organizationId, orgA);
-					assert.equal(result.matrix.matrix.high.I1, 'critical');
+					assert.equal(result.matrix.matrix.high.I1, 'low');
+					assert.equal(result.matrix.matrix.high.I4, 'critical');
 
 					// Comprobar que NO se escribió en el almacenamiento
 					assert.equal(storage.getItem(PRIORITY_MATRICES_STORAGE_KEY), null);

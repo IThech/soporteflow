@@ -152,22 +152,22 @@ export function createStandardPriorityMatrix(organizationId: string): PriorityMa
 
 	const matrix: PriorityMatrixMap = {
 		high: {
-			I1: 'critical',
-			I2: 'high',
-			I3: 'medium',
-			I4: 'low'
+			I1: 'low',
+			I2: 'medium',
+			I3: 'high',
+			I4: 'critical'
 		},
 		medium: {
-			I1: 'high',
-			I2: 'medium',
-			I3: 'low',
-			I4: 'low'
+			I1: 'low',
+			I2: 'low',
+			I3: 'medium',
+			I4: 'high'
 		},
 		low: {
-			I1: 'medium',
+			I1: 'low',
 			I2: 'low',
 			I3: 'low',
-			I4: 'low'
+			I4: 'medium'
 		}
 	};
 
