@@ -1,4 +1,5 @@
 import type { IncidentPriority } from './incident';
+import type { IncidentCategory } from './category';
 
 /**
  * Nivel de impacto operativo (ITIL / Operaciones).
@@ -106,3 +107,67 @@ export interface ClassificationEngineInput {
  * Tipo ampliado compatible para la futura integración con IncidentPriority.
  */
 export type CompatibleIncidentPriority = IncidentPriority | 'urgent';
+
+/**
+ * Entrada para crear una nueva subcategoría.
+ */
+export interface CreateSubcategoryInput {
+	id?: string;
+	organizationId: string;
+	categoryId: string;
+	name: string;
+	baseCriticality: BaseCriticality;
+	minPriority?: CalculatedPriority | null;
+	active?: boolean;
+}
+
+/**
+ * Entrada para editar una subcategoría existente.
+ * La organización es inmutable para preservar la integridad referencial.
+ */
+export interface UpdateSubcategoryInput {
+	id: string;
+	organizationId?: string;
+	categoryId?: string;
+	name?: string;
+	baseCriticality?: BaseCriticality;
+	minPriority?: CalculatedPriority | null;
+	active?: boolean;
+}
+
+/**
+ * Contexto obligatorio de organización invocante para operaciones de modificación y estado de subcategorías.
+ */
+export interface SubcategoryOperationContext {
+	organizationId: string;
+	categories?: IncidentCategory[];
+}
+
+/**
+ * Alias para operaciones de estado (activar/desactivar).
+ */
+export type SubcategoryStatusContext = SubcategoryOperationContext;
+
+/**
+ * Resultado de la carga del catálogo persistido de subcategorías.
+ */
+export type SubcategoryLoadResult =
+	| { status: 'missing'; subcategories: Subcategory[] }
+	| { status: 'valid'; subcategories: Subcategory[] }
+	| { status: 'corrupt'; error: string };
+
+/**
+ * Resultado de la resolución de matriz de prioridad para una organización.
+ */
+export type PriorityMatrixLoadResult =
+	| { status: 'standard_fallback'; matrix: PriorityMatrix; isCustom: false }
+	| { status: 'custom_valid'; matrix: PriorityMatrix; isCustom: true }
+	| { status: 'corrupt'; error: string };
+
+/**
+ * Resultado de la carga del catálogo completo de matrices guardadas.
+ */
+export type PriorityMatricesCatalogLoadResult =
+	| { status: 'missing'; matrices: PriorityMatrix[] }
+	| { status: 'valid'; matrices: PriorityMatrix[] }
+	| { status: 'corrupt'; error: string };
