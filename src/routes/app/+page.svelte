@@ -93,8 +93,10 @@
 	import { recoverFirstResponse, FIRST_RESPONSE_RECOVERY_KEY } from '$lib/storage/first-response';
 	import {
 		applyCreationSla,
+		buildCreatedHistoryEntry,
 		recordStatusTransition,
-		isIncidentReopened
+		isIncidentReopened,
+		resolveEditedIncidentPriority
 	} from '$lib/incidents/lifecycle';
 	import { demoSupportTeams } from '$lib/data/teams';
 	import { demoSupportLevels } from '$lib/data/support-levels';
@@ -1492,6 +1494,7 @@
 
 		if (
 			incidentLoadError ||
+			!assignmentReady ||
 			!hasPermission(activeUser, 'incidents:create') ||
 			!activeUser.organizationId ||
 			!canAccessOrganization(activeUser, activeUser.organizationId)
@@ -1638,9 +1641,31 @@
 			return;
 		}
 
-		incidentList.unshift(incidentWithSla);
+		const nextIncidents = [incidentWithSla, ...incidentList];
+		const createdEvent = buildCreatedHistoryEntry(incidentWithSla, activeUser.id);
+		const nextHistory = [...history, createdEvent];
 
-		saveIncidents();
+		try {
+			commitAssignment(
+				localStorage,
+				nextIncidents,
+				nextHistory,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+		} catch (error) {
+			window.alert(
+				error instanceof Error
+					? error.message
+					: 'No se pudieron guardar la incidencia y su historial.'
+			);
+			return;
+		}
+
+		incidentList = nextIncidents;
+		history = nextHistory;
+		storedIncidentSnapshot = JSON.stringify(nextIncidents);
+		storedHistorySnapshot = JSON.stringify(nextHistory);
 
 		title = '';
 		client = '';
@@ -1683,10 +1708,11 @@
 		const editingId = editingIncident.id;
 		const original = incidentList.find((item) => item.id === editingId);
 		if (!original || !canActOnIncident(activeUser, original, 'incidents:edit')) return;
+		const editedPriority = resolveEditedIncidentPriority(original, editingIncident.priority);
 
 		let updatedIncident: Incident = {
 			...original,
-			priority: editingIncident.priority,
+			priority: editedPriority,
 			status: editingIncident.status,
 			title: editingIncident.title.trim(),
 			client: editingIncident.client.trim(),
@@ -1716,7 +1742,7 @@
 			const transitioned = recordStatusTransition(original, editingIncident.status);
 			updatedIncident = {
 				...transitioned,
-				priority: editingIncident.priority,
+				priority: editedPriority,
 				title: editingIncident.title.trim(),
 				client: editingIncident.client.trim(),
 				description: (editingIncident.description ?? '').trim(),
@@ -2630,18 +2656,30 @@
 						</p>
 						<div class="grid grid-cols-2 gap-3">
 							<div>
-								<label for="edit-priority" class="mb-2 block text-sm font-medium text-slate-300">
-									Prioridad
-								</label>
-								<select
-									id="edit-priority"
-									bind:value={editingIncident.priority}
-									class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-								>
-									<option value="low">Baja</option>
-									<option value="medium">Media</option>
-									<option value="high">Alta</option>
-								</select>
+								{#if editingIncident.classification}
+									<span class="mb-2 block text-sm font-medium text-slate-300">
+										Prioridad calculada
+									</span>
+									<div
+										class="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-4 py-3 text-slate-300"
+									>
+										{priorityLabels[editingIncident.priority]}
+									</div>
+								{:else}
+									<label for="edit-priority" class="mb-2 block text-sm font-medium text-slate-300">
+										Prioridad
+									</label>
+									<select
+										id="edit-priority"
+										bind:value={editingIncident.priority}
+										class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+									>
+										<option value="low">Baja</option>
+										<option value="medium">Media</option>
+										<option value="high">Alta</option>
+										<option value="urgent">Urgente</option>
+									</select>
+								{/if}
 							</div>
 
 							<div>

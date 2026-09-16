@@ -1,6 +1,11 @@
 import { incidentOrganizationId } from './assignment';
 import { matchSlaPolicy, createSlaSnapshot } from './sla';
-import type { Incident, IncidentClosureType, IncidentStatus } from '$lib/types/incident';
+import type {
+	Incident,
+	IncidentClosureType,
+	IncidentPriority,
+	IncidentStatus
+} from '$lib/types/incident';
 import type { SlaPolicy } from '$lib/types/sla';
 import type { IncidentMessage } from '$lib/types/incident-message';
 import type { AppUser } from '$lib/types/user';
@@ -16,6 +21,38 @@ import { resolveCategoryRouting } from '$lib/categories/catalog';
 import { classifyIncident, isImpactLevel, toIncidentPriority } from '$lib/classification/engine';
 import { resolveOrganizationMatrix } from '$lib/classification/matrix-catalog';
 import { isIncidentList } from './validation';
+import { generateId } from '$lib/utils/id';
+
+export function buildCreatedHistoryEntry(
+	incident: Incident,
+	actorUserId: string,
+	id: string = generateId()
+): IncidentHistoryEntry {
+	return {
+		id,
+		incidentId: incident.id,
+		organizationId: incidentOrganizationId(incident),
+		actorUserId,
+		timestamp: incident.createdAt,
+		eventType: 'created',
+		newValue: {
+			title: incident.title,
+			status: incident.status,
+			priority: incident.priority,
+			supportLevel: incident.supportLevel ?? null,
+			teamId: incident.teamId ?? null,
+			assignedToUserId: incident.assignedToUserId ?? null
+		}
+	};
+}
+
+/** V2 priorities are classification output; manual priority editing remains V1-only until 2E. */
+export function resolveEditedIncidentPriority(
+	original: Incident,
+	requested: IncidentPriority
+): IncidentPriority {
+	return original.classification ? original.priority : requested;
+}
 
 /**
  * Applies initial SLA to an incident draft upon creation.
