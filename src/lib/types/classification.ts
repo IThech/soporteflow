@@ -104,9 +104,9 @@ export interface ClassificationEngineInput {
 }
 
 /**
- * Tipo ampliado compatible para la futura integración con IncidentPriority.
+ * Tipo ampliado compatible para la integración con IncidentPriority.
  */
-export type CompatibleIncidentPriority = IncidentPriority | 'urgent';
+export type CompatibleIncidentPriority = IncidentPriority;
 
 /**
  * Entrada para crear una nueva subcategoría.

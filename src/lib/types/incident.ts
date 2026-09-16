@@ -1,11 +1,12 @@
 import type { SupportLevel } from './support';
 import type { IncidentSlaSnapshot } from './sla';
+import type { ClassificationSnapshot } from './classification';
 
 export type IncidentStatus = 'open' | 'pending' | 'resolved' | 'closed';
 
 export type IncidentClosureType = 'client_confirmed' | 'auto_closed';
 
-export type IncidentPriority = 'low' | 'medium' | 'high';
+export type IncidentPriority = 'low' | 'medium' | 'high' | 'urgent';
 
 export interface Incident {
 	id: number;
@@ -25,6 +26,8 @@ export interface Incident {
 	description?: string;
 	solution?: string;
 	categoryId?: string;
+	subcategoryId?: string | null;
+	classification?: ClassificationSnapshot | null;
 	siteId?: string | null;
 	sla?: IncidentSlaSnapshot | null;
 	resolvedAt?: string | null;

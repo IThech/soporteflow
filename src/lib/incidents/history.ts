@@ -13,7 +13,7 @@ const optionalText = (v: unknown) => v === undefined || typeof v === 'string';
 const status = (v: unknown) =>
 	v === 'open' || v === 'pending' || v === 'resolved' || v === 'closed';
 const closureType = (v: unknown) => v === 'client_confirmed' || v === 'auto_closed';
-const priority = (v: unknown) => v === 'low' || v === 'medium' || v === 'high';
+const priority = (v: unknown) => v === 'low' || v === 'medium' || v === 'high' || v === 'urgent';
 const nullableId = (v: unknown) => v === null || text(v);
 const routing = (v: unknown) =>
 	object(v) &&

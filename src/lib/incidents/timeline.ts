@@ -2,7 +2,7 @@ import { canViewIncident } from '$lib/auth/record-access';
 import { demoOrganization } from '$lib/data/organizations';
 import { incidentOrganizationId } from './assignment';
 import { SYSTEM_ACTOR_ID } from './history';
-import type { Incident } from '$lib/types/incident';
+import type { Incident, IncidentPriority } from '$lib/types/incident';
 import type { IncidentHistoryEntry, IncidentRoutingSnapshot } from '$lib/types/incident-history';
 import type { AppUser } from '$lib/types/user';
 import type { IncidentCategory } from '$lib/types/category';
@@ -53,7 +53,12 @@ export function describeHistoryEvent(
 		resolved: 'Resuelta',
 		closed: 'Cerrada'
 	};
-	const priorities = { low: 'Baja', medium: 'Media', high: 'Alta' };
+	const priorities: Record<IncidentPriority, string> = {
+		urgent: 'Urgente',
+		high: 'Alta',
+		medium: 'Media',
+		low: 'Baja'
+	};
 	const categoryName = (id: string | null | undefined) =>
 		id === null
 			? 'Sin categoría'

@@ -5,7 +5,7 @@ import {
 } from './assignment';
 import { evaluateIncidentSla } from './sla';
 import { isIncidentReopened } from './lifecycle';
-import type { Incident } from '$lib/types/incident';
+import type { Incident, IncidentPriority } from '$lib/types/incident';
 import type { IncidentHistoryEntry, IncidentHistoryEventType } from '$lib/types/incident-history';
 import type { IncidentMessage } from '$lib/types/incident-message';
 import type { AppUser } from '$lib/types/user';
@@ -265,11 +265,11 @@ export function getIncidentAttentionReasons(
 		});
 	}
 
-	// Tier 5: Prioridad alta
-	if (incident.priority === 'high') {
+	// Tier 5: Prioridad alta o urgente
+	if (incident.priority === 'urgent' || incident.priority === 'high') {
 		reasons.push({
 			type: 'high_priority',
-			label: 'Prioridad alta',
+			label: incident.priority === 'urgent' ? 'Prioridad urgente' : 'Prioridad alta',
 			priorityRank: ATTENTION_RANKS.high_priority
 		});
 	}
@@ -379,8 +379,13 @@ export function getAvailableToAssumeIncidents(
 				return teamB - teamA;
 			}
 
-			// Priority order (high > medium > low)
-			const prioWeight: Record<string, number> = { high: 3, medium: 2, low: 1 };
+			// Priority order (urgent > high > medium > low)
+			const prioWeight: Record<IncidentPriority, number> = {
+				urgent: 4,
+				high: 3,
+				medium: 2,
+				low: 1
+			};
 			const pA = prioWeight[a.priority] ?? 0;
 			const pB = prioWeight[b.priority] ?? 0;
 			if (pA !== pB) {

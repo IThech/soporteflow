@@ -78,6 +78,15 @@ test('Cola personal del técnico', async (t) => {
 			assert.deepEqual(ids(queueIncidents(tech, items, 'mine')), [13, 12, 11, 10]);
 			assert.equal(items[0].id, 10);
 		});
+		await t.test('orden de 4 niveles: urgent > high > medium > low', () => {
+			const items = [
+				{ ...tickets[0], id: 21, priority: 'low', createdAt: '2026-09-01' },
+				{ ...tickets[0], id: 22, priority: 'urgent', createdAt: '2026-09-01' },
+				{ ...tickets[0], id: 23, priority: 'high', createdAt: '2026-09-01' },
+				{ ...tickets[0], id: 24, priority: 'medium', createdAt: '2026-09-01' }
+			];
+			assert.deepEqual(ids(queueIncidents(tech, items, 'mine')), [22, 23, 24, 21]);
+		});
 		await t.test('vacíos, usuario inactivo y recarga de datos', () => {
 			assert.deepEqual(queueIncidents(tech, [], 'mine'), []);
 			assert.deepEqual(queueIncidents({ ...tech, active: false }, tickets, 'all'), []);

@@ -62,8 +62,13 @@
 					i.assignedToUserId === technician.id && (i.status === 'open' || i.status === 'pending')
 			)
 			.sort((a, b) => {
-				// Priority: high first, then oldest createdAt
-				const priorityOrder: Record<IncidentPriority, number> = { high: 1, medium: 2, low: 3 };
+				// Priority: urgent first, then high, then oldest createdAt
+				const priorityOrder: Record<IncidentPriority, number> = {
+					urgent: 0,
+					high: 1,
+					medium: 2,
+					low: 3
+				};
 				const pDiff = (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2);
 				if (pDiff !== 0) return pDiff;
 				return Date.parse(a.createdAt) - Date.parse(b.createdAt);
@@ -90,15 +95,17 @@
 	}
 
 	const priorityLabels: Record<IncidentPriority, string> = {
-		low: 'Baja',
+		urgent: 'Urgente',
+		high: 'Alta',
 		medium: 'Media',
-		high: 'Alta'
+		low: 'Baja'
 	};
 
 	const priorityBadgeClasses: Record<IncidentPriority, string> = {
-		low: 'border-slate-700 bg-slate-800 text-slate-400',
+		urgent: 'border-purple-500/40 bg-purple-500/15 text-purple-300',
+		high: 'border-red-500/40 bg-red-500/15 text-red-300',
 		medium: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300',
-		high: 'border-red-500/40 bg-red-500/15 text-red-300'
+		low: 'border-slate-700 bg-slate-800 text-slate-400'
 	};
 
 	function getReasonBadgeConfig(type: AttentionReasonType): { label: string; cls: string } {
@@ -380,7 +387,7 @@
 														{#if reason.type === 'sla_breached' || reason.type === 'sla_approaching'}
 															<span class="h-1.5 w-1.5 rounded-full bg-current"></span>
 														{/if}
-														<span>{badgeConfig.label}</span>
+														<span>{reason.label || badgeConfig.label}</span>
 														{#if reason.timeAgo}
 															<span class="font-normal opacity-80">· {reason.timeAgo}</span>
 														{/if}

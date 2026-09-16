@@ -38,9 +38,10 @@ export type SlaPolicyChange =
 const normalizedName = (name: string) => normalizeSearchText(name).replace(/\s+/g, '');
 
 const priorityLabels: Record<IncidentPriority, string> = {
-	low: 'Baja',
+	urgent: 'Urgente',
+	high: 'Alta',
 	medium: 'Media',
-	high: 'Alta'
+	low: 'Baja'
 };
 
 /**

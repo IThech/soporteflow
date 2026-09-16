@@ -1190,16 +1190,18 @@
 	let newCategoryId = $state('');
 	let newSiteId = $state('');
 
-	const priorityLabels = {
-		low: 'Baja',
+	const priorityLabels: Record<IncidentPriority, string> = {
+		urgent: 'Urgente',
+		high: 'Alta',
 		medium: 'Media',
-		high: 'Alta'
+		low: 'Baja'
 	};
 
-	const priorityClasses = {
-		low: 'text-slate-400',
+	const priorityClasses: Record<IncidentPriority, string> = {
+		urgent: 'text-purple-400',
+		high: 'text-rose-400',
 		medium: 'text-amber-400',
-		high: 'text-rose-400'
+		low: 'text-slate-400'
 	};
 
 	function updateIncidentStatus(id: number, event: Event) {
