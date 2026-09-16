@@ -87,6 +87,32 @@ test('Motor de SLA v1: políticas, precedencia, snapshots y evaluación dinámic
 			createdAt: '2026-09-01T08:00:00.000Z'
 		};
 
+		const priorityUrgentPolicy = {
+			id: 'sla-priority-urgent',
+			organizationId: orgId,
+			name: 'SLA Prioridad Urgente',
+			active: true,
+			isDefault: false,
+			categoryId: null,
+			priority: 'urgent',
+			firstResponseMinutes: 15, // 15m
+			resolutionMinutes: 120, // 2h
+			createdAt: '2026-09-01T08:03:00.000Z'
+		};
+
+		const categoryPriorityUrgentPolicy = {
+			id: 'sla-cat-network-priority-urgent',
+			organizationId: orgId,
+			name: 'SLA Redes Prioridad Urgente',
+			active: true,
+			isDefault: false,
+			categoryId: 'network',
+			priority: 'urgent',
+			firstResponseMinutes: 10, // 10m
+			resolutionMinutes: 60, // 1h
+			createdAt: '2026-09-01T08:12:00.000Z'
+		};
+
 		const baseIncident = {
 			id: 100,
 			organizationId: orgId,
@@ -94,6 +120,17 @@ test('Motor de SLA v1: políticas, precedencia, snapshots y evaluación dinámic
 			client: 'Cliente Demo',
 			status: 'open',
 			priority: 'high',
+			categoryId: 'network',
+			createdAt: '2026-09-10T08:00:00.000Z'
+		};
+
+		const urgentIncident = {
+			id: 102,
+			organizationId: orgId,
+			title: 'Caída general de fibra óptica',
+			client: 'Cliente Crítico',
+			status: 'open',
+			priority: 'urgent',
 			categoryId: 'network',
 			createdAt: '2026-09-10T08:00:00.000Z'
 		};
@@ -151,6 +188,58 @@ test('Motor de SLA v1: políticas, precedencia, snapshots y evaluación dinámic
 		await t.test('Comportamiento cuando no existe fallback ni coincidencia: devuelve null', () => {
 			const ticket = { ...baseIncident, categoryId: 'other', priority: 'low' };
 			const selected = matchSlaPolicy(ticket, [categoryPriorityPolicy]);
+			assert.equal(selected, null);
+		});
+
+		await t.test(
+			'Precedencia con prioridad urgent: Categoría + Urgente gana sobre las demás',
+			() => {
+				const allPolicies = [
+					fallbackPolicy,
+					priorityUrgentPolicy,
+					categoryNetworkPolicy,
+					categoryPriorityUrgentPolicy
+				];
+				const selected = matchSlaPolicy(urgentIncident, allPolicies);
+				assert.equal(selected?.id, 'sla-cat-network-priority-urgent');
+			}
+		);
+
+		await t.test(
+			'Precedencia con prioridad urgent: Categoría sola gana sobre Urgente sola y Fallback',
+			() => {
+				const policies = [fallbackPolicy, priorityUrgentPolicy, categoryNetworkPolicy];
+				const selected = matchSlaPolicy(urgentIncident, policies);
+				assert.equal(selected?.id, 'sla-cat-network');
+			}
+		);
+
+		await t.test('Precedencia con prioridad urgent: Urgente sola gana sobre Fallback', () => {
+			const policies = [fallbackPolicy, priorityUrgentPolicy];
+			const selected = matchSlaPolicy(urgentIncident, policies);
+			assert.equal(selected?.id, 'sla-priority-urgent');
+		});
+
+		await t.test(
+			'Garantía estricta de no-degradación: Incidencia urgente NUNCA selecciona una política high',
+			() => {
+				// Con fallback presente: debe seleccionar fallback, NO la política de prioridad high
+				const withFallback = [fallbackPolicy, priorityHighPolicy];
+				const selectedFallback = matchSlaPolicy(urgentIncident, withFallback);
+				assert.equal(selectedFallback?.id, 'sla-default');
+				assert.notEqual(selectedFallback?.id, 'sla-priority-high');
+
+				// Sin fallback presente: debe devolver null, NUNCA degradar a high
+				const withoutFallback = [priorityHighPolicy];
+				const selectedNone = matchSlaPolicy(urgentIncident, withoutFallback);
+				assert.equal(selectedNone, null);
+			}
+		);
+
+		await t.test('Incidencia urgente sin políticas aplicables devuelve null', () => {
+			const ticket = { ...urgentIncident, categoryId: 'software' };
+			const policies = [categoryNetworkPolicy, priorityHighPolicy];
+			const selected = matchSlaPolicy(ticket, policies);
 			assert.equal(selected, null);
 		});
 
@@ -227,6 +316,21 @@ test('Motor de SLA v1: políticas, precedencia, snapshots y evaluación dinámic
 				assert.equal(snapshot.resolutionMinutes, 240);
 				assert.equal(snapshot.firstResponseDueAt, '2026-09-10T08:30:00.000Z');
 				assert.equal(snapshot.resolutionDueAt, '2026-09-10T12:00:00.000Z');
+				assert.equal(snapshot.firstRespondedAt, null);
+				assert.equal(snapshot.resolvedAt, null);
+			}
+		);
+
+		await t.test(
+			'createSlaSnapshot para incidencia urgente congela compromisos específicos de la política urgente',
+			() => {
+				const snapshot = createSlaSnapshot(urgentIncident, priorityUrgentPolicy);
+				assert.equal(snapshot.policyId, priorityUrgentPolicy.id);
+				assert.equal(snapshot.policyName, priorityUrgentPolicy.name);
+				assert.equal(snapshot.firstResponseMinutes, 15);
+				assert.equal(snapshot.resolutionMinutes, 120);
+				assert.equal(snapshot.firstResponseDueAt, '2026-09-10T08:15:00.000Z');
+				assert.equal(snapshot.resolutionDueAt, '2026-09-10T10:00:00.000Z');
 				assert.equal(snapshot.firstRespondedAt, null);
 				assert.equal(snapshot.resolvedAt, null);
 			}
@@ -425,10 +529,18 @@ test('Motor de SLA v1: políticas, precedencia, snapshots y evaluación dinámic
 			assert.equal(isSlaPolicyList([{ ...fallbackPolicy, resolutionMinutes: -10 }]), false);
 			assert.equal(isSlaPolicyList([{ ...fallbackPolicy, priority: 'invalid_priority' }]), false);
 
+			// Política con prioridad urgent es válida
+			assert.equal(isSlaPolicyList([priorityUrgentPolicy]), true);
+			assert.equal(isSlaPolicyList([categoryPriorityUrgentPolicy]), true);
+
+			// Prioridad de clasificación interna 'critical' no se admite en políticas SLA
+			assert.equal(isSlaPolicyList([{ ...priorityUrgentPolicy, priority: 'critical' }]), false);
+
 			// Política default con categoryId no null es inválida
 			assert.equal(isSlaPolicyList([{ ...fallbackPolicy, categoryId: 'network' }]), false);
-			// Política default con priority no null es inválida
+			// Política default con priority no null es inválida (incluyendo high y urgent)
 			assert.equal(isSlaPolicyList([{ ...fallbackPolicy, priority: 'high' }]), false);
+			assert.equal(isSlaPolicyList([{ ...fallbackPolicy, priority: 'urgent' }]), false);
 			// Política default con categoryId y priority explícitamente null es válida
 			assert.equal(
 				isSlaPolicyList([{ ...fallbackPolicy, categoryId: null, priority: null }]),

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { createServer } from 'vite';
 
@@ -155,6 +156,63 @@ test('SLA v1 Bloque 4: Configuración administrativa de políticas por organizac
 					saveSlaPolicies(mockStorage, nextPolicies, 'old-desynced-snapshot');
 				}, /otra pestaña/);
 			});
+
+			await st.test(
+				'valid con urgent: catálogo con políticas urgentes se carga como valid y no corrupt',
+				() => {
+					const urgentPolicies = [
+						{
+							id: 'sla-urgent-1',
+							organizationId: orgA,
+							name: 'SLA Urgente Redes',
+							active: true,
+							isDefault: false,
+							categoryId: 'network',
+							priority: 'urgent',
+							firstResponseMinutes: 15,
+							resolutionMinutes: 60,
+							createdAt: '2026-09-10T10:00:00.000Z'
+						}
+					];
+					const raw = JSON.stringify(urgentPolicies);
+					const result = loadSlaPoliciesResult(raw);
+					assert.equal(result.status, 'valid');
+					assert.deepEqual(result.policies, urgentPolicies);
+				}
+			);
+
+			await st.test('catálogos históricos con prioridades existentes siguen siendo válidos', () => {
+				const legacyPolicies = [
+					{
+						id: 'sla-legacy-high',
+						organizationId: orgA,
+						name: 'SLA Histórico Alta',
+						active: true,
+						isDefault: false,
+						categoryId: null,
+						priority: 'high',
+						firstResponseMinutes: 60,
+						resolutionMinutes: 240,
+						createdAt: '2026-08-01T10:00:00.000Z'
+					},
+					{
+						id: 'sla-legacy-default',
+						organizationId: orgA,
+						name: 'SLA Histórico Fallback',
+						active: true,
+						isDefault: true,
+						categoryId: null,
+						priority: null,
+						firstResponseMinutes: 240,
+						resolutionMinutes: 1440,
+						createdAt: '2026-08-01T08:00:00.000Z'
+					}
+				];
+				const raw = JSON.stringify(legacyPolicies);
+				const result = loadSlaPoliciesResult(raw);
+				assert.equal(result.status, 'valid');
+				assert.deepEqual(result.policies, legacyPolicies);
+			});
 		});
 
 		// ==========================================
@@ -282,6 +340,55 @@ test('SLA v1 Bloque 4: Configuración administrativa de políticas por organizac
 				const orgBPolicy = { ...basePolicy, id: 'pol-org-b', organizationId: orgB };
 				const conflict = validatePolicyConflicts(orgBPolicy, [basePolicy]);
 				assert.equal(conflict, null);
+			});
+
+			await st.test('políticas con prioridad urgent validan conflictos de ámbito y default', () => {
+				const urgentPolicy1 = {
+					id: 'pol-urgent-1',
+					organizationId: orgA,
+					name: 'Urgente Redes',
+					active: true,
+					isDefault: false,
+					categoryId: 'network',
+					priority: 'urgent',
+					firstResponseMinutes: 15,
+					resolutionMinutes: 60,
+					createdAt: '2026-09-10T10:00:00.000Z'
+				};
+				const urgentPolicy2 = {
+					...urgentPolicy1,
+					id: 'pol-urgent-2',
+					name: 'Urgente Redes Duplicada'
+				};
+				const conflict = validatePolicyConflicts(urgentPolicy2, [urgentPolicy1]);
+				assert.ok(conflict && conflict.includes('mismo ámbito'));
+
+				// Duplicado de prioridad urgent sola
+				const prioUrgent1 = {
+					...urgentPolicy1,
+					id: 'pol-prio-urg-1',
+					name: 'Solo Urgente 1',
+					categoryId: null
+				};
+				const prioUrgent2 = {
+					...urgentPolicy1,
+					id: 'pol-prio-urg-2',
+					name: 'Solo Urgente 2',
+					categoryId: null
+				};
+				const conflictPrio = validatePolicyConflicts(prioUrgent2, [prioUrgent1]);
+				assert.ok(conflictPrio && conflictPrio.includes('mismo ámbito'));
+
+				// Política default no puede tener prioridad urgent
+				const invalidDefaultUrgent = {
+					...urgentPolicy1,
+					id: 'def-urgent',
+					isDefault: true,
+					categoryId: null,
+					priority: 'urgent'
+				};
+				const defaultConflict = validatePolicyConflicts(invalidDefaultUrgent, []);
+				assert.ok(defaultConflict && defaultConflict.includes('prioridad'));
 			});
 		});
 
@@ -422,6 +529,51 @@ test('SLA v1 Bloque 4: Configuración administrativa de políticas por organizac
 						id: 'foreign-pol'
 					});
 				}, /No puedes gestionar políticas de esta organización/);
+			});
+
+			await st.test('organization_admin crea y edita política con prioridad urgent', () => {
+				let list = [];
+				list = changeSlaPolicy(adminUser, list, {
+					type: 'save',
+					name: 'SLA Urgente General',
+					isDefault: false,
+					categoryId: null,
+					priority: 'urgent',
+					firstResponseMinutes: 15,
+					resolutionMinutes: 60
+				});
+				assert.equal(list.length, 1);
+				assert.equal(list[0].name, 'SLA Urgente General');
+				assert.equal(list[0].priority, 'urgent');
+				assert.equal(list[0].firstResponseMinutes, 15);
+
+				// Edición
+				list = changeSlaPolicy(adminUser, list, {
+					type: 'save',
+					id: list[0].id,
+					name: 'SLA Urgente Reducido',
+					isDefault: false,
+					categoryId: null,
+					priority: 'urgent',
+					firstResponseMinutes: 10,
+					resolutionMinutes: 45
+				});
+				assert.equal(list[0].name, 'SLA Urgente Reducido');
+				assert.equal(list[0].firstResponseMinutes, 10);
+			});
+
+			await st.test('usuario sin permiso sla:manage no puede crear política urgente', () => {
+				assert.throws(() => {
+					changeSlaPolicy(techUser, [], {
+						type: 'save',
+						name: 'Intento Técnico Urgente',
+						isDefault: false,
+						categoryId: null,
+						priority: 'urgent',
+						firstResponseMinutes: 10,
+						resolutionMinutes: 30
+					});
+				}, /No tienes permiso/);
 			});
 		});
 
@@ -588,6 +740,77 @@ test('SLA v1 Bloque 4: Configuración administrativa de políticas por organizac
 				}
 			);
 
+			await st.test(
+				'inmutabilidad con prioridad urgent: crear incidencia urgente, editar política y desactivarla',
+				() => {
+					const urgentPolicies = [
+						{
+							id: 'pol-urgent-fast',
+							organizationId: orgA,
+							name: 'SLA Urgente Rápido',
+							active: true,
+							isDefault: false,
+							categoryId: 'network',
+							priority: 'urgent',
+							firstResponseMinutes: 10,
+							resolutionMinutes: 45,
+							createdAt: '2026-09-10T10:00:00.000Z'
+						}
+					];
+
+					const draftUrgent = {
+						id: 998,
+						organizationId: orgA,
+						title: 'Corte crítico de fibra troncal',
+						client: 'Cliente Urgente',
+						description: 'Afectación masiva',
+						status: 'open',
+						priority: 'urgent',
+						categoryId: 'network',
+						createdAt: '2026-09-10T10:00:00.000Z'
+					};
+
+					// Creación de ticket urgente usando política urgente
+					const incident1 = applyCreationSla(draftUrgent, urgentPolicies);
+					assert.ok(incident1.sla);
+					assert.equal(incident1.sla.policyId, 'pol-urgent-fast');
+					assert.equal(incident1.sla.firstResponseMinutes, 10);
+					assert.equal(incident1.sla.resolutionMinutes, 45);
+					assert.equal(incident1.sla.firstResponseDueAt, '2026-09-10T10:10:00.000Z');
+					assert.equal(incident1.sla.resolutionDueAt, '2026-09-10T10:45:00.000Z');
+
+					// Mutación de la política (editar tiempos)
+					const updatedUrgentPolicies = changeSlaPolicy(adminUser, urgentPolicies, {
+						type: 'save',
+						id: 'pol-urgent-fast',
+						name: 'SLA Urgente Rápido Modificado',
+						isDefault: false,
+						categoryId: 'network',
+						priority: 'urgent',
+						firstResponseMinutes: 20,
+						resolutionMinutes: 90
+					});
+
+					// Garantía: el snapshot previo NO se modifica
+					assert.equal(incident1.sla.firstResponseMinutes, 10);
+					assert.equal(incident1.sla.resolutionMinutes, 45);
+
+					// Desactivar la política
+					const deactivated = changeSlaPolicy(adminUser, updatedUrgentPolicies, {
+						type: 'toggle',
+						id: 'pol-urgent-fast'
+					});
+
+					// El snapshot original sigue intacto
+					assert.equal(incident1.sla.firstResponseMinutes, 10);
+
+					// Nueva incidencia queda sin SLA si no hay otra política aplicable
+					const draftUrgent2 = { ...draftUrgent, id: 999 };
+					const incident2 = applyCreationSla(draftUrgent2, activeSlaPolicies(deactivated, orgA));
+					assert.equal(incident2.sla, undefined);
+				}
+			);
+
 			await st.test('A. catalog state valid con policies [] permite creación sin SLA', () => {
 				const draft = {
 					id: 995,
@@ -696,7 +919,33 @@ test('SLA v1 Bloque 4: Configuración administrativa de políticas por organizac
 
 				const prioOnlyPolicy = { isDefault: false, categoryId: null, priority: 'medium' };
 				assert.equal(formatSlaPolicyScope(prioOnlyPolicy, sampleCategories), 'Prioridad Media');
+
+				// Prioridad urgente sola
+				const prioUrgentPolicy = { isDefault: false, categoryId: null, priority: 'urgent' };
+				assert.equal(formatSlaPolicyScope(prioUrgentPolicy, sampleCategories), 'Prioridad Urgente');
+
+				// Categoría + Urgente
+				const catAndUrgentPolicy = {
+					isDefault: false,
+					categoryId: 'network',
+					priority: 'urgent'
+				};
+				assert.equal(formatSlaPolicyScope(catAndUrgentPolicy, sampleCategories), 'Redes + Urgente');
 			});
+
+			await st.test(
+				'el componente SlaPolicyManagement incluye la opción Urgente en el selector de prioridad',
+				() => {
+					const componentCode = readFileSync(
+						'src/lib/components/SlaPolicyManagement.svelte',
+						'utf-8'
+					);
+					assert.ok(
+						componentCode.includes('<option value="urgent">Urgente</option>'),
+						'SlaPolicyManagement debe incluir <option value="urgent">Urgente</option>'
+					);
+				}
+			);
 		});
 	} finally {
 		await server.close();

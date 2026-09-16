@@ -296,7 +296,7 @@ export function isSlaPolicyList(value: unknown): value is SlaPolicy[] {
 		if (
 			item.priority !== undefined &&
 			item.priority !== null &&
-			!['low', 'medium', 'high'].includes(item.priority)
+			!['low', 'medium', 'high', 'urgent'].includes(item.priority)
 		) {
 			return false;
 		}
