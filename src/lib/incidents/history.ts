@@ -14,6 +14,7 @@ const status = (v: unknown) =>
 	v === 'open' || v === 'pending' || v === 'resolved' || v === 'closed';
 const closureType = (v: unknown) => v === 'client_confirmed' || v === 'auto_closed';
 const priority = (v: unknown) => v === 'low' || v === 'medium' || v === 'high' || v === 'urgent';
+const impact = (v: unknown) => v === 'I1' || v === 'I2' || v === 'I3' || v === 'I4';
 const nullableId = (v: unknown) => v === null || text(v);
 const routing = (v: unknown) =>
 	object(v) &&
@@ -21,6 +22,41 @@ const routing = (v: unknown) =>
 		v.supportLevel === null ||
 		(typeof v.supportLevel === 'string' && v.supportLevel.trim().length > 0)) &&
 	['teamId', 'assignedToUserId'].every((key) => v[key] === undefined || nullableId(v[key]));
+
+const overrideRevokedValue = (v: unknown) =>
+	v === null ||
+	v === undefined ||
+	(object(v) &&
+		priority(v.previousTargetPriority) &&
+		(v.previousReason === undefined || text(v.previousReason)) &&
+		(v.previousAuthorizedBy === undefined || text(v.previousAuthorizedBy)));
+
+const reclassifiedValue = (v: unknown) =>
+	object(v) &&
+	nullableId(v.previousCategoryId) &&
+	text(v.newCategoryId) &&
+	nullableId(v.previousSubcategoryId) &&
+	text(v.newSubcategoryId) &&
+	(v.previousImpact === null || impact(v.previousImpact)) &&
+	impact(v.newImpact) &&
+	priority(v.previousCalculatedPriority) &&
+	priority(v.newCalculatedPriority) &&
+	priority(v.previousEffectivePriority) &&
+	priority(v.newEffectivePriority) &&
+	overrideRevokedValue(v.overrideRevoked);
+
+const priorityOverrideValue = (v: unknown) =>
+	object(v) &&
+	priority(v.calculatedPriority) &&
+	priority(v.previousEffectivePriority) &&
+	priority(v.newEffectivePriority);
+
+const MANDATORY_REASON_EVENTS = [
+	'reclassified',
+	'priority_override_applied',
+	'priority_override_modified',
+	'priority_override_removed'
+];
 
 function validValue(event: string, value: unknown): boolean {
 	if (value === undefined) return true;
@@ -64,6 +100,12 @@ function validValue(event: string, value: unknown): boolean {
 			);
 		case 'reopened':
 			return object(value) && value.status === 'open' && optionalText(value.reason);
+		case 'reclassified':
+			return reclassifiedValue(value);
+		case 'priority_override_applied':
+		case 'priority_override_modified':
+		case 'priority_override_removed':
+			return priorityOverrideValue(value);
 		default:
 			return false;
 	}
@@ -97,9 +139,15 @@ export function isIncidentHistory(value: unknown): value is IncidentHistoryEntry
 				'resolution_accepted',
 				'resolution_rejected',
 				'closed',
-				'reopened'
+				'reopened',
+				'reclassified',
+				'priority_override_applied',
+				'priority_override_modified',
+				'priority_override_removed'
 			].includes(entry.eventType) ||
-			!optionalText(entry.reason) ||
+			(MANDATORY_REASON_EVENTS.includes(entry.eventType)
+				? !text(entry.reason)
+				: !optionalText(entry.reason)) ||
 			!optionalText(entry.comment) ||
 			!validValue(entry.eventType, entry.previousValue) ||
 			!validValue(entry.eventType, entry.newValue)

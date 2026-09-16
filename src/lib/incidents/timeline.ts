@@ -118,5 +118,44 @@ export function describeHistoryEvent(
 				: `${actor} cerró la incidencia`;
 		case 'reopened':
 			return `${actor} reabrió la incidencia`;
+		case 'reclassified': {
+			if (!entry.newValue) return `${actor} reclasificó la incidencia`;
+			const prevCat = categoryName(entry.newValue.previousCategoryId);
+			const newCat = categoryName(entry.newValue.newCategoryId);
+			const newPrio =
+				priorities[entry.newValue.newEffectivePriority] || entry.newValue.newEffectivePriority;
+			if (entry.newValue.overrideRevoked) {
+				const revokedPrio =
+					priorities[entry.newValue.overrideRevoked.previousTargetPriority] ||
+					entry.newValue.overrideRevoked.previousTargetPriority;
+				return `${actor} reclasificó la incidencia de ${prevCat} a ${newCat}, restableciendo la prioridad calculada ${newPrio} y anulando el override previo (${revokedPrio})`;
+			}
+			return `${actor} reclasificó la incidencia de ${prevCat} a ${newCat} (prioridad calculada: ${newPrio})`;
+		}
+		case 'priority_override_applied': {
+			if (!entry.newValue) return `${actor} estableció una excepción de prioridad`;
+			const targetPrio =
+				priorities[entry.newValue.newEffectivePriority] || entry.newValue.newEffectivePriority;
+			const calcPrio =
+				priorities[entry.newValue.calculatedPriority] || entry.newValue.calculatedPriority;
+			return `${actor} estableció una excepción de prioridad a ${targetPrio} (prioridad calculada: ${calcPrio})`;
+		}
+		case 'priority_override_modified': {
+			if (!entry.newValue) return `${actor} modificó la excepción de prioridad`;
+			const prevPrio =
+				priorities[entry.newValue.previousEffectivePriority] ||
+				entry.newValue.previousEffectivePriority;
+			const nextPrio =
+				priorities[entry.newValue.newEffectivePriority] || entry.newValue.newEffectivePriority;
+			const calcPrio =
+				priorities[entry.newValue.calculatedPriority] || entry.newValue.calculatedPriority;
+			return `${actor} modificó la excepción de prioridad de ${prevPrio} a ${nextPrio} (prioridad calculada: ${calcPrio})`;
+		}
+		case 'priority_override_removed': {
+			if (!entry.newValue) return `${actor} retiró la excepción de prioridad`;
+			const restoredPrio =
+				priorities[entry.newValue.newEffectivePriority] || entry.newValue.newEffectivePriority;
+			return `${actor} retiró la excepción de prioridad, restableciendo la prioridad calculada ${restoredPrio}`;
+		}
 	}
 }

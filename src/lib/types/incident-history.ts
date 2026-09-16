@@ -1,11 +1,36 @@
 import type { Incident, IncidentClosureType, IncidentPriority, IncidentStatus } from './incident';
 import type { SupportLevel } from './support';
+import type { ImpactLevel } from './classification';
 
 // Null means explicitly unassigned; an absent property means not recorded.
 export interface IncidentRoutingSnapshot {
 	supportLevel?: SupportLevel | null;
 	teamId?: string | null;
 	assignedToUserId?: string | null;
+}
+
+export interface ReclassificationHistoryValues {
+	previousCategoryId: string | null;
+	newCategoryId: string;
+	previousSubcategoryId: string | null;
+	newSubcategoryId: string;
+	previousImpact: ImpactLevel | null;
+	newImpact: ImpactLevel;
+	previousCalculatedPriority: IncidentPriority;
+	newCalculatedPriority: IncidentPriority;
+	previousEffectivePriority: IncidentPriority;
+	newEffectivePriority: IncidentPriority;
+	overrideRevoked?: {
+		previousTargetPriority: IncidentPriority;
+		previousReason?: string;
+		previousAuthorizedBy?: string;
+	} | null;
+}
+
+export interface PriorityOverrideHistoryValues {
+	calculatedPriority: IncidentPriority;
+	previousEffectivePriority: IncidentPriority;
+	newEffectivePriority: IncidentPriority;
 }
 
 type HistoryValues = {
@@ -22,6 +47,10 @@ type HistoryValues = {
 	resolution_rejected: { status: 'open'; comment: string };
 	closed: { status: 'closed'; closedAt: string; closureType: IncidentClosureType };
 	reopened: { status: 'open'; reason?: string };
+	reclassified: ReclassificationHistoryValues;
+	priority_override_applied: PriorityOverrideHistoryValues;
+	priority_override_modified: PriorityOverrideHistoryValues;
+	priority_override_removed: PriorityOverrideHistoryValues;
 };
 
 export type IncidentHistoryEventType = keyof HistoryValues;

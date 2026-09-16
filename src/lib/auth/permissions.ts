@@ -11,7 +11,9 @@ export type Permission =
 	| 'incidents:create'
 	| 'incidents:edit'
 	| 'incidents:assign'
-	| 'incidents:delete';
+	| 'incidents:delete'
+	| 'incidents:classify'
+	| 'incidents:override_priority';
 
 export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 	platform_admin: [
@@ -25,7 +27,9 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 		'incidents:create',
 		'incidents:edit',
 		'incidents:assign',
-		'incidents:delete'
+		'incidents:delete',
+		'incidents:classify',
+		'incidents:override_priority'
 	],
 	organization_admin: [
 		'organization:manage',
@@ -36,9 +40,17 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 		'incidents:create',
 		'incidents:edit',
 		'incidents:assign',
-		'incidents:delete'
+		'incidents:delete',
+		'incidents:classify',
+		'incidents:override_priority'
 	],
-	technician: ['incidents:view_all', 'incidents:create', 'incidents:edit', 'incidents:assign'],
+	technician: [
+		'incidents:view_all',
+		'incidents:create',
+		'incidents:edit',
+		'incidents:assign',
+		'incidents:classify'
+	],
 	client: ['incidents:view_own', 'incidents:create']
 };
 
