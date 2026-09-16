@@ -501,11 +501,11 @@ test('Fase 2D.1 — Carga de catálogos V2, sincronización y validaciones', asy
 			});
 
 			await t.test(
-				'Restricciones estrictas: No añade selectores ni modifica formulario en 2D.1',
+				'Restricciones de fase: En 2D.2 se integran selectores de subcategoría e impacto',
 				() => {
-					assert.ok(!source.includes('newSubcategoryId'));
-					assert.ok(!source.includes('newImpact'));
-					assert.ok(!source.includes('classificationPreview'));
+					assert.ok(source.includes('newSubcategoryId'));
+					assert.ok(source.includes('newImpact'));
+					assert.ok(source.includes('classificationPreview'));
 				}
 			);
 		});

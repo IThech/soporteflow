@@ -5,6 +5,17 @@ import type { SlaPolicy } from '$lib/types/sla';
 import type { IncidentMessage } from '$lib/types/incident-message';
 import type { AppUser } from '$lib/types/user';
 import type { IncidentHistoryEntry, IncidentHistoryEventType } from '$lib/types/incident-history';
+import type { IncidentCategory } from '$lib/types/category';
+import type {
+	ClassificationResult,
+	ImpactLevel,
+	PriorityMatrix,
+	Subcategory
+} from '$lib/types/classification';
+import { resolveCategoryRouting } from '$lib/categories/catalog';
+import { classifyIncident, isImpactLevel, toIncidentPriority } from '$lib/classification/engine';
+import { resolveOrganizationMatrix } from '$lib/classification/matrix-catalog';
+import { isIncidentList } from './validation';
 
 /**
  * Applies initial SLA to an incident draft upon creation.
@@ -186,4 +197,174 @@ export function isIncidentReopened(incident: Incident, history?: IncidentHistory
 	// Fallback when history is not available:
 	// In the lifecycle, reopening preserves historical resolvedAt while resetting closedAt.
 	return incident.status === 'open' && incident.resolvedAt != null;
+}
+
+export interface ValidateAndBuildV2IncidentInput {
+	id: number;
+	title: string;
+	client: string;
+	description: string;
+	siteId?: string | null;
+	activeUser: AppUser;
+	categoryId: string;
+	subcategoryId: string;
+	impact: ImpactLevel | string;
+	categoryList: IncidentCategory[];
+	subcategories: Subcategory[];
+	priorityMatrices: PriorityMatrix[];
+	slaPolicies?: SlaPolicy[];
+}
+
+export type ValidateAndBuildV2IncidentResult =
+	| { ok: true; incident: Incident; classification: ClassificationResult }
+	| { ok: false; error: string };
+
+/**
+ * Validates all preconditions and builds a fully classified V2 Incident.
+ * Reuses existing domain modules and strict schema validators.
+ */
+export function validateAndBuildV2Incident(
+	input: ValidateAndBuildV2IncidentInput
+): ValidateAndBuildV2IncidentResult {
+	if (!input.activeUser || typeof input.activeUser !== 'object') {
+		return { ok: false, error: 'Usuario no autenticado o contexto de usuario inválido.' };
+	}
+
+	const orgId = input.activeUser.organizationId;
+	if (!orgId || typeof orgId !== 'string' || orgId.trim().length === 0) {
+		return { ok: false, error: 'El usuario no tiene una organización asignada.' };
+	}
+
+	const cleanTitle = typeof input.title === 'string' ? input.title.trim() : '';
+	const cleanClient =
+		input.activeUser.role === 'client'
+			? input.activeUser.name
+			: typeof input.client === 'string'
+				? input.client.trim()
+				: '';
+	const cleanDescription = typeof input.description === 'string' ? input.description.trim() : '';
+
+	if (!cleanTitle || !cleanClient || !cleanDescription) {
+		return {
+			ok: false,
+			error: 'Completa el título, el cliente y la descripción del problema.'
+		};
+	}
+
+	const categoryId = typeof input.categoryId === 'string' ? input.categoryId.trim() : '';
+	if (!categoryId) {
+		return { ok: false, error: 'Selecciona una categoría obligatoria.' };
+	}
+
+	const matchedCat = input.categoryList.find(
+		(c) => c.id === categoryId && (c.organizationId ? c.organizationId === orgId : true)
+	);
+	if (!matchedCat) {
+		return {
+			ok: false,
+			error: 'La categoría seleccionada no existe o no pertenece a tu organización.'
+		};
+	}
+	if (!matchedCat.active) {
+		return { ok: false, error: 'La categoría seleccionada está inactiva.' };
+	}
+
+	const subcategoryId = typeof input.subcategoryId === 'string' ? input.subcategoryId.trim() : '';
+	if (!subcategoryId) {
+		return { ok: false, error: 'Selecciona una subcategoría obligatoria.' };
+	}
+
+	const matchedSubcat = input.subcategories.find(
+		(s) => s.id === subcategoryId && s.organizationId === orgId
+	);
+	if (!matchedSubcat) {
+		return {
+			ok: false,
+			error: 'La subcategoría no existe o no pertenece a tu organización.'
+		};
+	}
+	if (matchedSubcat.categoryId !== matchedCat.id) {
+		return {
+			ok: false,
+			error: 'La subcategoría no pertenece a la categoría seleccionada.'
+		};
+	}
+	if (!matchedSubcat.active) {
+		return { ok: false, error: 'La subcategoría seleccionada está inactiva.' };
+	}
+
+	if (!isImpactLevel(input.impact)) {
+		return {
+			ok: false,
+			error: 'Selecciona un nivel de impacto válido (I1 a I4).'
+		};
+	}
+
+	let resolvedMatrixResult;
+	try {
+		resolvedMatrixResult = resolveOrganizationMatrix(input.priorityMatrices, orgId);
+	} catch (err) {
+		return {
+			ok: false,
+			error: err instanceof Error ? err.message : 'Error al resolver la matriz de prioridad.'
+		};
+	}
+
+	if (resolvedMatrixResult.status === 'corrupt') {
+		return {
+			ok: false,
+			error: resolvedMatrixResult.error || 'El catálogo de matrices de prioridad está corrupto.'
+		};
+	}
+
+	let classificationResult: ClassificationResult;
+	try {
+		classificationResult = classifyIncident({
+			subcategory: matchedSubcat,
+			impact: input.impact,
+			matrix: resolvedMatrixResult.matrix
+		});
+	} catch (err) {
+		return {
+			ok: false,
+			error: err instanceof Error ? err.message : 'Error al clasificar la incidencia.'
+		};
+	}
+
+	const operationalPriority = toIncidentPriority(classificationResult.effectivePriority);
+	const categoryRouting = resolveCategoryRouting(matchedCat);
+
+	const draft: Incident = {
+		id: input.id,
+		organizationId: orgId,
+		createdByUserId: input.activeUser.id,
+		...(input.activeUser.role === 'client' ? { clientUserId: input.activeUser.id } : {}),
+		title: cleanTitle,
+		client: cleanClient,
+		description: cleanDescription,
+		solution: '',
+		status: 'open',
+		priority: operationalPriority,
+		createdAt: new Date().toISOString(),
+		siteId: input.siteId ? input.siteId : null,
+		categoryId: matchedCat.id,
+		subcategoryId: matchedSubcat.id,
+		classification: classificationResult.snapshot,
+		...categoryRouting
+	};
+
+	const incidentWithSla = input.slaPolicies ? applyCreationSla(draft, input.slaPolicies) : draft;
+
+	if (!isIncidentList([incidentWithSla])) {
+		return {
+			ok: false,
+			error: 'Error interno: la incidencia generada no supera las validaciones de esquema.'
+		};
+	}
+
+	return {
+		ok: true,
+		incident: incidentWithSla,
+		classification: classificationResult
+	};
 }

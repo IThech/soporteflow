@@ -153,15 +153,21 @@
 	import {
 		SUBCATEGORIES_STORAGE_KEY,
 		loadSubcategoriesResult,
-		initializeSubcategoriesCatalog
+		initializeSubcategoriesCatalog,
+		getAvailableSubcategories
 	} from '$lib/classification/subcategories-catalog';
 	import {
 		PRIORITY_MATRICES_STORAGE_KEY,
-		loadPriorityMatricesResult
+		loadPriorityMatricesResult,
+		resolveOrganizationMatrix
 	} from '$lib/classification/matrix-catalog';
+	import { classifyIncident, isImpactLevel, toIncidentPriority } from '$lib/classification/engine';
 	import type {
 		SubcategoryLoadResult,
-		PriorityMatricesCatalogLoadResult
+		PriorityMatricesCatalogLoadResult,
+		ImpactLevel,
+		ClassificationResult,
+		PriorityMatrixLoadResult
 	} from '$lib/types/classification';
 
 	import DemoSessionSelector from '$lib/components/DemoSessionSelector.svelte';
@@ -332,6 +338,8 @@
 		siteChangeIncident = null;
 		siteChangeError = '';
 		newCategoryId = '';
+		newSubcategoryId = '';
+		newImpact = '';
 		newSiteId = '';
 		categorySaveError = '';
 		userSaveError = '';
@@ -340,7 +348,6 @@
 		title = '';
 		client = '';
 		description = '';
-		priority = 'medium';
 		searchQuery = '';
 		selectedStatus = user.role === 'technician' ? 'active' : 'all';
 		selectedQueue = validQueue(user, 'all');
@@ -382,7 +389,6 @@
 	let title = $state('');
 	let client = $state('');
 	let description = $state('');
-	let priority = $state<IncidentPriority>('medium');
 
 	const STORAGE_KEY = INCIDENTS_KEY;
 
@@ -686,24 +692,17 @@
 	let slaPolicyError = $state('');
 	let slaPolicySnapshot: string | null = null;
 
-	// Prepared for Phase 2D.2 (form integration and classification preview)
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	let subcategoriesState = $state<SubcategoryLoadResult>({ status: 'missing', subcategories: [] });
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	let subcategoriesReady = $state(false);
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	let subcategoriesError = $state('');
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	let subcategoriesSnapshot: string | null = null;
 
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	let priorityMatricesState = $state<PriorityMatricesCatalogLoadResult>({
 		status: 'missing',
 		matrices: []
 	});
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	let priorityMatricesReady = $state(false);
-	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	let priorityMatricesError = $state('');
 	// eslint-disable-next-line @typescript-eslint/no-unused-vars
 	let priorityMatricesSnapshot: string | null = null;
@@ -1297,7 +1296,95 @@
 
 	let isFormOpen = $state(false);
 	let newCategoryId = $state('');
+	let newSubcategoryId = $state('');
+	let newImpact = $state<ImpactLevel | ''>('');
 	let newSiteId = $state('');
+
+	const activeOrgId = $derived(activeUser.organizationId ?? demoOrganization.id);
+	const selectedCategory = $derived(
+		newCategoryId
+			? categoryList.find(
+					(c) => c.id === newCategoryId && c.active && canAccessRecord(activeUser, c)
+				)
+			: undefined
+	);
+	const availableSubcategories = $derived(
+		subcategoriesReady && subcategoriesState.status === 'valid' && selectedCategory
+			? getAvailableSubcategories(
+					subcategoriesState.subcategories,
+					categoryList,
+					activeOrgId,
+					selectedCategory.id
+				)
+			: []
+	);
+	const selectedSubcategory = $derived(
+		newSubcategoryId ? availableSubcategories.find((s) => s.id === newSubcategoryId) : undefined
+	);
+
+	const matrixResult = $derived.by<PriorityMatrixLoadResult | null>(() => {
+		if (!priorityMatricesReady) return null;
+		if (priorityMatricesState.status === 'corrupt') {
+			return {
+				status: 'corrupt',
+				error: priorityMatricesError || 'El catálogo de matrices de prioridad está corrupto.'
+			};
+		}
+		try {
+			return resolveOrganizationMatrix(priorityMatricesState.matrices, activeOrgId);
+		} catch (err) {
+			return {
+				status: 'corrupt',
+				error: err instanceof Error ? err.message : 'Error al resolver la matriz de prioridad.'
+			};
+		}
+	});
+
+	const classificationPreview = $derived.by<ClassificationResult | null>(() => {
+		if (!selectedSubcategory || !newImpact || !isImpactLevel(newImpact)) {
+			return null;
+		}
+		if (!matrixResult || matrixResult.status === 'corrupt') {
+			return null;
+		}
+		try {
+			return classifyIncident({
+				subcategory: selectedSubcategory,
+				impact: newImpact,
+				matrix: matrixResult.matrix
+			});
+		} catch {
+			return null;
+		}
+	});
+
+	const calculatedOperationalPriority = $derived(
+		classificationPreview ? toIncidentPriority(classificationPreview.effectivePriority) : null
+	);
+
+	const isCreationV2Valid = $derived(
+		!!title.trim() &&
+			!!(activeUser.role === 'client' ? activeUser.name : client.trim()) &&
+			!!description.trim() &&
+			!!newCategoryId &&
+			!!selectedCategory &&
+			!!newSubcategoryId &&
+			!!selectedSubcategory &&
+			!!newImpact &&
+			isImpactLevel(newImpact) &&
+			subcategoriesReady &&
+			subcategoriesState.status === 'valid' &&
+			priorityMatricesReady &&
+			priorityMatricesState.status !== 'corrupt' &&
+			matrixResult?.status !== 'corrupt' &&
+			calculatedOperationalPriority !== null
+	);
+
+	$effect(() => {
+		if (newSubcategoryId && !availableSubcategories.some((s) => s.id === newSubcategoryId)) {
+			newSubcategoryId = '';
+		}
+	});
 
 	const priorityLabels: Record<IncidentPriority, string> = {
 		urgent: 'Urgente',
@@ -1426,6 +1513,83 @@
 			return;
 		}
 
+		if (!subcategoriesReady || subcategoriesState.status === 'corrupt') {
+			window.alert(
+				subcategoriesError ||
+					'El catálogo de subcategorías no está disponible o contiene datos corruptos. No se puede crear la incidencia.'
+			);
+			return;
+		}
+
+		if (!priorityMatricesReady || priorityMatricesState.status === 'corrupt') {
+			window.alert(
+				priorityMatricesError ||
+					'El catálogo de matrices de prioridad no está disponible o contiene datos corruptos. No se puede crear la incidencia.'
+			);
+			return;
+		}
+
+		if (!newCategoryId) {
+			window.alert('Selecciona una categoría obligatoria.');
+			return;
+		}
+		const matchedCat = categoryList.find(
+			(c) => c.id === newCategoryId && c.active && canAccessRecord(activeUser, c)
+		);
+		if (!matchedCat) {
+			window.alert(
+				'La categoría seleccionada no es válida, no pertenece a tu organización o está inactiva.'
+			);
+			return;
+		}
+
+		if (!newSubcategoryId) {
+			window.alert('Selecciona una subcategoría obligatoria.');
+			return;
+		}
+		const matchedSubcat = subcategoriesState.subcategories.find(
+			(s) => s.id === newSubcategoryId && s.organizationId === orgId
+		);
+		if (!matchedSubcat) {
+			window.alert('La subcategoría seleccionada no existe o no pertenece a tu organización.');
+			return;
+		}
+		if (matchedSubcat.categoryId !== matchedCat.id) {
+			window.alert('La subcategoría no pertenece a la categoría seleccionada.');
+			return;
+		}
+		if (!matchedSubcat.active) {
+			window.alert('La subcategoría seleccionada está inactiva.');
+			return;
+		}
+
+		if (!newImpact || !isImpactLevel(newImpact)) {
+			window.alert('Selecciona un nivel de impacto obligatorio (I1 a I4).');
+			return;
+		}
+
+		const resolvedMatrix = resolveOrganizationMatrix(priorityMatricesState.matrices, orgId);
+		if (resolvedMatrix.status === 'corrupt') {
+			window.alert(resolvedMatrix.error);
+			return;
+		}
+
+		let classificationRes: ClassificationResult;
+		try {
+			classificationRes = classifyIncident({
+				subcategory: matchedSubcat,
+				impact: newImpact,
+				matrix: resolvedMatrix.matrix
+			});
+		} catch (err) {
+			window.alert(
+				err instanceof Error ? err.message : 'Error al calcular la clasificación de la incidencia.'
+			);
+			return;
+		}
+
+		const operationalPriority = toIncidentPriority(classificationRes.effectivePriority);
+
 		// Retained messages must never attach to a new incident that reuses a deleted ID.
 		let messageIncidentIds: number[];
 		try {
@@ -1446,7 +1610,6 @@
 				...messageIncidentIds
 			) + 1;
 
-		const matchedCat = newCategoryId ? categoryList.find((c) => c.id === newCategoryId) : undefined;
 		const categoryRouting = resolveCategoryRouting(matchedCat);
 
 		const draft: Incident = {
@@ -1459,21 +1622,32 @@
 			description: cleanDescription,
 			solution: '',
 			status: 'open',
-			priority,
+			priority: operationalPriority,
 			createdAt: new Date().toISOString(),
 			siteId: newSiteId ? newSiteId : null,
+			categoryId: matchedCat.id,
+			subcategoryId: matchedSubcat.id,
+			classification: classificationRes.snapshot,
 			...categoryRouting
 		};
 
-		incidentList.unshift(applyCreationSla(draft, slaCheck.policies));
+		const incidentWithSla = applyCreationSla(draft, slaCheck.policies);
+
+		if (!isIncidentList([incidentWithSla])) {
+			window.alert('Error interno al validar los datos de la incidencia creada.');
+			return;
+		}
+
+		incidentList.unshift(incidentWithSla);
 
 		saveIncidents();
 
 		title = '';
 		client = '';
 		description = '';
-		priority = 'medium';
 		newCategoryId = '';
+		newSubcategoryId = '';
+		newImpact = '';
 		newSiteId = '';
 		isFormOpen = false;
 	}
@@ -2204,14 +2378,18 @@
 
 				<div>
 					<label for="new-category" class="mb-2 block text-sm font-medium text-slate-300">
-						Categoría
+						Categoría <span class="text-rose-400">*</span>
 					</label>
 					<select
 						id="new-category"
 						bind:value={newCategoryId}
+						onchange={() => {
+							newSubcategoryId = '';
+						}}
+						required
 						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
 					>
-						<option value="">Sin categoría</option>
+						<option value="">Selecciona una categoría</option>
 						{#each categoryList.filter((c) => c.active && canAccessRecord(activeUser, c)) as cat (cat.id)}
 							<option value={cat.id}>{cat.name}</option>
 						{/each}
@@ -2235,6 +2413,63 @@
 				</div>
 
 				<div>
+					<label for="new-subcategory" class="mb-2 block text-sm font-medium text-slate-300">
+						Subcategoría <span class="text-rose-400">*</span>
+					</label>
+					{#if subcategoriesState.status === 'corrupt'}
+						<div
+							class="rounded-lg border border-rose-500/50 bg-rose-950/30 p-3 text-xs text-rose-300"
+						>
+							{subcategoriesError ||
+								'Catálogo de subcategorías corrupto. Se ha bloqueado la creación.'}
+						</div>
+					{:else}
+						<select
+							id="new-subcategory"
+							bind:value={newSubcategoryId}
+							disabled={!newCategoryId || availableSubcategories.length === 0}
+							required
+							class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{#if !newCategoryId}
+								<option value="">Selecciona primero una categoría</option>
+							{:else if availableSubcategories.length === 0}
+								<option value="">No hay subcategorías activas disponibles</option>
+							{:else}
+								<option value="">Selecciona una subcategoría</option>
+								{#each availableSubcategories as sub (sub.id)}
+									<option value={sub.id}>{sub.name}</option>
+								{/each}
+							{/if}
+						</select>
+						{#if newCategoryId && availableSubcategories.length === 0}
+							<p class="mt-1.5 text-xs text-amber-400">
+								Esta categoría no dispone de subcategorías activas configuradas para tu
+								organización.
+							</p>
+						{/if}
+					{/if}
+				</div>
+
+				<div>
+					<label for="new-impact" class="mb-2 block text-sm font-medium text-slate-300">
+						Impacto <span class="text-rose-400">*</span>
+					</label>
+					<select
+						id="new-impact"
+						bind:value={newImpact}
+						required
+						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+					>
+						<option value="">Selecciona el impacto</option>
+						<option value="I1">I1 — Una persona.</option>
+						<option value="I2">I2 — Varias personas.</option>
+						<option value="I3">I3 — Equipo o departamento.</option>
+						<option value="I4">I4 — Sede u organización completa.</option>
+					</select>
+				</div>
+
+				<div>
 					<label for="new-site" class="mb-2 block text-sm font-medium text-slate-300">
 						Sede / Ubicación
 					</label>
@@ -2251,18 +2486,36 @@
 				</div>
 
 				<div>
-					<label for="priority" class="mb-2 block text-sm font-medium text-slate-300">
-						Prioridad
-					</label>
-					<select
-						id="priority"
-						bind:value={priority}
-						class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
-					>
-						<option value="low">Baja</option>
-						<option value="medium">Media</option>
-						<option value="high">Alta</option>
-					</select>
+					<span class="mb-2 block text-sm font-medium text-slate-300">
+						Prioridad calculada (automática)
+					</span>
+					{#if priorityMatricesState.status === 'corrupt'}
+						<div
+							class="rounded-lg border border-rose-500/50 bg-rose-950/30 p-3 text-xs text-rose-300"
+						>
+							{priorityMatricesError ||
+								'Catálogo de matrices de prioridad corrupto. No se puede calcular la prioridad.'}
+						</div>
+					{:else if calculatedOperationalPriority}
+						<div
+							class="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900/80 px-4 py-3"
+						>
+							<span class="text-sm font-semibold {priorityClasses[calculatedOperationalPriority]}">
+								{priorityLabels[calculatedOperationalPriority]}
+							</span>
+							{#if classificationPreview?.snapshot?.minPriorityApplied}
+								<span class="text-xs text-amber-400">
+									Elevada por prioridad mínima de la subcategoría
+								</span>
+							{/if}
+						</div>
+					{:else}
+						<div
+							class="rounded-lg border border-dashed border-slate-700 bg-slate-950 px-4 py-3 text-sm text-slate-500"
+						>
+							Pendiente de clasificación (selecciona subcategoría e impacto)
+						</div>
+					{/if}
 				</div>
 
 				<div class="flex justify-end gap-3 pt-2">
@@ -2276,7 +2529,8 @@
 
 					<button
 						type="submit"
-						class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400"
+						disabled={!isCreationV2Valid}
+						class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
 					>
 						Crear incidencia
 					</button>
