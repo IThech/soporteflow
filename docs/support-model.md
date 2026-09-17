@@ -188,3 +188,20 @@ Sus acciones reutilizan los diálogos existentes. Los datos de gestión se deriv
 de la incidencia guardada: al transferirla desaparecen inmediatamente los controles
 del técnico anterior, sin borrar su borrador de título, descripción o solución.
 El guardado de ese borrador conserva el destino operativo más reciente.
+
+## Consolidación de edición y cambios de estado
+
+El selector de estado y el formulario de edición usan `commitIncidentEdit`, que reutiliza
+`commitAssignment` sin añadir transacciones ni diarios nuevos. La interfaz se actualiza
+solo tras guardar incidencia e historial. Ante error mantiene datos visibles y borrador;
+el selector vuelve al estado guardado. Solo después se intenta generar la notificación.
+
+Una transición a resuelta emite solo `resolved`; volver de resuelta/cerrada a abierta
+emite `reopened`; las demás transiciones admitidas emiten `status_changed`. Volver a
+pendiente utiliza este último, pues el esquema existente de reopened solo admite open.
+Guardar sin cambio de estado no genera evento de estado ni notificación de transición.
+No se cierra manualmente: confirmación de cliente y auto-cierre siguen en sus flujos.
+Se mantienen permisos incidents:edit, aislamiento, reglas de solución y compatibilidad
+V1/V2. El motor y los compromisos SLA no cambian. No se modifica eliminación ni notas.
+Si también falla la recuperación de una escritura, se conserva el diario existente y se
+debe recargar para recuperar; no se permite escribir encima de una recuperación pendiente.

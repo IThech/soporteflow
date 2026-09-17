@@ -18,3 +18,15 @@ reales; estos puntos se documentan, no se implementan en esta pasada.
 Las pruebas existentes ya cubren permisos, motivos, colas, escalado, recuperación
 y tema. No se propone sustituirlas: deben conservarse y complementarse donde no
 alcanzan. La separación conceptual modular se describe en `product-architecture.md`.
+
+## Consolidación del selector de estado y formulario de edición
+
+`updateIncidentStatus` y `saveEditedIncident` preparan datos sin mutar la lista visible,
+guardan incidencia e historial mediante `commitAssignment` y actualizan memoria después.
+Los fallos conservan el borrador; no se notifica una transición fallida. Un error posterior
+de notificación no invalida el guardado. Creación y estos dos flujos ya no forman parte
+de la deuda de mutación previa descrita en la tabla antigua. Eliminación queda pendiente.
+Se registran resolved/reopened/status_changed sin duplicar resolución ni crear eventos
+de estado cuando no cambia. No se inventa historial retroactivo. La auditoría de cambios
+de texto o prioridad V1 sin transición sigue fuera de este bloque, así como el backend.
+Persisten las limitaciones de localStorage, entrega de notificaciones y recuperación 2E.3.

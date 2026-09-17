@@ -97,11 +97,11 @@
 		buildCreatedHistoryEntry,
 		recordStatusTransition,
 		isIncidentReopened,
-		resolveEditedIncidentPriority,
 		reclassifyIncident,
 		applyPriorityOverride,
 		removePriorityOverride
 	} from '$lib/incidents/lifecycle';
+	import { commitIncidentEdit, type IncidentEditChange } from '$lib/storage/incident-edit';
 	import { demoSupportTeams } from '$lib/data/teams';
 	import { demoSupportLevels } from '$lib/data/support-levels';
 	import type { SupportLevelDefinition, SupportTeam } from '$lib/types/support';
@@ -1664,70 +1664,74 @@
 		low: 'text-priority-low'
 	};
 
+	function persistIncidentEdit(original: Incident, change: IncidentEditChange): boolean {
+		let result;
+		try {
+			result = commitIncidentEdit(
+				localStorage,
+				activeUser,
+				original,
+				change,
+				incidentList,
+				history,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+		} catch (error) {
+			window.alert(
+				error instanceof Error ? error.message : 'No se pudo guardar. Tu borrador se conserva.'
+			);
+			return false;
+		}
+		incidentList = result.incidents;
+		history = result.history;
+		storedIncidentSnapshot = JSON.stringify(result.incidents);
+		storedHistorySnapshot = JSON.stringify(result.history);
+		// Notifications are secondary: failure here must not undo or misreport a confirmed save.
+		if (result.notificationInput) {
+			try {
+				const notification = buildIncidentNotification(result.notificationInput);
+				if (notification && !notificationsReady) {
+					notificationError =
+						'La incidencia se ha guardado, pero las notificaciones no están disponibles.';
+				} else recordNotification(notification);
+			} catch {
+				notificationError =
+					'La incidencia se ha guardado, pero no se pudo generar la notificación.';
+			}
+		}
+		return true;
+	}
+
 	function updateIncidentStatus(id: number, event: Event) {
 		const select = event.currentTarget as HTMLSelectElement;
 		const status = select.value as IncidentStatus;
 		const incident = incidentList.find((item) => item.id === id);
-
-		if (!incident || incidentLoadError || !canActOnIncident(activeUser, incident, 'incidents:edit'))
-			return;
-
-		// Closed status cannot be manually selected
-		if (status === 'closed') {
+		if (!incident) return;
+		if (
+			incidentLoadError ||
+			!canActOnIncident(activeUser, incident, 'incidents:edit') ||
+			status === 'closed' ||
+			status === incident.status ||
+			!['open', 'pending', 'resolved'].includes(status)
+		) {
 			select.value = incident.status;
 			return;
 		}
-
 		const missingDescription = !incident.description?.trim();
 		const missingSolution = status === 'resolved' && !incident.solution?.trim();
-
 		if (missingDescription || missingSolution) {
 			select.value = incident.status;
-
 			window.alert(
 				missingDescription
 					? 'Completa la descripción del problema antes de cambiar el estado.'
 					: 'Para resolver esta incidencia, indica la solución aplicada.'
 			);
-
 			openEditIncident(id);
-
-			if (editingIncident) {
-				editingIncident.status = status;
-			}
-
+			if (editingIncident) editingIncident.status = status;
 			return;
 		}
-
-		const oldStatus = incident.status;
-		let updatedItem: Incident | undefined;
-
-		incidentList = incidentList.map((item) => {
-			if (item.id === id) {
-				updatedItem = recordStatusTransition(item, status);
-				return updatedItem;
-			}
-			return item;
-		});
-
-		saveIncidents();
-
-		if (oldStatus !== status && updatedItem) {
-			let notifType: NotificationType = 'incident_status_changed';
-			if (status === 'resolved') {
-				notifType = 'incident_resolved';
-			} else if (oldStatus === 'resolved' || oldStatus === 'closed') {
-				notifType = 'incident_reopened';
-			}
-			const notif = buildIncidentNotification({
-				type: notifType,
-				incident: updatedItem,
-				actor: activeUser,
-				previousStatus: oldStatus,
-				nextStatus: status
-			});
-			recordNotification(notif);
-		}
+		if (!persistIncidentEdit(incident, { kind: 'status', status })) select.value = incident.status;
 	}
 
 	function deleteIncident(id: number) {
@@ -1965,78 +1969,11 @@
 
 	function saveEditedIncident(event: SubmitEvent) {
 		event.preventDefault();
-
 		if (!editingIncident || incidentLoadError) return;
 		const editingId = editingIncident.id;
 		const original = incidentList.find((item) => item.id === editingId);
-		if (!original || !canActOnIncident(activeUser, original, 'incidents:edit')) return;
-		const editedPriority = resolveEditedIncidentPriority(original, editingIncident.priority);
-
-		let updatedIncident: Incident = {
-			...original,
-			priority: editedPriority,
-			status: editingIncident.status,
-			title: editingIncident.title.trim(),
-			client: editingIncident.client.trim(),
-			description: (editingIncident.description ?? '').trim(),
-			solution: (editingIncident.solution ?? '').trim()
-		};
-
-		if (!updatedIncident.title || !updatedIncident.client) {
-			window.alert('Completa el título y el cliente.');
-			return;
-		}
-
-		if (!updatedIncident.description) {
-			window.alert('Describe el problema antes de guardar la incidencia.');
-			return;
-		}
-
-		if (updatedIncident.status === 'resolved' && !updatedIncident.solution) {
-			window.alert('Para resolver esta incidencia, indica qué hiciste y cuál fue el resultado.');
-			return;
-		}
-
-		const statusChanged = original.status !== editingIncident.status;
-		const previousStatus = original.status;
-
-		if (statusChanged) {
-			const transitioned = recordStatusTransition(original, editingIncident.status);
-			updatedIncident = {
-				...transitioned,
-				priority: editedPriority,
-				title: editingIncident.title.trim(),
-				client: editingIncident.client.trim(),
-				description: (editingIncident.description ?? '').trim(),
-				solution: (editingIncident.solution ?? '').trim()
-			};
-		}
-
-		incidentList = incidentList.map((incident) =>
-			incident.id === updatedIncident.id ? updatedIncident : incident
-		);
-
-		saveIncidents();
-
-		if (statusChanged) {
-			let notifType: NotificationType = 'incident_status_changed';
-			if (editingIncident.status === 'resolved') {
-				notifType = 'incident_resolved';
-			} else if (editingIncident.status === 'closed') {
-				notifType = 'incident_closed';
-			} else if (previousStatus === 'resolved' || previousStatus === 'closed') {
-				notifType = 'incident_reopened';
-			}
-			const notif = buildIncidentNotification({
-				type: notifType,
-				incident: updatedIncident,
-				actor: activeUser,
-				previousStatus,
-				nextStatus: editingIncident.status
-			});
-			recordNotification(notif);
-		}
-
+		if (!original) return;
+		if (!persistIncidentEdit(original, { kind: 'edit', draft: editingIncident })) return;
 		editingIncident = null;
 		refreshMessages();
 	}
