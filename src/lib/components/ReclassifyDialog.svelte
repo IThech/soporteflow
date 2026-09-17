@@ -117,10 +117,10 @@
 	};
 
 	const priorityBadgeClasses: Record<IncidentPriority, string> = {
-		urgent: 'border-purple-500/40 bg-purple-950/50 text-purple-300',
-		high: 'border-red-500/40 bg-red-950/50 text-red-300',
-		medium: 'border-yellow-500/40 bg-yellow-950/50 text-yellow-300',
-		low: 'border-emerald-500/40 bg-emerald-950/50 text-emerald-300'
+		urgent: 'badge-priority-urgent',
+		high: 'badge-priority-high',
+		medium: 'badge-priority-medium',
+		low: 'badge-priority-low'
 	};
 
 	function show(dialog: HTMLDialogElement) {
@@ -191,12 +191,9 @@
 		{/if}
 
 		{#if hasPreviousOverride}
-			<div
-				role="alert"
-				class="rounded-xl border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-300"
-			>
+			<div role="alert" class="box-override-remove-notice rounded-xl p-3 text-xs">
 				<p class="font-semibold">Aviso: override activo previo</p>
-				<p class="mt-1 text-amber-200/90">
+				<p class="mt-1">
 					Esta incidencia cuenta actualmente con una excepción de prioridad a <strong
 						>{priorityLabels[incident.priority] || incident.priority}</strong
 					>. Al reclasificar, el override se retirará automáticamente y la prioridad operativa
@@ -283,7 +280,7 @@
 						{priorityLabels[previewPriority]}
 					</span>
 					{#if classificationPreview?.snapshot?.minPriorityApplied}
-						<span class="font-medium text-amber-300">
+						<span class="text-priority-medium font-medium">
 							(Elevada por prioridad mínima de la subcategoría)
 						</span>
 					{/if}

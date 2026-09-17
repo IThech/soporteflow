@@ -38,10 +38,10 @@
 	};
 
 	const priorityBadgeClasses: Record<IncidentPriority, string> = {
-		urgent: 'border-purple-500/40 bg-purple-950/50 text-purple-300',
-		high: 'border-red-500/40 bg-red-950/50 text-red-300',
-		medium: 'border-yellow-500/40 bg-yellow-950/50 text-yellow-300',
-		low: 'border-emerald-500/40 bg-emerald-950/50 text-emerald-300'
+		urgent: 'badge-priority-urgent',
+		high: 'badge-priority-high',
+		medium: 'badge-priority-medium',
+		low: 'badge-priority-low'
 	};
 
 	const isTargetDifferent = $derived(
@@ -152,7 +152,7 @@
 					</span>
 					{#if hasActiveOverride}
 						<span
-							class="rounded-full border border-purple-500/40 bg-purple-950/40 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-purple-300 uppercase"
+							class="badge-override-active rounded-full px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase"
 						>
 							Override
 						</span>
@@ -162,11 +162,9 @@
 		</div>
 
 		{#if hasActiveOverride && incident.classification?.overrideReason}
-			<div
-				class="rounded-xl border border-purple-500/30 bg-purple-950/20 p-3 text-xs text-purple-200"
-			>
+			<div class="box-override-detail rounded-xl p-3 text-xs">
 				<p class="font-semibold">Detalle del override actual:</p>
-				<p class="mt-0.5 text-slate-300 italic">"{incident.classification.overrideReason}"</p>
+				<p class="mt-0.5 italic opacity-90">"{incident.classification.overrideReason}"</p>
 			</div>
 		{/if}
 
@@ -185,7 +183,7 @@
 					type="button"
 					onclick={() => (isRemoveMode = true)}
 					class="flex-1 rounded-lg py-1.5 font-medium transition {isRemoveMode
-						? 'border border-amber-500/40 bg-amber-950/60 text-amber-300 shadow-xs'
+						? 'tab-override-remove-active shadow-xs'
 						: 'text-slate-400 hover:text-slate-200'}"
 				>
 					Restablecer calculada (Quitar)
@@ -194,10 +192,10 @@
 		{/if}
 
 		{#if isRemoveMode}
-			<div class="rounded-xl border border-amber-500/30 bg-amber-950/20 p-3 text-xs text-amber-300">
+			<div class="box-override-remove-notice rounded-xl p-3 text-xs">
 				Se retirará la excepción de prioridad y la incidencia volverá a operar con su prioridad
 				calculada original:
-				<strong class="text-amber-200"> {priorityLabels[calculatedPriority]}</strong>.
+				<strong class="font-bold"> {priorityLabels[calculatedPriority]}</strong>.
 			</div>
 		{:else}
 			<div>
@@ -251,7 +249,7 @@
 				type="submit"
 				disabled={!isSubmittable}
 				class="rounded-xl px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 {isRemoveMode
-					? 'bg-amber-500 text-slate-950 hover:bg-amber-400'
+					? 'btn-override-remove-submit'
 					: 'bg-cyan-500 text-slate-950 hover:bg-cyan-400'}"
 			>
 				{isRemoveMode ? 'Retirar excepción y restablecer' : 'Guardar excepción de prioridad'}

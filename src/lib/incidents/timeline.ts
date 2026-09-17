@@ -120,17 +120,42 @@ export function describeHistoryEvent(
 			return `${actor} reabrió la incidencia`;
 		case 'reclassified': {
 			if (!entry.newValue) return `${actor} reclasificó la incidencia`;
-			const prevCat = categoryName(entry.newValue.previousCategoryId);
-			const newCat = categoryName(entry.newValue.newCategoryId);
-			const newPrio =
-				priorities[entry.newValue.newEffectivePriority] || entry.newValue.newEffectivePriority;
-			if (entry.newValue.overrideRevoked) {
-				const revokedPrio =
-					priorities[entry.newValue.overrideRevoked.previousTargetPriority] ||
-					entry.newValue.overrideRevoked.previousTargetPriority;
-				return `${actor} reclasificó la incidencia de ${prevCat} a ${newCat}, restableciendo la prioridad calculada ${newPrio} y anulando el override previo (${revokedPrio})`;
+			const val = entry.newValue;
+			const changes: string[] = [];
+
+			if (val.previousCategoryId !== val.newCategoryId) {
+				const prevCat = categoryName(val.previousCategoryId);
+				const newCat = categoryName(val.newCategoryId);
+				changes.push(`categoría de ${prevCat} a ${newCat}`);
 			}
-			return `${actor} reclasificó la incidencia de ${prevCat} a ${newCat} (prioridad calculada: ${newPrio})`;
+
+			if (val.previousSubcategoryId !== val.newSubcategoryId) {
+				const prevSub = val.previousSubcategoryId ?? 'Sin subcategoría';
+				const newSub = val.newSubcategoryId;
+				changes.push(`subcategoría de ${prevSub} a ${newSub}`);
+			}
+
+			if (val.previousImpact !== val.newImpact) {
+				const prevImp = val.previousImpact ?? 'Sin impacto';
+				const newImp = val.newImpact;
+				changes.push(`impacto de ${prevImp} a ${newImp}`);
+			}
+
+			const detail =
+				changes.length > 0
+					? changes.join(', ')
+					: `categoría de ${categoryName(val.previousCategoryId)} a ${categoryName(val.newCategoryId)}`;
+
+			const newPrio = priorities[val.newEffectivePriority] || val.newEffectivePriority;
+
+			if (val.overrideRevoked) {
+				const revokedPrio =
+					priorities[val.overrideRevoked.previousTargetPriority] ||
+					val.overrideRevoked.previousTargetPriority;
+				return `${actor} reclasificó la incidencia (${detail}), restableciendo la prioridad calculada ${newPrio} y anulando el override previo (${revokedPrio})`;
+			}
+
+			return `${actor} reclasificó la incidencia (${detail}, prioridad calculada: ${newPrio})`;
 		}
 		case 'priority_override_applied': {
 			if (!entry.newValue) return `${actor} estableció una excepción de prioridad`;

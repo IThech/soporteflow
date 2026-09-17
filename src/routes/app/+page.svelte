@@ -96,7 +96,10 @@
 		buildCreatedHistoryEntry,
 		recordStatusTransition,
 		isIncidentReopened,
-		resolveEditedIncidentPriority
+		resolveEditedIncidentPriority,
+		reclassifyIncident,
+		applyPriorityOverride,
+		removePriorityOverride
 	} from '$lib/incidents/lifecycle';
 	import { demoSupportTeams } from '$lib/data/teams';
 	import { demoSupportLevels } from '$lib/data/support-levels';
@@ -115,6 +118,8 @@
 	import { demoSites } from '$lib/data/sites';
 	import type { Site } from '$lib/types/site';
 	import ChangeSiteDialog from '$lib/components/ChangeSiteDialog.svelte';
+	import ReclassifyDialog from '$lib/components/ReclassifyDialog.svelte';
+	import OverridePriorityDialog from '$lib/components/OverridePriorityDialog.svelte';
 	import { changeIncidentSite } from '$lib/sites/incident-site';
 	import { USERS_STORAGE_KEY, loadUsersResult, saveUsers } from '$lib/users/catalog';
 	import SlaBadge from '$lib/components/SlaBadge.svelte';
@@ -337,6 +342,10 @@
 		assignmentError = '';
 		classificationIncident = null;
 		classificationError = '';
+		reclassifyIncidentTarget = null;
+		reclassifyError = '';
+		overrideIncidentTarget = null;
+		overrideError = '';
 		siteChangeIncident = null;
 		siteChangeError = '';
 		newCategoryId = '';
@@ -686,6 +695,241 @@
 				error instanceof Error ? error.message : 'No se pudo guardar la asignación.';
 		}
 	}
+
+	let reclassifyIncidentTarget = $state<Incident | null>(null);
+	let reclassifyError = $state('');
+
+	function openReclassify(incident: Incident) {
+		if (
+			!assignmentReady ||
+			incidentLoadError ||
+			!canActOnIncident(activeUser, incident, 'incidents:classify') ||
+			(incident.status !== 'open' && incident.status !== 'pending')
+		) {
+			return;
+		}
+		reclassifyError = '';
+		reclassifyIncidentTarget = incident;
+	}
+
+	function confirmReclassify(input: {
+		newCategoryId: string;
+		newSubcategoryId: string;
+		newImpact: ImpactLevel;
+		reason: string;
+	}) {
+		if (!assignmentReady || incidentLoadError || !reclassifyIncidentTarget) return;
+		const id = reclassifyIncidentTarget.id;
+		const original = incidentList.find((i) => i.id === id);
+		if (!original) {
+			reclassifyError = 'La incidencia ya no existe.';
+			return;
+		}
+
+		const res = reclassifyIncident({
+			incident: original,
+			actorUser: activeUser,
+			newCategoryId: input.newCategoryId,
+			newSubcategoryId: input.newSubcategoryId,
+			newImpact: input.newImpact,
+			reason: input.reason,
+			categoryList,
+			subcategories: subcategoriesState.status === 'valid' ? subcategoriesState.subcategories : [],
+			priorityMatrices:
+				priorityMatricesState.status === 'valid' ? priorityMatricesState.matrices : []
+		});
+
+		if (!res.ok) {
+			reclassifyError = res.error;
+			return;
+		}
+
+		const nextList = incidentList.map((item) => (item.id === id ? res.incident : item));
+		const nextHistory = [...history, res.historyEntry];
+
+		try {
+			commitAssignment(
+				localStorage,
+				nextList,
+				nextHistory,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+			incidentList = nextList;
+			history = nextHistory;
+			storedIncidentSnapshot = JSON.stringify(nextList);
+			storedHistorySnapshot = JSON.stringify(nextHistory);
+			if (editingIncident && editingIncident.id === id) {
+				editingIncident = {
+					...res.incident,
+					description: res.incident.description ?? '',
+					solution: res.incident.solution ?? ''
+				};
+			}
+			reclassifyIncidentTarget = null;
+			reclassifyError = '';
+		} catch (err) {
+			reclassifyError =
+				err instanceof Error
+					? err.message
+					: 'Error al persistir la reclasificación. Comprueba si los datos cambiaron en otra pestaña.';
+		}
+	}
+
+	let overrideIncidentTarget = $state<Incident | null>(null);
+	let overrideError = $state('');
+
+	function openOverride(incident: Incident) {
+		if (
+			!assignmentReady ||
+			incidentLoadError ||
+			!canActOnIncident(activeUser, incident, 'incidents:override_priority') ||
+			(incident.status !== 'open' && incident.status !== 'pending')
+		) {
+			return;
+		}
+		overrideError = '';
+		overrideIncidentTarget = incident;
+	}
+
+	function confirmApplyOverride(input: { targetPriority: IncidentPriority; reason: string }) {
+		if (!assignmentReady || incidentLoadError || !overrideIncidentTarget) return;
+		const id = overrideIncidentTarget.id;
+		const original = incidentList.find((i) => i.id === id);
+		if (!original) {
+			overrideError = 'La incidencia ya no existe.';
+			return;
+		}
+
+		const res = applyPriorityOverride({
+			incident: original,
+			actorUser: activeUser,
+			targetPriority: input.targetPriority,
+			reason: input.reason
+		});
+
+		if (!res.ok) {
+			overrideError = res.error;
+			return;
+		}
+
+		const nextList = incidentList.map((item) => (item.id === id ? res.incident : item));
+		const nextHistory = [...history, res.historyEntry];
+
+		try {
+			commitAssignment(
+				localStorage,
+				nextList,
+				nextHistory,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+			incidentList = nextList;
+			history = nextHistory;
+			storedIncidentSnapshot = JSON.stringify(nextList);
+			storedHistorySnapshot = JSON.stringify(nextHistory);
+			if (editingIncident && editingIncident.id === id) {
+				editingIncident = {
+					...res.incident,
+					description: res.incident.description ?? '',
+					solution: res.incident.solution ?? ''
+				};
+			}
+			overrideIncidentTarget = null;
+			overrideError = '';
+		} catch (err) {
+			overrideError =
+				err instanceof Error
+					? err.message
+					: 'Error al persistir la excepción de prioridad. Comprueba si los datos cambiaron en otra pestaña.';
+		}
+	}
+
+	function confirmRemoveOverride(input: { reason: string }) {
+		if (!assignmentReady || incidentLoadError || !overrideIncidentTarget) return;
+		const id = overrideIncidentTarget.id;
+		const original = incidentList.find((i) => i.id === id);
+		if (!original) {
+			overrideError = 'La incidencia ya no existe.';
+			return;
+		}
+
+		const res = removePriorityOverride({
+			incident: original,
+			actorUser: activeUser,
+			reason: input.reason
+		});
+
+		if (!res.ok) {
+			overrideError = res.error;
+			return;
+		}
+
+		const nextList = incidentList.map((item) => (item.id === id ? res.incident : item));
+		const nextHistory = [...history, res.historyEntry];
+
+		try {
+			commitAssignment(
+				localStorage,
+				nextList,
+				nextHistory,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+			incidentList = nextList;
+			history = nextHistory;
+			storedIncidentSnapshot = JSON.stringify(nextList);
+			storedHistorySnapshot = JSON.stringify(nextHistory);
+			if (editingIncident && editingIncident.id === id) {
+				editingIncident = {
+					...res.incident,
+					description: res.incident.description ?? '',
+					solution: res.incident.solution ?? ''
+				};
+			}
+			overrideIncidentTarget = null;
+			overrideError = '';
+		} catch (err) {
+			overrideError =
+				err instanceof Error
+					? err.message
+					: 'Error al retirar la excepción de prioridad. Comprueba si los datos cambiaron en otra pestaña.';
+		}
+	}
+
+	function getSubcategoryInfo(
+		subcatId?: string | null,
+		orgId?: string
+	): { name: string; baseCriticality?: string } | null {
+		if (!subcatId) return null;
+		const subcats = subcategoriesState.status === 'valid' ? subcategoriesState.subcategories : [];
+		const found = subcats.find((s) => s.id === subcatId && (!orgId || s.organizationId === orgId));
+		if (found) {
+			return { name: found.name, baseCriticality: found.baseCriticality };
+		}
+		return { name: subcatId };
+	}
+
+	const impactLabels: Record<string, string> = {
+		I1: 'I1 — Una persona',
+		I2: 'I2 — Varias personas',
+		I3: 'I3 — Equipo o departamento',
+		I4: 'I4 — Sede u organización completa'
+	};
+
+	const criticalityLabels: Record<string, string> = {
+		critical: 'Crítica (C1)',
+		high: 'Alta (C2)',
+		medium: 'Media (C3)',
+		low: 'Baja (C4)'
+	};
+
+	const priorityBadgeClasses: Record<IncidentPriority, string> = {
+		urgent: 'badge-priority-urgent',
+		high: 'badge-priority-high',
+		medium: 'badge-priority-medium',
+		low: 'badge-priority-low'
+	};
 
 	let now = $state(new Date());
 
@@ -1396,10 +1640,10 @@
 	};
 
 	const priorityClasses: Record<IncidentPriority, string> = {
-		urgent: 'text-purple-400',
-		high: 'text-rose-400',
-		medium: 'text-amber-400',
-		low: 'text-slate-400'
+		urgent: 'text-priority-urgent',
+		high: 'text-priority-high',
+		medium: 'text-priority-medium',
+		low: 'text-priority-low'
 	};
 
 	function updateIncidentStatus(id: number, event: Event) {
@@ -2156,14 +2400,20 @@
 					<table aria-label="Incidencias" class="incident-list w-full text-left">
 						<thead class="text-xs text-slate-500 uppercase">
 							<tr class="border-b border-slate-800">
-								<th scope="col" class="px-6 py-4 font-medium">Incidencia</th>
-								<th scope="col" class="px-6 py-4 font-medium">Cliente</th>
+								<th scope="col" class="min-w-[200px] px-6 py-4 font-medium">Incidencia</th>
+								<th scope="col" class="min-w-[120px] px-6 py-4 font-medium">Cliente</th>
 								<th scope="col" class="px-6 py-4 font-medium">Categoría</th>
 								<th scope="col" class="px-6 py-4 font-medium">Nivel</th>
-								<th scope="col" class="px-6 py-4 font-medium">Prioridad</th>
-								<th scope="col" class="px-6 py-4 font-medium">SLA</th>
-								<th scope="col" class="px-6 py-4 font-medium">Estado</th>
-								<th scope="col" class="px-6 py-4 font-medium">Fecha</th>
+								<th scope="col" class="min-w-[120px] px-6 py-4 font-medium whitespace-nowrap"
+									>Prioridad</th
+								>
+								<th scope="col" class="min-w-[130px] px-6 py-4 font-medium whitespace-nowrap"
+									>SLA</th
+								>
+								<th scope="col" class="min-w-[120px] px-6 py-4 font-medium whitespace-nowrap"
+									>Estado</th
+								>
+								<th scope="col" class="px-6 py-4 font-medium whitespace-nowrap">Fecha</th>
 							</tr>
 						</thead>
 
@@ -2213,7 +2463,7 @@
 										{categoryName(incident)}
 									</td>
 
-									<td class="incident-level px-6 py-4 text-sm">
+									<td class="incident-level px-6 py-4 text-sm whitespace-nowrap">
 										<span class="mobile-field-label" aria-hidden="true">Nivel</span>
 										{#if incident.supportLevel}
 											<span
@@ -2228,18 +2478,28 @@
 
 									<td
 										role="cell"
-										class={`px-6 py-4 text-sm font-medium ${priorityClasses[incident.priority]}`}
+										class={`px-6 py-4 text-sm font-medium whitespace-nowrap ${priorityClasses[incident.priority]}`}
 									>
-										<span class="mobile-field-label" aria-hidden="true">Prioridad</span
-										>{priorityLabels[incident.priority]}
+										<span class="mobile-field-label" aria-hidden="true">Prioridad</span>
+										<span class="inline-flex items-center gap-1.5 whitespace-nowrap">
+											{priorityLabels[incident.priority]}
+											{#if incident.classification?.hasOverride}
+												<span
+													class="badge-override-table rounded-full px-1.5 py-0.5 text-[10px] font-bold tracking-wider uppercase"
+													title="Override de prioridad activo"
+												>
+													Override
+												</span>
+											{/if}
+										</span>
 									</td>
 
-									<td class="incident-sla px-6 py-4 text-sm">
+									<td class="incident-sla px-6 py-4 text-sm whitespace-nowrap">
 										<span class="mobile-field-label" aria-hidden="true">SLA</span>
-										<div class="flex flex-wrap items-center gap-1.5">
+										<div class="flex items-center gap-1.5 whitespace-nowrap">
 											{#if isIncidentReopened(incident, history)}
 												<span
-													class="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 text-xs font-bold tracking-wide text-rose-400 uppercase shadow-xs"
+													class="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 text-xs font-bold tracking-wide whitespace-nowrap text-rose-400 uppercase shadow-xs"
 													data-testid="reopened-badge"
 												>
 													<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-500"></span>
@@ -2250,7 +2510,7 @@
 										</div>
 									</td>
 
-									<td class="incident-state px-6 py-4"
+									<td class="incident-state px-6 py-4 whitespace-nowrap"
 										><span class="mobile-field-label" aria-hidden="true">Estado</span>
 										{#if incident.status === 'closed'}
 											<span
@@ -2275,7 +2535,7 @@
 											>{/if}
 									</td>
 
-									<td class="incident-date px-6 py-4 text-sm text-slate-500"
+									<td class="incident-date px-6 py-4 text-sm whitespace-nowrap text-slate-500"
 										><span class="mobile-field-label" aria-hidden="true">Fecha</span>
 										{new Date(incident.createdAt).toLocaleDateString('es-ES')}
 									</td>
@@ -2654,25 +2914,41 @@
 						<p class="text-sm text-slate-400">
 							Categoría: {categoryName(managedIncident ?? editingIncident)}
 						</p>
-						<div class="grid grid-cols-2 gap-3">
+						<div class="grid grid-cols-2 items-start gap-3">
 							<div>
 								{#if editingIncident.classification}
-									<span class="mb-2 block text-sm font-medium text-slate-300">
-										Prioridad calculada
-									</span>
-									<div
-										class="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-4 py-3 text-slate-300"
+									<label
+										for="edit-priority-display"
+										class="incident-field-label mb-2 block text-sm font-medium text-slate-300"
 									>
-										{priorityLabels[editingIncident.priority]}
+										Prioridad {editingIncident.classification.hasOverride
+											? 'operativa'
+											: 'calculada'}
+									</label>
+									<div
+										id="edit-priority-display"
+										class="incident-field-control flex w-full items-center justify-between rounded-lg border border-slate-700 bg-slate-950/60 text-sm text-slate-300"
+									>
+										<span>{priorityLabels[editingIncident.priority]}</span>
+										{#if editingIncident.classification.hasOverride}
+											<span
+												class="badge-override-active rounded-full px-2 py-0.5 text-xs leading-none font-bold uppercase"
+											>
+												Override
+											</span>
+										{/if}
 									</div>
 								{:else}
-									<label for="edit-priority" class="mb-2 block text-sm font-medium text-slate-300">
+									<label
+										for="edit-priority"
+										class="incident-field-label mb-2 block text-sm font-medium text-slate-300"
+									>
 										Prioridad
 									</label>
 									<select
 										id="edit-priority"
 										bind:value={editingIncident.priority}
-										class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+										class="incident-field-control flex w-full items-center rounded-lg border border-slate-700 bg-slate-950 text-sm text-white outline-none focus:border-cyan-400"
 									>
 										<option value="low">Baja</option>
 										<option value="medium">Media</option>
@@ -2683,21 +2959,27 @@
 							</div>
 
 							<div>
-								<label for="edit-status" class="mb-2 block text-sm font-medium text-slate-300">
+								<label
+									for="edit-status"
+									class="incident-field-label mb-2 block text-sm font-medium text-slate-300"
+								>
 									Estado
 								</label>
 								{#if editingIncident.status === 'closed'}
 									<div
-										class="flex h-[50px] items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 px-4 text-xs text-slate-300"
+										id="edit-status-display"
+										class="incident-field-control flex w-full items-center gap-2 rounded-lg border border-slate-700 bg-slate-950 text-xs text-slate-300"
 									>
-										<span class="h-2 w-2 rounded-full bg-slate-400"></span>
-										<span>Cerrada (confirmada por cliente o auto-cierre tras 24 h)</span>
+										<span class="h-2 w-2 shrink-0 rounded-full bg-slate-400"></span>
+										<span class="truncate"
+											>Cerrada (confirmada por cliente o auto-cierre tras 24 h)</span
+										>
 									</div>
 								{:else}
 									<select
 										id="edit-status"
 										bind:value={editingIncident.status}
-										class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-cyan-400"
+										class="incident-field-control flex w-full items-center rounded-lg border border-slate-700 bg-slate-950 text-sm text-white outline-none focus:border-cyan-400"
 									>
 										<option value="open">Abierta</option>
 										<option value="pending">Pendiente</option>
@@ -3048,7 +3330,7 @@
 											>Asignarme</button
 										>
 									{/if}
-									{#if canEscalate(activeUser, managedIncident)}
+									{#if !managedIncident.classification && canEscalate(activeUser, managedIncident)}
 										<button
 											type="button"
 											onclick={() => openClassification(managedIncident)}
@@ -3067,6 +3349,157 @@
 								{/if}
 							</div>
 						</section>
+						{#if managedIncident.classification}
+							{@const subcatInfo = getSubcategoryInfo(
+								managedIncident.subcategoryId,
+								managedIncident.organizationId
+							)}
+							{@const calculatedPrio = toIncidentPriority(
+								managedIncident.classification.calculatedPriority
+							)}
+							{@const authorizedByUser = managedIncident.classification.overrideAuthorizedBy
+								? userList.find(
+										(u) => u.id === managedIncident.classification?.overrideAuthorizedBy
+									)
+								: null}
+							<section
+								aria-labelledby="incident-v2-classification-title"
+								class="incident-v2-classification space-y-3 rounded-xl border border-slate-700 p-4"
+							>
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<h3
+										id="incident-v2-classification-title"
+										class="text-base font-semibold text-white"
+									>
+										Clasificación y Prioridad V2
+									</h3>
+									{#if managedIncident.classification.hasOverride}
+										<span
+											class="badge-override-active inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold tracking-wider uppercase"
+										>
+											Override activo
+										</span>
+									{/if}
+								</div>
+
+								<dl class="grid gap-3 text-sm sm:grid-cols-2">
+									<div>
+										<dt class="text-xs text-slate-400">Categoría</dt>
+										<dd class="mt-0.5 font-medium text-slate-200">
+											{categoryName(managedIncident)}
+										</dd>
+									</div>
+									<div>
+										<dt class="text-xs text-slate-400">Subcategoría</dt>
+										<dd class="mt-0.5 font-medium text-slate-200">
+											{subcatInfo?.name || managedIncident.subcategoryId || 'Sin subcategoría'}
+											{#if subcatInfo?.baseCriticality}
+												<span class="text-xs text-slate-400">
+													({criticalityLabels[subcatInfo.baseCriticality] ??
+														subcatInfo.baseCriticality})
+												</span>
+											{/if}
+										</dd>
+									</div>
+									<div>
+										<dt class="text-xs text-slate-400">Impacto</dt>
+										<dd class="mt-0.5 font-medium text-slate-200">
+											{impactLabels[managedIncident.classification.impactLevel] ??
+												managedIncident.classification.impactLevel}
+										</dd>
+									</div>
+									<div>
+										<dt class="text-xs text-slate-400">Prioridad calculada base</dt>
+										<dd class="mt-0.5">
+											<span
+												class="inline-flex items-center rounded-lg border px-2 py-0.5 text-xs font-semibold {priorityBadgeClasses[
+													calculatedPrio
+												]}"
+											>
+												{priorityLabels[calculatedPrio]}
+											</span>
+											{#if managedIncident.classification.minPriorityApplied}
+												<span class="text-priority-medium ml-1 text-[11px] font-medium"
+													>(Mín. aplicada)</span
+												>
+											{/if}
+										</dd>
+									</div>
+									<div class="sm:col-span-2">
+										<dt class="text-xs text-slate-400">Prioridad operativa actual</dt>
+										<dd class="mt-0.5 flex items-center gap-2">
+											<span
+												class="inline-flex items-center rounded-lg border px-2 py-0.5 text-xs font-semibold {priorityBadgeClasses[
+													managedIncident.priority
+												]}"
+											>
+												{priorityLabels[managedIncident.priority]}
+											</span>
+											{#if managedIncident.classification.hasOverride}
+												<span class="text-priority-urgent text-xs font-medium">
+													(Excepción manual autorizada)
+												</span>
+											{/if}
+										</dd>
+									</div>
+								</dl>
+
+								{#if managedIncident.classification.hasOverride}
+									<div class="box-override-detail rounded-lg p-3 text-xs">
+										<div class="flex items-center justify-between">
+											<span class="font-semibold text-inherit">Detalle de la excepción:</span>
+											{#if managedIncident.classification.overrideAuthorizedBy}
+												<span class="text-slate-400">
+													Autorizado por: <strong class="text-slate-200"
+														>{authorizedByUser?.name ||
+															managedIncident.classification.overrideAuthorizedBy}</strong
+													>
+												</span>
+											{/if}
+										</div>
+										{#if managedIncident.classification.overrideReason}
+											<p class="mt-1 text-slate-300 italic">
+												"{managedIncident.classification.overrideReason}"
+											</p>
+										{/if}
+									</div>
+								{/if}
+
+								{#if managedIncident.status === 'resolved'}
+									{#if canActOnIncident(activeUser, managedIncident, 'incidents:classify') || canActOnIncident(activeUser, managedIncident, 'incidents:override_priority')}
+										<p
+											class="rounded-lg border border-amber-500/30 bg-amber-950/20 p-2.5 text-xs text-amber-300"
+										>
+											Para reclasificar o gestionar excepciones de prioridad, la incidencia debe ser
+											reabierta previamente.
+										</p>
+									{/if}
+								{:else if managedIncident.status === 'open' || managedIncident.status === 'pending'}
+									<div class="flex flex-wrap gap-2 pt-1">
+										{#if canActOnIncident(activeUser, managedIncident, 'incidents:classify')}
+											<button
+												type="button"
+												onclick={() => openReclassify(managedIncident)}
+												class="btn-reclassify-action rounded-lg px-3 py-1.5 text-xs font-semibold shadow-xs"
+											>
+												Reclasificar
+											</button>
+										{/if}
+										{#if canActOnIncident(activeUser, managedIncident, 'incidents:override_priority')}
+											<button
+												type="button"
+												onclick={() => openOverride(managedIncident)}
+												class="btn-override-action rounded-lg px-3 py-1.5 text-xs font-medium transition"
+											>
+												{managedIncident.classification.hasOverride
+													? 'Modificar excepción'
+													: 'Excepción de prioridad'}
+											</button>
+										{/if}
+									</div>
+								{/if}
+							</section>
+						{/if}
 						<IncidentSlaPanel incident={managedIncident} {now} />
 					</div>
 				{/if}
@@ -3269,6 +3702,36 @@
 			onClose={() => {
 				ratingModalOpen = false;
 				ratingIncident = null;
+			}}
+		/>
+	{/if}
+
+	{#if reclassifyIncidentTarget && canActOnIncident(activeUser, reclassifyIncidentTarget, 'incidents:classify')}
+		<ReclassifyDialog
+			incident={reclassifyIncidentTarget}
+			categories={categoryList}
+			subcategories={subcategoriesState.status === 'valid' ? subcategoriesState.subcategories : []}
+			priorityMatrices={priorityMatricesState.status === 'valid'
+				? priorityMatricesState.matrices
+				: []}
+			error={reclassifyError}
+			onconfirm={confirmReclassify}
+			oncancel={() => {
+				reclassifyIncidentTarget = null;
+				reclassifyError = '';
+			}}
+		/>
+	{/if}
+
+	{#if overrideIncidentTarget && canActOnIncident(activeUser, overrideIncidentTarget, 'incidents:override_priority')}
+		<OverridePriorityDialog
+			incident={overrideIncidentTarget}
+			error={overrideError}
+			onapply={confirmApplyOverride}
+			onremove={confirmRemoveOverride}
+			oncancel={() => {
+				overrideIncidentTarget = null;
+				overrideError = '';
 			}}
 		/>
 	{/if}
