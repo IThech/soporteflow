@@ -61,6 +61,8 @@ const MANDATORY_REASON_EVENTS = [
 function validValue(event: string, value: unknown): boolean {
 	if (value === undefined) return true;
 	switch (event) {
+		case 'internal_note_added':
+			return object(value) && Object.keys(value).length === 1 && text(value.messageId);
 		case 'assigned':
 		case 'reassigned':
 		case 'category_changed':
@@ -127,6 +129,7 @@ export function isIncidentHistory(value: unknown): value is IncidentHistoryEntry
 			!Number.isFinite(Date.parse(entry.timestamp)) ||
 			!text(entry.eventType) ||
 			![
+				'internal_note_added',
 				'created',
 				'assigned',
 				'reassigned',
@@ -148,6 +151,11 @@ export function isIncidentHistory(value: unknown): value is IncidentHistoryEntry
 			(MANDATORY_REASON_EVENTS.includes(entry.eventType)
 				? !text(entry.reason)
 				: !optionalText(entry.reason)) ||
+			(entry.eventType === 'internal_note_added' &&
+				(entry.previousValue !== undefined ||
+					entry.reason !== undefined ||
+					entry.comment !== undefined ||
+					!object(entry.newValue))) ||
 			!optionalText(entry.comment) ||
 			!validValue(entry.eventType, entry.previousValue) ||
 			!validValue(entry.eventType, entry.newValue)

@@ -1,10 +1,11 @@
 import type { IncidentMessage } from '$lib/types/incident-message';
 import type { Incident } from '$lib/types/incident';
 import type { AppUser } from '$lib/types/user';
-import { canUseMessages } from '$lib/incidents/messages';
+import { canCreateMessage, validateNewMessageContent } from '$lib/incidents/messages';
 import { incidentOrganizationId } from '$lib/incidents/assignment';
 
 export const MESSAGES_KEY = 'soporteflow-incident-messages';
+// Historical messages intentionally have no length cap: never reject or truncate legacy notes.
 export function loadMessages(raw: string | null): IncidentMessage[] {
 	if (raw === null) return [];
 	const data: unknown = JSON.parse(raw);
@@ -39,16 +40,17 @@ export function appendMessage(
 	expectedRaw: string | null
 ): IncidentMessage[] {
 	if (
-		!canUseMessages(actor, incident, message.visibility) ||
+		!canCreateMessage(actor, incident, message.visibility) ||
 		message.authorUserId !== actor.id ||
 		message.incidentId !== incident.id ||
 		message.organizationId !== incidentOrganizationId(incident)
 	)
 		throw new Error('No tienes permiso para guardar este mensaje.');
+	validateNewMessageContent(message.visibility, message.content);
 	const raw = storage.getItem(MESSAGES_KEY);
 	if (raw !== expectedRaw)
 		throw new Error(
-			'Los mensajes han cambiado en otra pestaña. Cierra y vuelve a abrir la incidencia antes de enviar.'
+			'Los mensajes han cambiado en otra pestaña. Actualiza los mensajes antes de enviar; tu borrador se conserva.'
 		);
 	const previous = loadMessages(raw);
 	const next = loadMessages(JSON.stringify([...previous, message]));

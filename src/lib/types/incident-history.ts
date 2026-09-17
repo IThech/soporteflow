@@ -34,6 +34,7 @@ export interface PriorityOverrideHistoryValues {
 }
 
 type HistoryValues = {
+	internal_note_added: { messageId: string };
 	created: Pick<Incident, 'title' | 'status' | 'priority'> & IncidentRoutingSnapshot;
 	assigned: string | null;
 	reassigned: string | null;

@@ -89,6 +89,7 @@
 	import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 	import type { IncidentMessage } from '$lib/types/incident-message';
 	import IncidentMessages from '$lib/components/IncidentMessages.svelte';
+	import { completeInternalNoteEffects } from '$lib/storage/internal-note-effects';
 	import { loadMessages, MESSAGES_KEY } from '$lib/storage/messages';
 	import { recoverFirstResponse, FIRST_RESPONSE_RECOVERY_KEY } from '$lib/storage/first-response';
 	import {
@@ -1060,9 +1061,25 @@
 
 	function handleMessageSent(incident: Incident | undefined, message: IncidentMessage) {
 		if (!incident) return;
-		messageList = [...messageList, message];
-		const notifType: NotificationType =
-			message.visibility === 'internal' ? 'incident_internal_note' : 'incident_comment';
+		if (!messageList.some((item) => item.id === message.id))
+			messageList = [...messageList, message];
+		if (message.visibility === 'internal') {
+			const result = completeInternalNoteEffects(
+				localStorage,
+				activeUser,
+				incident,
+				message,
+				userList
+			);
+			history = result.history;
+			storedHistorySnapshot = localStorage.getItem(HISTORY_KEY);
+			if (result.notifications) {
+				notificationList = result.notifications;
+				notificationSnapshot = localStorage.getItem(NOTIFICATIONS_KEY);
+			}
+			return;
+		}
+		const notifType: NotificationType = 'incident_comment';
 		const notif = buildIncidentNotification({
 			type: notifType,
 			incident,
@@ -1435,6 +1452,7 @@
 		reloadPriorityMatrices(localStorage.getItem(PRIORITY_MATRICES_STORAGE_KEY));
 
 		function handleStorage(event: StorageEvent) {
+			if (event.key === MESSAGES_KEY || event.key === null) refreshMessages();
 			if (event.key === null) {
 				reloadSubcategories(localStorage.getItem(SUBCATEGORIES_STORAGE_KEY));
 				reloadPriorityMatrices(localStorage.getItem(PRIORITY_MATRICES_STORAGE_KEY));

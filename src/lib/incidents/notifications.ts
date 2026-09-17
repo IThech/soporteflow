@@ -2,6 +2,7 @@ import type { AppUser } from '$lib/types/user';
 import type { Incident, IncidentStatus } from '$lib/types/incident';
 import type { IncidentMessage } from '$lib/types/incident-message';
 import type { Notification, NotificationType, DynamicSlaAlert } from '$lib/types/notification';
+import { canUseMessages } from './messages';
 import { canAccessOrganization } from '$lib/auth/permissions';
 import { canViewIncident } from '$lib/auth/record-access';
 import { incidentOrganizationId } from './assignment';
@@ -80,7 +81,7 @@ export function buildIncidentNotification(
 		}
 
 		case 'incident_comment': {
-			if (!message) return null;
+			if (!message || message.visibility !== 'public') return null;
 			const isAuthorClient = actor.role === 'client';
 
 			if (isAuthorClient) {
@@ -103,7 +104,15 @@ export function buildIncidentNotification(
 		}
 
 		case 'incident_internal_note': {
-			if (!message) return null;
+			if (
+				!message ||
+				message.visibility !== 'internal' ||
+				!canUseMessages(actor, incident, 'internal') ||
+				message.authorUserId !== actor.id ||
+				message.incidentId !== incident.id ||
+				message.organizationId !== orgId
+			)
+				return null;
 			// Internal notes are strictly for staff. Notify assigned technician if not the author.
 			if (!incident.assignedToUserId || incident.assignedToUserId === actor.id) {
 				return null;

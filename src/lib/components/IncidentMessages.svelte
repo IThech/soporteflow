@@ -3,6 +3,8 @@
 	import IncidentTimeline from './IncidentTimeline.svelte';
 	import {
 		canUseMessages,
+		canCreateMessage,
+		INTERNAL_NOTE_MAX_LENGTH,
 		visibleMessages,
 		createMessage,
 		messageAuthor
@@ -49,6 +51,10 @@
 	let internalDraft = $state('');
 	let selected = $state('public');
 	let snapshot: string | null = null;
+	let externalChange = $state(false);
+	let pendingEffects = $state<IncidentMessage | null>(null);
+	let effectError = $state('');
+	const canAddInternal = $derived(canCreateMessage(actor, incident, 'internal'));
 	const internalAllowed = $derived(canUseMessages(actor, incident, 'internal'));
 	const visible = $derived(visibleMessages(actor, incident, messages));
 	const tabs = $derived(
@@ -61,18 +67,56 @@
 			: [{ id: 'public', label: 'Comentarios' }]
 	);
 	const date = new Intl.DateTimeFormat('es-ES', { dateStyle: 'medium', timeStyle: 'short' });
-	onMount(() => {
+	function reloadMessages() {
+		ready = false;
 		try {
 			snapshot = localStorage.getItem(MESSAGES_KEY);
 			messages = loadMessages(snapshot);
 			ready = true;
+			error = '';
+			externalChange = false;
 		} catch {
 			error = 'No se pudieron cargar los mensajes. Los datos guardados se han conservado.';
 		}
+	}
+	onMount(() => {
+		reloadMessages();
+		const changed = (event: StorageEvent) => {
+			if (event.storageArea !== localStorage || (event.key !== MESSAGES_KEY && event.key !== null))
+				return;
+			try {
+				const raw = localStorage.getItem(MESSAGES_KEY);
+				const next = loadMessages(raw);
+				// Invisible internal activity must not produce a client-facing signal.
+				if (JSON.stringify(visibleMessages(actor, incident, next)) === JSON.stringify(visible)) {
+					messages = next;
+					snapshot = raw;
+					return;
+				}
+			} catch {
+				/* Explicit refresh will report corrupt storage without discarding drafts. */
+			}
+			externalChange = true;
+			ready = false;
+		};
+		window.addEventListener('storage', changed);
+		return () => window.removeEventListener('storage', changed);
 	});
+	function retryEffects() {
+		if (!pendingEffects) return;
+		try {
+			onmessagesent?.(pendingEffects);
+			pendingEffects = null;
+			effectError = '';
+		} catch {
+			announcement = '';
+			effectError =
+				'La nota ya está guardada, pero falta completar el historial o la notificación. Reintenta aquí sin volver a enviar la nota.';
+		}
+	}
 	function send(event: SubmitEvent, visibility: IncidentMessageVisibility) {
 		event.preventDefault();
-		if (!ready) return;
+		if (!ready || (visibility === 'internal' && pendingEffects)) return;
 		error = '';
 		announcement = '';
 		try {
@@ -97,11 +141,18 @@
 			if (result.updatedIncident) {
 				onincidentupdate?.(result.updatedIncident);
 			}
-			onmessagesent?.(message);
 			if (visibility === 'public') publicDraft = '';
 			else internalDraft = '';
 			announcement = visibility === 'public' ? 'Comentario enviado.' : 'Nota interna añadida.';
+			if (visibility === 'internal') {
+				pendingEffects = message;
+				retryEffects();
+			} else onmessagesent?.(message);
 		} catch (cause) {
+			if (cause instanceof Error && cause.message.startsWith('Los mensajes han cambiado')) {
+				externalChange = true;
+				ready = false;
+			}
 			error =
 				cause instanceof Error
 					? cause.message
@@ -172,6 +223,20 @@
 			>
 		{/each}
 	</div>
+	{#if externalChange}
+		<p role="status" class="mt-3 text-sm">
+			Los mensajes han cambiado en otra pestaña. Tus borradores se conservan.
+		</p>
+		<button type="button" onclick={reloadMessages} class="mt-2 rounded border px-3 py-2"
+			>Actualizar mensajes</button
+		>
+	{/if}
+	{#if effectError && internalAllowed}
+		<p role="alert" class="mt-3 text-sm text-amber-300">{effectError}</p>
+		<button type="button" onclick={retryEffects} class="mt-2 rounded border px-3 py-2"
+			>Reintentar registro y notificación</button
+		>
+	{/if}
 	{#if error}<p role="alert" class="mt-3 text-sm text-red-300">{error}</p>{/if}
 	<p role="status" class="sr-only">{announcement}</p>
 	<div
@@ -215,6 +280,10 @@
 		>
 			<p class="text-sm font-semibold text-amber-300">Solo visible para el equipo</p>
 			{@render conversation('internal')}
+			{#if !canAddInternal}<p class="mt-3 text-sm">
+					Notas de solo lectura. No se pueden añadir notas en incidencias cerradas o sin permiso de
+					creación.
+				</p>{/if}
 			<form class="mt-4 space-y-2" onsubmit={(event) => send(event, 'internal')}>
 				<label for="internal-message" class="block text-sm text-slate-300"
 					>Escribe una nota interna</label
@@ -223,14 +292,22 @@
 					id="internal-message"
 					bind:value={internalDraft}
 					required
-					disabled={!ready}
+					aria-describedby="internal-message-help"
+					disabled={!ready || !canAddInternal || !!pendingEffects}
 					rows="3"
 					class="w-full rounded-lg border border-slate-700 bg-slate-950 p-3"></textarea>
 				<div class="flex flex-wrap items-center justify-between gap-3">
-					<p class="text-xs text-slate-400">No se podrá editar ni eliminar.</p>
+					<p id="internal-message-help" class="text-xs text-slate-400">
+						{internalDraft.trim().length} / {INTERNAL_NOTE_MAX_LENGTH} caracteres. No se podrá editar
+						ni eliminar.
+					</p>
 					<button
 						type="submit"
-						disabled={!ready || !internalDraft.trim()}
+						disabled={!ready ||
+							!canAddInternal ||
+							!!pendingEffects ||
+							!internalDraft.trim() ||
+							internalDraft.trim().length > INTERNAL_NOTE_MAX_LENGTH}
 						class="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-amber-300"
 						>Añadir nota</button
 					>

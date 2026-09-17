@@ -13,7 +13,9 @@ export type Permission =
 	| 'incidents:assign'
 	| 'incidents:delete'
 	| 'incidents:classify'
-	| 'incidents:override_priority';
+	| 'incidents:override_priority'
+	| 'incidents:view_internal_notes'
+	| 'incidents:add_internal_note';
 
 export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 	platform_admin: [
@@ -23,6 +25,8 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 		'categories:manage',
 		'sla:manage',
 		'incidents:view_all',
+		'incidents:view_internal_notes',
+		'incidents:add_internal_note',
 		'incidents:view_own',
 		'incidents:create',
 		'incidents:edit',
@@ -37,6 +41,8 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 		'categories:manage',
 		'sla:manage',
 		'incidents:view_all',
+		'incidents:view_internal_notes',
+		'incidents:add_internal_note',
 		'incidents:create',
 		'incidents:edit',
 		'incidents:assign',
@@ -46,6 +52,8 @@ export const rolePermissions: Record<UserRole, readonly Permission[]> = {
 	],
 	technician: [
 		'incidents:view_all',
+		'incidents:view_internal_notes',
+		'incidents:add_internal_note',
 		'incidents:create',
 		'incidents:edit',
 		'incidents:assign',

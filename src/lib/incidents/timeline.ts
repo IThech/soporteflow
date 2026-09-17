@@ -1,3 +1,4 @@
+import { hasPermission } from '$lib/auth/permissions';
 import { canViewIncident } from '$lib/auth/record-access';
 import { demoOrganization } from '$lib/data/organizations';
 import { incidentOrganizationId } from './assignment';
@@ -23,7 +24,9 @@ export function visibleIncidentHistory(
 		.filter(
 			(entry) =>
 				entry.incidentId === incident.id &&
-				entry.organizationId === incidentOrganizationId(incident)
+				entry.organizationId === incidentOrganizationId(incident) &&
+				(entry.eventType !== 'internal_note_added' ||
+					hasPermission(viewer, 'incidents:view_internal_notes'))
 		)
 		.toSorted((a, b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id));
 }
@@ -88,6 +91,8 @@ export function describeHistoryEvent(
 		return `${level} · ${team} (responsable: ${assignee})`;
 	};
 	switch (entry.eventType) {
+		case 'internal_note_added':
+			return `${actor} añadió una nota interna`;
 		case 'created':
 			return `${actor} creó la incidencia`;
 		case 'assigned':
