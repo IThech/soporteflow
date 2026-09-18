@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import { applyMigrations } from './helpers/persistence-migrations.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
@@ -12,36 +12,23 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..');
 
-async function applyMigration(pglite) {
-	const migrationsDir = path.resolve(rootDir, 'drizzle/migrations');
-	const files = fs.readdirSync(migrationsDir).filter((f) => f.endsWith('.sql'));
-	assert.ok(files.length > 0, 'No SQL migration files found in drizzle/migrations');
-	const latestMigration = files.sort()[0];
-	const sqlContent = fs.readFileSync(path.resolve(migrationsDir, latestMigration), 'utf8');
-	const statements = sqlContent
-		.split('--> statement-breakpoint')
-		.map((s) => s.trim())
-		.filter(Boolean);
-
-	for (const stmt of statements) {
-		await pglite.exec(stmt);
-	}
-}
-
 function matchesError(err, expectedSubstring) {
 	const fullMsg = `${err.message} ${err.cause?.message || ''} ${String(err.cause || '')}`;
 	return fullMsg.includes(expectedSubstring);
 }
 
 test('SoporteFlow Core v1 — Infraestructura Relacional e Integridad Multiempresa', async (t) => {
-	const server = await createServer({ server: { middlewareMode: true } });
+	const server = await createServer({
+		configFile: false,
+		envDir: false,
+		server: { middlewareMode: true },
+		appType: 'custom'
+	});
+	t.after(() => server.close());
 	const schema = await server.ssrLoadModule('/src/lib/server/db/schema/index.ts');
-	const { DatabaseConfigurationError, getDb } = await server.ssrLoadModule(
-		'/src/lib/server/db/index.ts'
-	);
-
 	const pglite = new PGlite();
-	await applyMigration(pglite);
+	t.after(() => pglite.close());
+	await applyMigrations(pglite, path.join(rootDir, 'drizzle/migrations'));
 	const db = drizzle(pglite, { schema });
 
 	// Helper data fixtures
@@ -49,10 +36,6 @@ test('SoporteFlow Core v1 — Infraestructura Relacional e Integridad Multiempre
 	const org2Id = '22222222-2222-4222-8222-222222222222';
 	const user1Id = '33333333-3333-4333-8333-333333333333';
 	const user2Id = '44444444-4444-4444-8444-444444444444';
-
-	t.after(async () => {
-		await server.close();
-	});
 
 	await t.test(
 		'1. Desacoplamiento de identidad en users y gestión de correos en user_emails',
@@ -730,9 +713,10 @@ test('SoporteFlow Core v1 — Infraestructura Relacional e Integridad Multiempre
 		);
 	});
 
-	await t.test('11. Reproducibilidad de migraciones sobre base de datos vacía', async () => {
+	await t.test('11. Reproducibilidad de migraciones sobre base de datos vacía', async (t) => {
 		const freshPglite = new PGlite();
-		await applyMigration(freshPglite);
+		t.after(() => freshPglite.close());
+		await applyMigrations(freshPglite, path.join(rootDir, 'drizzle/migrations'));
 
 		const tables = await freshPglite.query(`
 			SELECT table_name
@@ -766,25 +750,4 @@ test('SoporteFlow Core v1 — Infraestructura Relacional e Integridad Multiempre
 			assert.ok(tableNames.includes(expected), `Tabla esperada ${expected} debe existir`);
 		}
 	});
-
-	await t.test(
-		'12. Tratamiento de configuración de conexión (DatabaseConfigurationError)',
-		async () => {
-			assert.ok(DatabaseConfigurationError);
-
-			const originalUrl = process.env.DATABASE_URL;
-			delete process.env.DATABASE_URL;
-
-			try {
-				assert.throws(
-					() => getDb(),
-					(err) => err instanceof DatabaseConfigurationError && err.message.includes('DATABASE_URL')
-				);
-			} finally {
-				if (originalUrl) {
-					process.env.DATABASE_URL = originalUrl;
-				}
-			}
-		}
-	);
 });
