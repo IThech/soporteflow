@@ -51,3 +51,12 @@ export type NewModule = InferInsertModel<typeof schema.modules>;
 
 export type OrganizationModule = InferSelectModel<typeof schema.organizationModules>;
 export type NewOrganizationModule = InferInsertModel<typeof schema.organizationModules>;
+
+export type AuthUser = InferSelectModel<typeof schema.authUsers>;
+export type NewAuthUser = InferInsertModel<typeof schema.authUsers>;
+export type AuthAccount = InferSelectModel<typeof schema.authAccounts>;
+export type NewAuthAccount = InferInsertModel<typeof schema.authAccounts>;
+export type AuthSession = InferSelectModel<typeof schema.authSessions>;
+export type NewAuthSession = InferInsertModel<typeof schema.authSessions>;
+export type AuthVerification = InferSelectModel<typeof schema.authVerifications>;
+export type NewAuthVerification = InferInsertModel<typeof schema.authVerifications>;
