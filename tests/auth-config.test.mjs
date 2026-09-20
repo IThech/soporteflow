@@ -173,7 +173,7 @@ test('Security options keep authentication closed and CSRF/origin checks enabled
 	assert.equal(o.trustedOrigins.length, 1);
 	assert.equal(o.trustedOrigins[0], valid.BETTER_AUTH_URL);
 });
-test('Actual Better Auth instance with migrated PGlite blocks HTTP and direct APIs', async (t) => {
+test('Actual Better Auth instance with migrated PGlite keeps login and account operations blocked', async (t) => {
 	const f = await fixture(t);
 	const auth = instance(valid, false, f).api.getAuth();
 	for (const route of [

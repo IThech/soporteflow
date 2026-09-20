@@ -34,6 +34,7 @@ function createInstance(config: Extract<ReturnType<typeof readAuthConfig>, { ena
 		user: { changeEmail: { enabled: false }, deleteUser: { enabled: false } },
 		session: { cookieCache: { enabled: false } },
 		disabledPaths: [
+			'/get-session',
 			'/sign-up/email',
 			'/request-password-reset',
 			'/reset-password',
@@ -41,9 +42,16 @@ function createInstance(config: Extract<ReturnType<typeof readAuthConfig>, { ena
 			'/delete-user',
 			'/delete-user/callback'
 		],
-		// Phase A creates configuration only. Even direct server API calls must remain closed.
+		// Phase B permits only a direct, uncached, non-renewing server session lookup.
 		hooks: {
-			before: createAuthMiddleware(async () => {
+			before: createAuthMiddleware(async (ctx) => {
+				if (
+					ctx.path === '/get-session' &&
+					!ctx.request &&
+					ctx.query?.disableCookieCache === true &&
+					ctx.query?.disableRefresh === true
+				)
+					return;
 				throw new APIError('FORBIDDEN', { message: 'Autenticación no habilitada en esta fase.' });
 			})
 		},

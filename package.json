@@ -16,7 +16,8 @@
 		"test:persistence": "node --test tests/db-schema-integrity.test.mjs tests/persistence-harness.test.mjs tests/auth-schema-integrity.test.mjs",
 		"test:auth-compat": "node --test tests/auth-compat.test.mjs",
 		"test:auth": "npm run test:persistence && npm run test:auth-compat",
-		"test:auth-config": "node --test tests/auth-config.test.mjs"
+		"test:auth-config": "node --test tests/auth-config.test.mjs",
+		"test:auth-principal": "node --test tests/auth-principal.test.mjs"
 	},
 	"devDependencies": {
 		"@electric-sql/pglite": "^0.5.8",

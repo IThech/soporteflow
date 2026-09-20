@@ -41,7 +41,7 @@ Ejecutar `npm run test:persistence`: aplica todas las migraciones en PGlite en m
 
 ### Instalación limpia y pruebas reproducibles
 
-Better Auth está fijado exactamente a **1.7.5** como dependencia de ejecución. No se importa desde el código de SvelteKit ni habilita endpoints de autenticación. La integración usa importaciones locales obligatorias y comprueba la versión instalada: un paquete ausente o una versión incorrecta causa un fallo, nunca una omisión.
+Better Auth está fijado exactamente a **1.7.5** como dependencia de ejecución. Se importa exclusivamente en módulos privados de servidor y pruebas; no habilita endpoints de autenticación. La integración usa importaciones locales obligatorias y comprueba la versión instalada: un paquete ausente o una versión incorrecta causa un fallo, nunca una omisión.
 
 Desde una instalación limpia con Node 24 y npm 11, ejecutar:
 
@@ -72,7 +72,7 @@ La suite no repite la validación de concurrencia PostgreSQL del laboratorio ni 
 
 Los módulos src/lib/server/auth/config.ts e instance.ts preparan Better Auth 1.7.5 con el cliente getDb existente y el mapeo explícito de las cuatro tablas. No hay hooks de SvelteKit, rutas HTTP ni formularios. La demo no importa estos módulos.
 
-BETTER_AUTH_ENABLED está desactivado por defecto. Solo el valor exacto true permite construir una instancia al llamar a getAuth(); no habilita login: email/contraseña está desactivado y el middleware anterior a las operaciones rechaza las APIs durante esta fase. Registro, recuperación, cambio de correo y eliminación permanecen bloqueados. No retirar esta protección hasta una fase aprobada y validada.
+BETTER_AUTH_ENABLED está desactivado por defecto. Solo el valor exacto true permite construir una instancia al llamar a getAuth(); no habilita login: email/contraseña está desactivado y el middleware rechaza las operaciones salvo la consulta interna de sesión autorizada en la fase B descrita abajo. Registro, recuperación, cambio de correo y eliminación permanecen bloqueados. No retirar esta protección hasta una fase aprobada y validada.
 
 Con la bandera activada se requieren DATABASE_URL de PostgreSQL, BETTER_AUTH_SECRET aleatorio de al menos 32 caracteres y BETTER_AUTH_URL con el origen HTTPS exacto. El secreto no tiene valor predeterminado; su longitud no demuestra entropía. Solo en desarrollo se admite HTTP en localhost, 127.0.0.1 o ::1. No se aceptan credenciales, rutas, query ni fragmentos en el origen. Ningún valor sensible se incluye en errores de configuración.
 
@@ -81,3 +81,15 @@ La importación no valida el entorno ni crea la instancia. Durante build, getAut
 Cookies HttpOnly y SameSite=Lax, Secure en HTTPS, origen permitido explícito, caché de sesión en cookie desactivada y comprobaciones CSRF/origen activas. Rate limiting habilitado; su almacenamiento distribuido, la política definitiva de duración de sesiones y los registros operativos saneados quedan pendientes antes de exponer endpoints. El logger de Better Auth está desactivado para no propagar errores de SQL o credenciales. No se configura un secreto sintético en ejecución.
 
 Validar con npm run test:auth-config y npm run test:auth. Las pruebas de configuración aíslan el entorno y sustituyen el acceso PostgreSQL; la comprobación con Better Auth real utiliza exclusivamente PGlite en memoria. No se leen archivos .env en estas pruebas.
+
+## Fase B — resolución interna de identidad
+
+resolvePrincipal(headers), en src/lib/server/auth/principal.ts, acepta exclusivamente Headers de una petición de servidor. No acepta objetos demo, userId, roles ni organización como prueba de autenticación. Solo reenvía la cookie a Better Auth; esta librería verifica la firma y consulta la sesión persistida mediante getSession con disableCookieCache: true y disableRefresh: true. Después se comprueban identificadores UUID, coincidencia entre session.userId y user.id, expiración y existencia de users activo. La identidad resultante contiene únicamente userId, sin correo, nombre, token, sesión, organización ni permisos.
+
+El middleware de instance.ts permite solamente /get-session sin Request HTTP y con ambas opciones booleanas exactas. La ruta también está en disabledPaths: incluso el handler de Better Auth rechaza la consulta HTTP. No se han añadido rutas ni hooks de SvelteKit. Login, registro, recuperación y todas las demás operaciones siguen bloqueadas; la bandera permanece desactivada por defecto.
+
+App.Locals.principal es opcional: undefined significa que no se ha resuelto; null significa denegación. Ningún código lo rellena automáticamente. Ante configuración desactivada, sesión inválida, usuario ausente/inactivo o cualquier error de configuración, autenticación o base de datos, el resolver devuelve null sin registrar ni devolver detalles sensibles y sin recurrir a la demo. No hay caché de identidades.
+
+Las pruebas auth-principal utilizan dobles para errores y casos imposibles por las FK y Better Auth 1.7.5 real sobre PGlite con las migraciones existentes y cookies firmadas sintéticas. Comprueban lectura válida sin renovación, firmas inválidas, revocación, inactividad, bloqueo HTTP y rechazo de las otras operaciones de la instancia. No usan PostgreSQL real ni credenciales reales. Comando: npm run test:auth-principal.
+
+Límites: disableRefresh evita renovar una sesión; Better Auth puede limpiar una sesión ya caducada y emitir instrucciones para borrar cookies inválidas. La validación refleja el estado consultado, no bloquea una revocación o desactivación concurrente posterior. Antes de una operación de negocio, la fase C deberá validar autorización y pertenencia en el contexto de esa operación. No se afirma autenticación HTTP funcional ni aislamiento multiempresa por disponer de una identidad.
