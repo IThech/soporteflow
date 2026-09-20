@@ -203,3 +203,17 @@ test('Actual Better Auth instance with migrated PGlite keeps login and account o
 	for (const table of ['auth_users', 'auth_accounts', 'auth_sessions', 'auth_verifications'])
 		assert.equal((await f.pg.query('select count(*)::int as n from ' + table)).rows[0].n, 0);
 });
+
+test('Transaction factory stays disabled during build/default config and never populates singleton', () => {
+	for (const f of [instance(), instance(valid, true)]) {
+		assert.equal(f.api.getTransactionAuth({}), null);
+		assert.equal(f.calls(), 0);
+	}
+	const f = instance(valid);
+	const one = f.api.getTransactionAuth({});
+	const two = f.api.getTransactionAuth({});
+	assert.notEqual(one, two);
+	assert.equal(f.calls(), 0);
+	f.api.getAuth();
+	assert.equal(f.calls(), 1);
+});

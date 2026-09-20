@@ -8,14 +8,14 @@ import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/pglite';
 import { fixture, identity } from './helpers/auth-fixture.mjs';
 
-function load(resolvePrincipal, getDb, schema) {
+function load(resolvePrincipal, getDb, schema, resolveTransactionPrincipal = async () => null) {
 	const module = { exports: {} };
 	const source = ts.transpileModule(
 		fs.readFileSync(new URL('../src/lib/server/auth/authorization.ts', import.meta.url), 'utf8'),
 		{ compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }
 	).outputText;
 	const imports = {
-		'./principal': { resolvePrincipal },
+		'./principal': { resolvePrincipal, resolveTransactionPrincipal },
 		'../db': { getDb },
 		'../db/schema': schema,
 		'drizzle-orm': { and, eq }
@@ -434,4 +434,20 @@ test('Organization authorization on the migrated Core, with SQL tenant filters',
 			false
 		);
 	});
+});
+
+test('Transactional authorization rejects missing identity without a general database lookup', async () => {
+	const api = load(
+		async () => {
+			throw Error('General principal forbidden');
+		},
+		() => {
+			throw Error('General database forbidden');
+		},
+		{}
+	);
+	assert.equal(
+		await api.authorizeTransaction(headers(), randomUUID(), 'identities:create', {}),
+		null
+	);
 });

@@ -294,3 +294,25 @@ test('Real Better Auth 1.7.5 and migrated PGlite enforce session validity and op
 		assert.equal(await resolve(credential), null);
 	});
 });
+
+test('Transactional principal denies unavailable auth without touching the general client', async () => {
+	let calls = 0;
+	const api = load('principal.ts', {
+		'./instance': {
+			getTransactionAuth: () => null,
+			getAuth: () => {
+				throw Error('Forbidden');
+			}
+		},
+		'../db': {
+			getDb: () => {
+				calls++;
+				throw Error('Forbidden');
+			}
+		},
+		'../db/schema': {},
+		'drizzle-orm': { and, eq }
+	});
+	assert.equal(await api.resolveTransactionPrincipal(headers(), {}), null);
+	assert.equal(calls, 0);
+});

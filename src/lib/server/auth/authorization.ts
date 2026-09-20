@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm';
-import { resolvePrincipal } from './principal';
+import { resolvePrincipal, resolveTransactionPrincipal } from './principal';
+import type { AuthTransaction } from './instance';
 import { getDb } from '../db';
 import {
 	users,
@@ -37,12 +38,15 @@ export type AuthorizationAction = Readonly<{
 /** Internal only: membership is derived from a freshly resolved server identity. */
 async function membership(
 	headers: Headers,
-	organizationId: string
+	organizationId: string,
+	tx?: AuthTransaction
 ): Promise<OrganizationMembership | null> {
 	if (!(headers instanceof Headers) || !validId(organizationId)) return null;
-	const principal = await resolvePrincipal(headers);
+	const principal = tx
+		? await resolveTransactionPrincipal(headers, tx)
+		: await resolvePrincipal(headers);
 	if (!principal || !validId(principal.userId)) return null;
-	const [row] = await getDb()
+	const query = (tx ?? getDb())
 		.select({ userId: users.id, organizationId: organizations.id, membershipId: memberships.id })
 		.from(memberships)
 		.innerJoin(users, eq(users.id, memberships.userId))
@@ -57,6 +61,7 @@ async function membership(
 			)
 		)
 		.limit(1);
+	const [row] = await (tx ? query.for('share') : query);
 	return row ? Object.freeze(row) : null;
 }
 /** Membership is not permission to execute a business action. */
@@ -74,7 +79,8 @@ export async function verifyOrganizationMembership(
 /** No unscoped resource query and no resource objects accepted from the caller. */
 async function resourceExists(
 	organizationId: string,
-	resource: AuthorizationResource
+	resource: AuthorizationResource,
+	tx?: AuthTransaction
 ): Promise<boolean> {
 	if (!resource || !validId(resource.id)) return false;
 	const table =
@@ -86,7 +92,7 @@ async function resourceExists(
 					? sites
 					: null;
 	if (!table) return false;
-	const [row] = await getDb()
+	const query = (tx ?? getDb())
 		.select({ id: table.id })
 		.from(table)
 		.where(
@@ -97,14 +103,16 @@ async function resourceExists(
 			)
 		)
 		.limit(1);
+	const [row] = await (tx ? query.for('share') : query);
 	return !!row;
 }
 
 async function grants(
 	context: OrganizationMembership,
-	permissionId?: string
+	permissionId?: string,
+	tx?: AuthTransaction
 ): Promise<PermissionGrant[]> {
-	const rows = await getDb()
+	const query = (tx ?? getDb())
 		.select({
 			roleId: roles.id,
 			permissionId: permissions.id,
@@ -133,6 +141,7 @@ async function grants(
 				permissionId === undefined ? undefined : eq(permissions.id, permissionId)
 			)
 		);
+	const rows = await (tx ? query.for('share') : query);
 	const result: PermissionGrant[] = [];
 	for (const row of rows) {
 		// No platform authority or inheritance from role templates/names.
@@ -154,7 +163,7 @@ async function grants(
 					: row.scope === 'team'
 						? row.teamId
 						: row.siteId;
-			if (id && (await resourceExists(context.organizationId, { kind: row.scope, id }))) {
+			if (id && (await resourceExists(context.organizationId, { kind: row.scope, id }, tx))) {
 				result.push(
 					Object.freeze({
 						roleId: row.roleId,
@@ -213,4 +222,19 @@ export async function authorizeAction(
 		// Do not disclose whether another tenant's resource exists or leak database errors.
 		return false;
 	}
+}
+
+/** Internal authorization for provisioning. No reusable authorization outside this transaction. */
+export async function authorizeTransaction(
+	headers: Headers,
+	organizationId: string,
+	permissionId: string,
+	tx: AuthTransaction
+) {
+	const context = await membership(headers, organizationId, tx);
+	if (!context) return null;
+	const permissions = await grants(context, undefined, tx);
+	if (!permissions.some((p) => p.permissionId === permissionId && p.scope === 'organization'))
+		return null;
+	return { context, permissions };
 }

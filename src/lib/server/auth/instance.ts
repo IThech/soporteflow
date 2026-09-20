@@ -7,12 +7,16 @@ import { getDb } from '../db';
 import { authUsers, authAccounts, authSessions, authVerifications } from '../db/schema';
 import { readAuthConfig } from './config';
 
-function createInstance(config: Extract<ReturnType<typeof readAuthConfig>, { enabled: true }>) {
+export type AuthTransaction = Parameters<Parameters<ReturnType<typeof getDb>['transaction']>[0]>[0];
+function createInstance(
+	config: Extract<ReturnType<typeof readAuthConfig>, { enabled: true }>,
+	database: ReturnType<typeof getDb> | AuthTransaction = getDb()
+) {
 	return betterAuth({
 		secret: config.secret,
 		baseURL: config.origin,
 		trustedOrigins: [config.origin],
-		database: drizzleAdapter(getDb(), {
+		database: drizzleAdapter(database, {
 			provider: 'pg',
 			transaction: true,
 			schema: {
@@ -71,4 +75,14 @@ export function getAuth() {
 	);
 	if (!config.enabled) return null;
 	return (instance ??= createInstance(config));
+}
+
+/** Internal: never cached; all adapter operations use the supplied transaction. */
+export function getTransactionAuth(tx: AuthTransaction) {
+	if (building) return null;
+	const config = readAuthConfig(
+		{ ...env, DATABASE_URL: env.DATABASE_URL || process.env.DATABASE_URL },
+		dev
+	);
+	return config.enabled ? createInstance(config, tx) : null;
 }

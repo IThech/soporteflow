@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
-import { getAuth } from './instance';
+import { getAuth, getTransactionAuth, type AuthTransaction } from './instance';
 import { getDb } from '../db';
-import { users } from '../db/schema';
+import { users, authSessions } from '../db/schema';
 
 /** Identity only: does not grant organization access or permissions. */
 export type AuthenticatedPrincipal = Readonly<{ userId: string }>;
@@ -42,6 +42,56 @@ export async function resolvePrincipal(headers: Headers): Promise<AuthenticatedP
 		return Object.freeze({ userId: user.id });
 	} catch {
 		// Deny on configuration, session, network or database errors; never leak driver details.
+		return null;
+	}
+}
+
+/** Transaction-only identity. Locks prevent deletion/deactivation until transaction completion. */
+export async function resolveTransactionPrincipal(
+	headers: Headers,
+	tx: AuthTransaction
+): Promise<AuthenticatedPrincipal | null> {
+	try {
+		if (!(headers instanceof Headers) || !headers.get('cookie')) return null;
+		const auth = getTransactionAuth(tx);
+		if (!auth) return null;
+		const result = await auth.api.getSession({
+			headers: new Headers({ cookie: headers.get('cookie')! }),
+			query: { disableCookieCache: true, disableRefresh: true }
+		});
+		if (
+			!result?.session ||
+			!result.user ||
+			result.user.id !== result.session.userId ||
+			!uuid.test(result.user.id) ||
+			!uuid.test(result.session.id)
+		)
+			return null;
+		const [session] = await tx
+			.select({ userId: authSessions.userId, expiresAt: authSessions.expiresAt })
+			.from(authSessions)
+			.where(
+				and(
+					eq(authSessions.id, result.session.id),
+					eq(authSessions.token, result.session.token),
+					eq(authSessions.userId, result.user.id)
+				)
+			)
+			.for('share');
+		if (
+			!session ||
+			!Number.isFinite(session.expiresAt.getTime()) ||
+			session.expiresAt.getTime() <= Date.now()
+		)
+			return null;
+		const [user] = await tx
+			.select({ id: users.id })
+			.from(users)
+			.where(and(eq(users.id, session.userId), eq(users.active, true)))
+			.for('share');
+		if (!user || session.expiresAt.getTime() <= Date.now()) return null;
+		return Object.freeze({ userId: user.id });
+	} catch {
 		return null;
 	}
 }
