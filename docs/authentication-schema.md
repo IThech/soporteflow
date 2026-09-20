@@ -41,7 +41,7 @@ Ejecutar `npm run test:persistence`: aplica todas las migraciones en PGlite en m
 
 ### Instalación limpia y pruebas reproducibles
 
-Better Auth está fijado exactamente a **1.7.5** como dependencia de desarrollo. No se importa desde el código de SvelteKit ni habilita endpoints de autenticación. La integración usa importaciones locales obligatorias y comprueba la versión instalada: un paquete ausente o una versión incorrecta causa un fallo, nunca una omisión.
+Better Auth está fijado exactamente a **1.7.5** como dependencia de ejecución. No se importa desde el código de SvelteKit ni habilita endpoints de autenticación. La integración usa importaciones locales obligatorias y comprueba la versión instalada: un paquete ausente o una versión incorrecta causa un fallo, nunca una omisión.
 
 Desde una instalación limpia con Node 24 y npm 11, ejecutar:
 
@@ -67,3 +67,17 @@ npm ha completado seis entradas inBundle bajo @tailwindcss/oxide-wasm32-wasi@4.3
 Se contrastaron las versiones con los manifiestos incluidos en el tarball del registro npm, cuyo SHA-512 coincide con la integridad fijada del paquete padre. Los paquetes incluidos no tienen integridad independiente en el lockfile: quedan cubiertos por la del archivo padre. No representan una actualización de Tailwind. Se conservan tal como los resuelve npm; no se eliminan manualmente para reducir el diff. La plataforma wasm32 no es necesaria para ejecutar las pruebas en Windows x64, pero el lockfile registra también ese árbol opcional.
 
 La suite no repite la validación de concurrencia PostgreSQL del laboratorio ni acredita toda la seguridad de una integración futura. Esta deberá respetar el protocolo de bloqueo por identidad y mantener la recuperación deshabilitada. No se autoriza aplicar migraciones a una base real ni hacer commit o push.
+
+## Fase A — configuración privada desactivada
+
+Los módulos src/lib/server/auth/config.ts e instance.ts preparan Better Auth 1.7.5 con el cliente getDb existente y el mapeo explícito de las cuatro tablas. No hay hooks de SvelteKit, rutas HTTP ni formularios. La demo no importa estos módulos.
+
+BETTER_AUTH_ENABLED está desactivado por defecto. Solo el valor exacto true permite construir una instancia al llamar a getAuth(); no habilita login: email/contraseña está desactivado y el middleware anterior a las operaciones rechaza las APIs durante esta fase. Registro, recuperación, cambio de correo y eliminación permanecen bloqueados. No retirar esta protección hasta una fase aprobada y validada.
+
+Con la bandera activada se requieren DATABASE_URL de PostgreSQL, BETTER_AUTH_SECRET aleatorio de al menos 32 caracteres y BETTER_AUTH_URL con el origen HTTPS exacto. El secreto no tiene valor predeterminado; su longitud no demuestra entropía. Solo en desarrollo se admite HTTP en localhost, 127.0.0.1 o ::1. No se aceptan credenciales, rutas, query ni fragmentos en el origen. Ningún valor sensible se incluye en errores de configuración.
+
+La importación no valida el entorno ni crea la instancia. Durante build, getAuth devuelve null incluso con la bandera activada. Fuera del build se valida antes de obtener el cliente; la instancia se conserva por proceso. Cambiar secretos u origen requiere reiniciar el proceso. No se usa memoria como alternativa a PostgreSQL.
+
+Cookies HttpOnly y SameSite=Lax, Secure en HTTPS, origen permitido explícito, caché de sesión en cookie desactivada y comprobaciones CSRF/origen activas. Rate limiting habilitado; su almacenamiento distribuido, la política definitiva de duración de sesiones y los registros operativos saneados quedan pendientes antes de exponer endpoints. El logger de Better Auth está desactivado para no propagar errores de SQL o credenciales. No se configura un secreto sintético en ejecución.
+
+Validar con npm run test:auth-config y npm run test:auth. Las pruebas de configuración aíslan el entorno y sustituyen el acceso PostgreSQL; la comprobación con Better Auth real utiliza exclusivamente PGlite en memoria. No se leen archivos .env en estas pruebas.
