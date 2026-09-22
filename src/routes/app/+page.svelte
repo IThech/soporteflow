@@ -57,7 +57,6 @@
 	import type { IncidentRating } from '$lib/types/incident-rating';
 	import { loadIncidentRatings, saveIncidentRatings } from '$lib/storage/ratings';
 	import {
-		synchronizeIncidentClosures,
 		canClientConfirmOrReject,
 		canClientReopenIncident,
 		canClientRateIncident,
@@ -97,6 +96,7 @@
 		recoverTransitionWithMessage,
 		TRANSITION_RECOVERY_KEY
 	} from '$lib/storage/transition-message';
+	import { syncAndCommitAutoClosures } from '$lib/storage/auto-close';
 	import {
 		applyCreationSla,
 		buildCreatedHistoryEntry,
@@ -1380,6 +1380,39 @@
 		ratingIncident = null;
 	}
 
+	function runAutoClosureSync(currentTime: Date = new Date()): void {
+		if (incidentLoadError) return;
+		try {
+			const result = syncAndCommitAutoClosures(
+				localStorage,
+				incidentList,
+				history,
+				storedIncidentSnapshot,
+				storedHistorySnapshot,
+				currentTime
+			);
+			if (result.changed) {
+				incidentList = result.state.incidents;
+				history = result.state.history;
+				storedIncidentSnapshot = result.state.incidentsSnapshot;
+				storedHistorySnapshot = result.state.historySnapshot;
+				if (editingIncident) {
+					const closedCurrent = result.state.incidents.find((i) => i.id === editingIncident?.id);
+					if (closedCurrent && closedCurrent.status === 'closed') {
+						editingIncident = { ...closedCurrent };
+					}
+				}
+			}
+		} catch (error) {
+			console.error('Error durante la sincronización de cierre automático:', error);
+			incidentLoadError =
+				error instanceof Error && error.message
+					? error.message
+					: 'Error durante el cierre automático de incidencias. Se ha bloqueado la edición para conservar los datos guardados.';
+			throw error;
+		}
+	}
+
 	onMount(() => {
 		try {
 			recoverAssignment(localStorage);
@@ -1397,20 +1430,7 @@
 				incidentList = parsed;
 			}
 			// Sincronizar auto-cierre determinista para incidencias resueltas >= 24h
-			const sync = synchronizeIncidentClosures(incidentList, history, now);
-			if (sync.changed) {
-				incidentList = sync.updatedIncidents;
-				history = [...history, ...sync.newHistoryEntries];
-				commitAssignment(
-					localStorage,
-					incidentList,
-					history,
-					storedIncidentSnapshot,
-					storedHistorySnapshot
-				);
-				storedIncidentSnapshot = JSON.stringify(incidentList);
-				storedHistorySnapshot = JSON.stringify(history);
-			}
+			runAutoClosureSync(now);
 			assignmentReady = true;
 		} catch (error) {
 			incidentLoadError =
@@ -1514,19 +1534,10 @@
 		const intervalId = setInterval(() => {
 			now = new Date();
 			if (assignmentReady && !incidentLoadError) {
-				const sync = synchronizeIncidentClosures(incidentList, history, now);
-				if (sync.changed) {
-					incidentList = sync.updatedIncidents;
-					history = [...history, ...sync.newHistoryEntries];
-					commitAssignment(
-						localStorage,
-						incidentList,
-						history,
-						storedIncidentSnapshot,
-						storedHistorySnapshot
-					);
-					storedIncidentSnapshot = JSON.stringify(incidentList);
-					storedHistorySnapshot = JSON.stringify(history);
+				try {
+					runAutoClosureSync(now);
+				} catch {
+					// El error ya fue capturado y registrado en incidentLoadError
 				}
 			}
 		}, 60_000);
@@ -1535,19 +1546,10 @@
 			if (document.visibilityState === 'visible') {
 				now = new Date();
 				if (assignmentReady && !incidentLoadError) {
-					const sync = synchronizeIncidentClosures(incidentList, history, now);
-					if (sync.changed) {
-						incidentList = sync.updatedIncidents;
-						history = [...history, ...sync.newHistoryEntries];
-						commitAssignment(
-							localStorage,
-							incidentList,
-							history,
-							storedIncidentSnapshot,
-							storedHistorySnapshot
-						);
-						storedIncidentSnapshot = JSON.stringify(incidentList);
-						storedHistorySnapshot = JSON.stringify(history);
+					try {
+						runAutoClosureSync(now);
+					} catch {
+						// El error ya fue capturado y registrado en incidentLoadError
 					}
 				}
 			}
