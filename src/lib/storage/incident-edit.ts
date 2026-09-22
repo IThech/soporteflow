@@ -6,7 +6,7 @@ import type { Incident, IncidentStatus } from '$lib/types/incident';
 import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 import type { AppUser } from '$lib/types/user';
 import { generateId } from '$lib/utils/id';
-import { commitAssignment } from './assignment';
+import { commitAssignment, TRANSITION_RECOVERY_KEY } from './assignment';
 import { FIRST_RESPONSE_RECOVERY_KEY } from './first-response';
 
 export type IncidentEditChange =
@@ -115,6 +115,8 @@ export function commitIncidentEdit(
 		throw new Error(
 			'Hay una primera respuesta pendiente de recuperación. Recarga antes de continuar.'
 		);
+	if (storage.getItem(TRANSITION_RECOVERY_KEY) !== null)
+		throw new Error('Hay una operación pendiente de recuperación. Recarga antes de continuar.');
 	commitAssignment(storage, nextIncidents, nextHistory, expectedIncidents, expectedHistory);
 	return { incidents: nextIncidents, history: nextHistory, notificationInput };
 }

@@ -93,6 +93,11 @@
 	import { loadMessages, MESSAGES_KEY } from '$lib/storage/messages';
 	import { recoverFirstResponse, FIRST_RESPONSE_RECOVERY_KEY } from '$lib/storage/first-response';
 	import {
+		commitTransitionWithMessage,
+		recoverTransitionWithMessage,
+		TRANSITION_RECOVERY_KEY
+	} from '$lib/storage/transition-message';
+	import {
 		applyCreationSla,
 		buildCreatedHistoryEntry,
 		recordStatusTransition,
@@ -1208,20 +1213,31 @@
 		const rawMessages = localStorage.getItem(MESSAGES_KEY);
 		const currentMessages = rawMessages ? loadMessages(rawMessages) : [];
 		const nextMessages = [...currentMessages, message];
-		localStorage.setItem(MESSAGES_KEY, JSON.stringify(nextMessages));
-
 		const nextList = incidentList.map((i) => (i.id === incident.id ? updated : i));
 		const nextHistory = [...history, historyEntry];
 
-		commitAssignment(
-			localStorage,
-			nextList,
-			nextHistory,
-			storedIncidentSnapshot,
-			storedHistorySnapshot
-		);
+		try {
+			commitTransitionWithMessage(
+				localStorage,
+				nextList,
+				nextHistory,
+				nextMessages,
+				storedIncidentSnapshot,
+				storedHistorySnapshot,
+				rawMessages
+			);
+		} catch (error) {
+			window.alert(
+				error instanceof Error
+					? error.message
+					: 'No se pudo rechazar la solución. Los datos se han conservado.'
+			);
+			return;
+		}
+
 		incidentList = nextList;
 		history = nextHistory;
+		messageList = nextMessages;
 		storedIncidentSnapshot = JSON.stringify(nextList);
 		storedHistorySnapshot = JSON.stringify(nextHistory);
 
@@ -1229,14 +1245,18 @@
 			editingIncident = { ...updated };
 		}
 
-		// Notify technician with the rejection comment
-		const notif = buildIncidentNotification({
-			type: 'incident_reopened',
-			incident: updated,
-			actor: activeUser,
-			reason: commentText
-		});
-		recordNotification(notif);
+		// Notifications are secondary: failure here must not undo or misreport a confirmed transition
+		try {
+			const notif = buildIncidentNotification({
+				type: 'incident_reopened',
+				incident: updated,
+				actor: activeUser,
+				reason: commentText
+			});
+			recordNotification(notif);
+		} catch {
+			// Secondary notification failure does not corrupt data
+		}
 
 		rejectModalOpen = false;
 		rejectIncident = null;
@@ -1285,20 +1305,31 @@
 		const rawMessages = localStorage.getItem(MESSAGES_KEY);
 		const currentMessages = rawMessages ? loadMessages(rawMessages) : [];
 		const nextMessages = [...currentMessages, message];
-		localStorage.setItem(MESSAGES_KEY, JSON.stringify(nextMessages));
-
 		const nextList = incidentList.map((i) => (i.id === incident.id ? updated : i));
 		const nextHistory = [...history, historyEntry];
 
-		commitAssignment(
-			localStorage,
-			nextList,
-			nextHistory,
-			storedIncidentSnapshot,
-			storedHistorySnapshot
-		);
+		try {
+			commitTransitionWithMessage(
+				localStorage,
+				nextList,
+				nextHistory,
+				nextMessages,
+				storedIncidentSnapshot,
+				storedHistorySnapshot,
+				rawMessages
+			);
+		} catch (error) {
+			window.alert(
+				error instanceof Error
+					? error.message
+					: 'No se pudo reabrir la incidencia. Los datos se han conservado.'
+			);
+			return;
+		}
+
 		incidentList = nextList;
 		history = nextHistory;
+		messageList = nextMessages;
 		storedIncidentSnapshot = JSON.stringify(nextList);
 		storedHistorySnapshot = JSON.stringify(nextHistory);
 
@@ -1306,14 +1337,18 @@
 			editingIncident = { ...updated };
 		}
 
-		// Notify technician with reason
-		const notif = buildIncidentNotification({
-			type: 'incident_reopened',
-			incident: updated,
-			actor: activeUser,
-			reason: reasonText
-		});
-		recordNotification(notif);
+		// Notifications are secondary: failure here must not undo or misreport a confirmed transition
+		try {
+			const notif = buildIncidentNotification({
+				type: 'incident_reopened',
+				incident: updated,
+				actor: activeUser,
+				reason: reasonText
+			});
+			recordNotification(notif);
+		} catch {
+			// Secondary notification failure does not corrupt data
+		}
 
 		reopenModalOpen = false;
 		reopenIncident = null;
@@ -1349,6 +1384,7 @@
 		try {
 			recoverAssignment(localStorage);
 			recoverFirstResponse(localStorage);
+			recoverTransitionWithMessage(localStorage);
 			const stored = localStorage.getItem(STORAGE_KEY);
 			storedIncidentSnapshot = stored;
 			storedHistorySnapshot = localStorage.getItem(HISTORY_KEY);
@@ -1376,9 +1412,11 @@
 				storedHistorySnapshot = JSON.stringify(history);
 			}
 			assignmentReady = true;
-		} catch {
+		} catch (error) {
 			incidentLoadError =
-				'No se pudieron cargar las incidencias o su historial. Se ha bloqueado la edición para conservar los datos guardados.';
+				error instanceof Error && error.message
+					? error.message
+					: 'No se pudieron cargar las incidencias o su historial. Se ha bloqueado la edición para conservar los datos guardados.';
 			incidentList = [];
 		}
 
@@ -1546,7 +1584,8 @@
 				localStorage.getItem(STORAGE_KEY) !== storedIncidentSnapshot ||
 				localStorage.getItem(HISTORY_KEY) !== storedHistorySnapshot ||
 				localStorage.getItem(RECOVERY_KEY) !== null ||
-				localStorage.getItem(FIRST_RESPONSE_RECOVERY_KEY) !== null
+				localStorage.getItem(FIRST_RESPONSE_RECOVERY_KEY) !== null ||
+				localStorage.getItem(TRANSITION_RECOVERY_KEY) !== null
 			)
 				throw new Error('Los datos han cambiado en otra pestaña. Recarga antes de continuar.');
 			localStorage.setItem(STORAGE_KEY, JSON.stringify(incidentList));

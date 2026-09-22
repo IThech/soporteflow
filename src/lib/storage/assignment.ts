@@ -6,6 +6,7 @@ import type { IncidentHistoryEntry } from '$lib/types/incident-history';
 export const INCIDENTS_KEY = 'soporteflow-incidents';
 export const HISTORY_KEY = 'soporteflow-incident-history';
 export const RECOVERY_KEY = 'soporteflow-assignment-recovery';
+export const TRANSITION_RECOVERY_KEY = 'soporteflow-transition-recovery';
 type LocalStore = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 export function loadHistory(raw: string | null): IncidentHistoryEntry[] {
@@ -52,7 +53,7 @@ export function commitAssignment(
 	expectedIncidents: string | null,
 	expectedHistory: string | null
 ): void {
-	if (storage.getItem(RECOVERY_KEY) !== null)
+	if (storage.getItem(RECOVERY_KEY) !== null || storage.getItem(TRANSITION_RECOVERY_KEY) !== null)
 		throw new Error('Hay una operación pendiente de recuperación. Recarga antes de continuar.');
 	if (
 		storage.getItem(INCIDENTS_KEY) !== expectedIncidents ||

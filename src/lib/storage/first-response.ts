@@ -1,5 +1,5 @@
 import { loadMessages, appendMessage, MESSAGES_KEY } from './messages';
-import { INCIDENTS_KEY } from './assignment';
+import { INCIDENTS_KEY, TRANSITION_RECOVERY_KEY } from './assignment';
 import { isIncidentList } from '$lib/incidents/validation';
 import { isFirstResponseEligible, recordFirstResponse } from '$lib/incidents/lifecycle';
 import type { IncidentMessage } from '$lib/types/incident-message';
@@ -64,7 +64,10 @@ export function commitFirstResponse(
 	expectedMessages: string | null,
 	expectedIncidents: string | null
 ): void {
-	if (storage.getItem(FIRST_RESPONSE_RECOVERY_KEY) !== null) {
+	if (
+		storage.getItem(FIRST_RESPONSE_RECOVERY_KEY) !== null ||
+		storage.getItem(TRANSITION_RECOVERY_KEY) !== null
+	) {
 		throw new Error(
 			'Hay una operación de primera respuesta pendiente de recuperación. Recarga antes de continuar.'
 		);

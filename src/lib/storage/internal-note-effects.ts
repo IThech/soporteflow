@@ -3,7 +3,7 @@ import { incidentOrganizationId } from '$lib/incidents/assignment';
 import { hasPermission } from '$lib/auth/permissions';
 import { buildIncidentNotification } from '$lib/incidents/notifications';
 import { loadMessages, MESSAGES_KEY } from './messages';
-import { loadHistory, HISTORY_KEY, RECOVERY_KEY } from './assignment';
+import { loadHistory, HISTORY_KEY, RECOVERY_KEY, TRANSITION_RECOVERY_KEY } from './assignment';
 import { loadNotifications, saveNotifications, NOTIFICATIONS_KEY } from './notifications';
 import type { AppUser } from '$lib/types/user';
 import type { Incident } from '$lib/types/incident';
@@ -32,7 +32,7 @@ export function completeInternalNoteEffects(
 	const saved = loadMessages(storage.getItem(MESSAGES_KEY)).find((item) => item.id === message.id);
 	if (!saved || JSON.stringify(saved) !== JSON.stringify(message))
 		throw new Error('La nota guardada no coincide. Revisa los datos antes de continuar.');
-	if (storage.getItem(RECOVERY_KEY) !== null)
+	if (storage.getItem(RECOVERY_KEY) !== null || storage.getItem(TRANSITION_RECOVERY_KEY) !== null)
 		throw new Error('Hay una recuperación pendiente del historial. Recarga antes de continuar.');
 	const raw = storage.getItem(HISTORY_KEY);
 	const history = loadHistory(raw);

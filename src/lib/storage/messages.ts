@@ -3,6 +3,7 @@ import type { Incident } from '$lib/types/incident';
 import type { AppUser } from '$lib/types/user';
 import { canCreateMessage, validateNewMessageContent } from '$lib/incidents/messages';
 import { incidentOrganizationId } from '$lib/incidents/assignment';
+import { TRANSITION_RECOVERY_KEY } from './assignment';
 
 export const MESSAGES_KEY = 'soporteflow-incident-messages';
 // Historical messages intentionally have no length cap: never reject or truncate legacy notes.
@@ -47,6 +48,10 @@ export function appendMessage(
 	)
 		throw new Error('No tienes permiso para guardar este mensaje.');
 	validateNewMessageContent(message.visibility, message.content);
+	if (storage.getItem(TRANSITION_RECOVERY_KEY) !== null)
+		throw new Error(
+			'Hay una recuperación pendiente. Recarga antes de guardar mensajes; tu borrador se conserva.'
+		);
 	const raw = storage.getItem(MESSAGES_KEY);
 	if (raw !== expectedRaw)
 		throw new Error(
