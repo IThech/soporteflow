@@ -89,7 +89,7 @@
 	import IncidentMessages from '$lib/components/IncidentMessages.svelte';
 	import { completeInternalNoteEffects } from '$lib/storage/internal-note-effects';
 	import { loadMessages, MESSAGES_KEY } from '$lib/storage/messages';
-	import { recoverFirstResponse } from '$lib/storage/first-response';
+	import { recoverFirstResponse, FIRST_RESPONSE_RECOVERY_KEY } from '$lib/storage/first-response';
 	import {
 		commitTransitionWithMessage,
 		recoverTransitionWithMessage
@@ -125,7 +125,7 @@
 	import ChangeSiteDialog from '$lib/components/ChangeSiteDialog.svelte';
 	import ReclassifyDialog from '$lib/components/ReclassifyDialog.svelte';
 	import OverridePriorityDialog from '$lib/components/OverridePriorityDialog.svelte';
-	import { changeIncidentSite } from '$lib/sites/incident-site';
+	import { changeIncidentSite, validateIncidentSite } from '$lib/sites/incident-site';
 	import { USERS_STORAGE_KEY, loadUsersResult, saveUsers } from '$lib/users/catalog';
 	import SlaBadge from '$lib/components/SlaBadge.svelte';
 	import IncidentSlaPanel from '$lib/components/IncidentSlaPanel.svelte';
@@ -1920,6 +1920,24 @@
 
 		const categoryRouting = resolveCategoryRouting(matchedCat);
 
+		let validatedSiteId: string | null = null;
+		if (newSiteId) {
+			if (!sitesLoaded || siteLoadError) {
+				window.alert(
+					siteLoadError ||
+						'El catálogo de sedes no está disponible o contiene datos corruptos. No se puede asignar una sede.'
+				);
+				return;
+			}
+			try {
+				const validatedSite = validateIncidentSite(newSiteId, orgId, siteList);
+				validatedSiteId = validatedSite ? validatedSite.id : null;
+			} catch (err) {
+				window.alert(err instanceof Error ? err.message : 'Error al validar la sede seleccionada.');
+				return;
+			}
+		}
+
 		const draft: Incident = {
 			id: nextId,
 			organizationId: activeUser.organizationId,
@@ -1932,7 +1950,7 @@
 			status: 'open',
 			priority: operationalPriority,
 			createdAt: new Date().toISOString(),
-			siteId: newSiteId ? newSiteId : null,
+			siteId: validatedSiteId,
 			categoryId: matchedCat.id,
 			subcategoryId: matchedSubcat.id,
 			classification: classificationRes.snapshot,
@@ -1951,6 +1969,11 @@
 		const nextHistory = [...history, createdEvent];
 
 		try {
+			if (localStorage.getItem(FIRST_RESPONSE_RECOVERY_KEY) !== null) {
+				throw new Error(
+					'Hay una primera respuesta pendiente de recuperación. Recarga antes de continuar.'
+				);
+			}
 			commitAssignment(
 				localStorage,
 				nextIncidents,

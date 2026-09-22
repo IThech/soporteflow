@@ -28,6 +28,8 @@ import {
 } from '$lib/classification/engine';
 import { resolveOrganizationMatrix } from '$lib/classification/matrix-catalog';
 import { isIncidentList } from './validation';
+import { validateIncidentSite } from '$lib/sites/incident-site';
+import type { Site } from '$lib/types/site';
 import { isIncidentHistory } from './history';
 import { generateId } from '$lib/utils/id';
 
@@ -258,6 +260,7 @@ export interface ValidateAndBuildV2IncidentInput {
 	subcategories: Subcategory[];
 	priorityMatrices: PriorityMatrix[];
 	slaPolicies?: SlaPolicy[];
+	availableSites?: readonly Site[];
 }
 
 export type ValidateAndBuildV2IncidentResult =
@@ -379,6 +382,21 @@ export function validateAndBuildV2Incident(
 	const operationalPriority = toIncidentPriority(classificationResult.effectivePriority);
 	const categoryRouting = resolveCategoryRouting(matchedCat);
 
+	let validatedSiteId: string | null;
+	if (input.availableSites) {
+		try {
+			const validatedSite = validateIncidentSite(input.siteId, orgId, input.availableSites);
+			validatedSiteId = validatedSite ? validatedSite.id : null;
+		} catch (err) {
+			return {
+				ok: false,
+				error: err instanceof Error ? err.message : 'Error al validar la sede seleccionada.'
+			};
+		}
+	} else {
+		validatedSiteId = input.siteId ? input.siteId : null;
+	}
+
 	const draft: Incident = {
 		id: input.id,
 		organizationId: orgId,
@@ -391,7 +409,7 @@ export function validateAndBuildV2Incident(
 		status: 'open',
 		priority: operationalPriority,
 		createdAt: new Date().toISOString(),
-		siteId: input.siteId ? input.siteId : null,
+		siteId: validatedSiteId,
 		categoryId: matchedCat.id,
 		subcategoryId: matchedSubcat.id,
 		classification: classificationResult.snapshot,

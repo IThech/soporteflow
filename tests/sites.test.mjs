@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { createServer } from 'vite';
 
 test('SoporteFlow — Fase D.1: Sedes y ubicaciones V1', async (t) => {
@@ -23,7 +24,12 @@ test('SoporteFlow — Fase D.1: Sedes y ubicaciones V1', async (t) => {
 			SITES_STORAGE_KEY
 		} = await server.ssrLoadModule('/src/lib/sites/catalog.ts');
 		const { createUser, updateUser } = await server.ssrLoadModule('/src/lib/users/catalog.ts');
-		const { changeIncidentSite } = await server.ssrLoadModule('/src/lib/sites/incident-site.ts');
+		const { changeIncidentSite, validateIncidentSite } = await server.ssrLoadModule(
+			'/src/lib/sites/incident-site.ts'
+		);
+		const { validateAndBuildV2Incident } = await server.ssrLoadModule(
+			'/src/lib/incidents/lifecycle.ts'
+		);
 		const { isIncidentHistory } = await server.ssrLoadModule('/src/lib/incidents/history.ts');
 		const { describeHistoryEvent } = await server.ssrLoadModule('/src/lib/incidents/timeline.ts');
 		const { isIncidentList } = await server.ssrLoadModule('/src/lib/incidents/validation.ts');
@@ -542,6 +548,633 @@ test('SoporteFlow — Fase D.1: Sedes y ubicaciones V1', async (t) => {
 				'+page.svelte debe permitir elegir sede al crear una incidencia'
 			);
 		});
+
+		await t.test(
+			'8. Validación de sedes al crear incidencias (dominio, lifecycle y orquestador Svelte)',
+			async (st) => {
+				const orgId = demoOrganization.id;
+				const validSite = demoSites[0];
+				const inactiveSite = {
+					id: 'site-inactive-test',
+					organizationId: orgId,
+					name: 'Sede Inactiva',
+					active: false,
+					createdAt: '2026-09-01'
+				};
+				const foreignSite = {
+					id: 'site-foreign-test',
+					organizationId: 'other-org-uuid',
+					name: 'Sede Otra Org',
+					active: true,
+					createdAt: '2026-09-01'
+				};
+				const testSiteCatalog = [...demoSites, inactiveSite, foreignSite];
+
+				// 8.1 Validación pura de dominio: validateIncidentSite
+				await st.test('8.1 validateIncidentSite: comprobaciones estrictas', () => {
+					// Sede válida
+					const resValid = validateIncidentSite(validSite.id, orgId, testSiteCatalog);
+					assert.equal(resValid?.id, validSite.id);
+
+					// Sin sede (null, undefined, whitespace, cadena vacía)
+					assert.equal(validateIncidentSite(null, orgId, testSiteCatalog), null);
+					assert.equal(validateIncidentSite(undefined, orgId, testSiteCatalog), null);
+					assert.equal(validateIncidentSite('', orgId, testSiteCatalog), null);
+					assert.equal(validateIncidentSite('   ', orgId, testSiteCatalog), null);
+
+					// Sede inexistente
+					assert.throws(
+						() => validateIncidentSite('site-inexistente', orgId, testSiteCatalog),
+						/La sede seleccionada no existe/
+					);
+
+					// Sede inactiva
+					assert.throws(
+						() => validateIncidentSite(inactiveSite.id, orgId, testSiteCatalog),
+						/No se puede asignar una sede inactiva a una incidencia/
+					);
+
+					// Sede de otra organización
+					assert.throws(
+						() => validateIncidentSite(foreignSite.id, orgId, testSiteCatalog),
+						/La sede debe pertenecer a la misma organización que la incidencia/
+					);
+				});
+
+				// 8.2 Integración en validateAndBuildV2Incident
+				await st.test(
+					'8.2 validateAndBuildV2Incident valida sedes cuando se provee availableSites',
+					async () => {
+						const { createStandardPriorityMatrix } = await server.ssrLoadModule(
+							'/src/lib/classification/engine.ts'
+						);
+						const baseV2Input = {
+							id: 501,
+							title: 'Problema de red',
+							client: 'Cliente Test',
+							description: 'Detalle de la incidencia',
+							activeUser: orgAdmin,
+							categoryId: 'cat-1',
+							subcategoryId: 'sub-1',
+							impact: 'I2',
+							categoryList: [
+								{ id: 'cat-1', organizationId: orgId, name: 'Sistemas', active: true }
+							],
+							subcategories: [
+								{
+									id: 'sub-1',
+									organizationId: orgId,
+									categoryId: 'cat-1',
+									name: 'Red',
+									baseCriticality: 'medium',
+									minPriority: null,
+									active: true
+								}
+							],
+							priorityMatrices: [createStandardPriorityMatrix(orgId)],
+							availableSites: testSiteCatalog
+						};
+
+						// Con sede válida
+						const resValid = validateAndBuildV2Incident({
+							...baseV2Input,
+							siteId: validSite.id
+						});
+						assert.equal(resValid.ok, true);
+						if (resValid.ok) {
+							assert.equal(resValid.incident.siteId, validSite.id);
+						}
+
+						// Sin sede (siteId: null)
+						const resNoSite = validateAndBuildV2Incident({
+							...baseV2Input,
+							siteId: null
+						});
+						assert.equal(resNoSite.ok, true);
+						if (resNoSite.ok) {
+							assert.equal(resNoSite.incident.siteId, null);
+						}
+
+						// Rechazo sede inexistente
+						const resMissing = validateAndBuildV2Incident({
+							...baseV2Input,
+							siteId: 'site-inexistente'
+						});
+						assert.equal(resMissing.ok, false);
+						if (!resMissing.ok) {
+							assert.match(resMissing.error, /La sede seleccionada no existe/);
+						}
+
+						// Rechazo sede inactiva
+						const resInactive = validateAndBuildV2Incident({
+							...baseV2Input,
+							siteId: inactiveSite.id
+						});
+						assert.equal(resInactive.ok, false);
+						if (!resInactive.ok) {
+							assert.match(
+								resInactive.error,
+								/No se puede asignar una sede inactiva a una incidencia/
+							);
+						}
+
+						// Rechazo sede otra org
+						const resForeign = validateAndBuildV2Incident({
+							...baseV2Input,
+							siteId: foreignSite.id
+						});
+						assert.equal(resForeign.ok, false);
+						if (!resForeign.ok) {
+							assert.match(
+								resForeign.error,
+								/La sede debe pertenecer a la misma organización que la incidencia/
+							);
+						}
+					}
+				);
+
+				// 8.3 Orquestador Svelte (+page.svelte createIncident)
+				await st.test(
+					'8.3 createIncident en +page.svelte: flujo de validación, preservación de borrador y resiliencia',
+					async () => {
+						const pageSource = readFileSync('src/routes/app/+page.svelte', 'utf8');
+						const scriptContent = pageSource.split('<script lang="ts">')[1].split('</script>')[0];
+						const ast = ts.createSourceFile(
+							'page.ts',
+							scriptContent,
+							ts.ScriptTarget.Latest,
+							true,
+							ts.ScriptKind.TS
+						);
+
+						const fnNode = ast.statements.find(
+							(n) => ts.isFunctionDeclaration(n) && n.name?.text === 'createIncident'
+						);
+						assert.ok(fnNode, 'createIncident debe existir en +page.svelte');
+
+						const harnessCode = ts.transpileModule(
+							`
+					const {
+						checkIncidentCreationSla,
+						canAccessRecord,
+						isImpactLevel,
+						resolveOrganizationMatrix,
+						classifyIncident,
+						toIncidentPriority,
+						loadMessages,
+						MESSAGES_KEY,
+						resolveCategoryRouting,
+						applyCreationSla,
+						isIncidentList,
+						buildCreatedHistoryEntry,
+						commitAssignment,
+						validateIncidentSite,
+						FIRST_RESPONSE_RECOVERY_KEY,
+						canAccessOrganization,
+						hasPermission,
+						demoOrganization
+					} = deps;
+
+					let incidentLoadError = '';
+					let assignmentReady = true;
+					const activeUser = seed.actor;
+					let title = seed.title ?? '';
+					let client = seed.client ?? '';
+					let description = seed.description ?? '';
+					let newCategoryId = seed.categoryId ?? '';
+					let newSubcategoryId = seed.subcategoryId ?? '';
+					let newImpact = seed.impact ?? '';
+					let newSiteId = seed.siteId ?? '';
+					let isFormOpen = true;
+
+					const categoryList = seed.categories;
+					const subcategoriesReady = true;
+					const subcategoriesState = { status: 'valid', subcategories: seed.subcategories };
+					const subcategoriesError = '';
+					const priorityMatricesReady = true;
+					const priorityMatricesState = { status: 'valid', matrices: seed.matrices };
+					const priorityMatricesError = '';
+					const slaCatalogState = seed.slaCatalogState;
+
+					let siteList = seed.siteList;
+					let sitesLoaded = seed.sitesLoaded ?? true;
+					let siteLoadError = seed.siteLoadError ?? '';
+
+					let incidentList = seed.incidents;
+					let history = seed.history;
+					let storedIncidentSnapshot = seed.incidentRaw;
+					let storedHistorySnapshot = seed.historyRaw;
+
+					const localStorage = seed.storage;
+					const alerts = [];
+					const window = {
+						alert: (msg) => alerts.push(msg)
+					};
+
+					${fnNode.getText(ast)}
+
+					return {
+						submit: () => createIncident({ preventDefault: () => {} }),
+						getState: () => ({
+							incidentList,
+							history,
+							storedIncidentSnapshot,
+							title,
+							client,
+							description,
+							newCategoryId,
+							newSubcategoryId,
+							newImpact,
+							newSiteId,
+							isFormOpen,
+							alerts
+						})
+					};
+					`,
+							{ compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }
+						).outputText;
+
+						const factory = new Function('deps', 'seed', harnessCode);
+
+						const { checkIncidentCreationSla } = await server.ssrLoadModule(
+							'/src/lib/incidents/sla-catalog.ts'
+						);
+						const { canAccessRecord } = await server.ssrLoadModule(
+							'/src/lib/auth/record-access.ts'
+						);
+						const { canAccessOrganization, hasPermission } = await server.ssrLoadModule(
+							'/src/lib/auth/permissions.ts'
+						);
+						const {
+							isImpactLevel,
+							toIncidentPriority,
+							classifyIncident,
+							createStandardPriorityMatrix
+						} = await server.ssrLoadModule('/src/lib/classification/engine.ts');
+						const { resolveOrganizationMatrix } = await server.ssrLoadModule(
+							'/src/lib/classification/matrix-catalog.ts'
+						);
+						const { loadMessages, MESSAGES_KEY } = await server.ssrLoadModule(
+							'/src/lib/storage/messages.ts'
+						);
+						const { resolveCategoryRouting } = await server.ssrLoadModule(
+							'/src/lib/categories/catalog.ts'
+						);
+						const { applyCreationSla, buildCreatedHistoryEntry } = await server.ssrLoadModule(
+							'/src/lib/incidents/lifecycle.ts'
+						);
+						const { commitAssignment, INCIDENTS_KEY, HISTORY_KEY } = await server.ssrLoadModule(
+							'/src/lib/storage/assignment.ts'
+						);
+						const { FIRST_RESPONSE_RECOVERY_KEY } = await server.ssrLoadModule(
+							'/src/lib/storage/first-response.ts'
+						);
+
+						const deps = {
+							checkIncidentCreationSla,
+							canAccessRecord,
+							isImpactLevel,
+							resolveOrganizationMatrix,
+							classifyIncident,
+							toIncidentPriority,
+							loadMessages,
+							MESSAGES_KEY,
+							resolveCategoryRouting,
+							applyCreationSla,
+							isIncidentList,
+							buildCreatedHistoryEntry,
+							commitAssignment,
+							validateIncidentSite,
+							FIRST_RESPONSE_RECOVERY_KEY,
+							canAccessOrganization,
+							hasPermission,
+							demoOrganization
+						};
+
+						const defaultCategories = [
+							{ id: 'cat-1', organizationId: orgId, name: 'Sistemas', active: true }
+						];
+						const defaultSubcategories = [
+							{
+								id: 'sub-1',
+								organizationId: orgId,
+								categoryId: 'cat-1',
+								name: 'Red',
+								baseCriticality: 'medium',
+								minPriority: null,
+								active: true
+							}
+						];
+						const defaultMatrices = [createStandardPriorityMatrix(orgId)];
+						const defaultSlaState = { status: 'valid', policies: [] };
+
+						const makeStore = (initial = {}) => {
+							const m = new Map(Object.entries(initial));
+							return {
+								getItem: (k) => m.get(k) ?? null,
+								setItem: (k, v) => m.set(k, String(v)),
+								removeItem: (k) => m.delete(k)
+							};
+						};
+
+						// Caso 1: Creación con sede válida
+						{
+							const store = makeStore({
+								[INCIDENTS_KEY]: '[]',
+								[HISTORY_KEY]: '[]',
+								[MESSAGES_KEY]: '[]'
+							});
+							const h = factory(deps, {
+								actor: orgAdmin,
+								title: 'Fallo fibra óptica',
+								client: 'Nodhouses Corp',
+								description: 'Corte de cable en CPD',
+								categoryId: 'cat-1',
+								subcategoryId: 'sub-1',
+								impact: 'I3',
+								siteId: validSite.id,
+								categories: defaultCategories,
+								subcategories: defaultSubcategories,
+								matrices: defaultMatrices,
+								slaCatalogState: defaultSlaState,
+								siteList: testSiteCatalog,
+								sitesLoaded: true,
+								incidents: [],
+								history: [],
+								incidentRaw: '[]',
+								historyRaw: '[]',
+								storage: store
+							});
+
+							h.submit();
+							const s = h.getState();
+							assert.equal(s.alerts.length, 0);
+							assert.equal(s.incidentList.length, 1);
+							assert.equal(s.incidentList[0].siteId, validSite.id);
+							assert.equal(s.title, ''); // reset
+							assert.equal(s.newSiteId, ''); // reset
+							assert.equal(s.isFormOpen, false);
+						}
+
+						// Caso 2: Creación sin sede ("Sin sede asignada")
+						{
+							const store = makeStore({
+								[INCIDENTS_KEY]: '[]',
+								[HISTORY_KEY]: '[]',
+								[MESSAGES_KEY]: '[]'
+							});
+							const h = factory(deps, {
+								actor: orgAdmin,
+								title: 'Consulta licencia software',
+								client: 'Nodhouses Corp',
+								description: 'Duda teletrabajo',
+								categoryId: 'cat-1',
+								subcategoryId: 'sub-1',
+								impact: 'I1',
+								siteId: '',
+								categories: defaultCategories,
+								subcategories: defaultSubcategories,
+								matrices: defaultMatrices,
+								slaCatalogState: defaultSlaState,
+								siteList: testSiteCatalog,
+								sitesLoaded: true,
+								incidents: [],
+								history: [],
+								incidentRaw: '[]',
+								historyRaw: '[]',
+								storage: store
+							});
+
+							h.submit();
+							const s = h.getState();
+							assert.equal(s.alerts.length, 0);
+							assert.equal(s.incidentList.length, 1);
+							assert.equal(s.incidentList[0].siteId, null);
+							assert.equal(s.title, '');
+						}
+
+						// Caso 3: Rechazo de sede inexistente y conservación de borrador
+						{
+							const store = makeStore({
+								[INCIDENTS_KEY]: '[]',
+								[HISTORY_KEY]: '[]',
+								[MESSAGES_KEY]: '[]'
+							});
+							const h = factory(deps, {
+								actor: orgAdmin,
+								title: 'Borrador importante',
+								client: 'Nodhouses Corp',
+								description: 'Descripción no debe perderse',
+								categoryId: 'cat-1',
+								subcategoryId: 'sub-1',
+								impact: 'I2',
+								siteId: 'site-inexistente',
+								categories: defaultCategories,
+								subcategories: defaultSubcategories,
+								matrices: defaultMatrices,
+								slaCatalogState: defaultSlaState,
+								siteList: testSiteCatalog,
+								sitesLoaded: true,
+								incidents: [],
+								history: [],
+								incidentRaw: '[]',
+								historyRaw: '[]',
+								storage: store
+							});
+
+							h.submit();
+							const s = h.getState();
+							assert.equal(s.alerts.length, 1);
+							assert.match(s.alerts[0], /La sede seleccionada no existe/);
+							assert.equal(s.incidentList.length, 0, 'No debe crear la incidencia');
+							assert.equal(s.title, 'Borrador importante', 'Borrador de título conservado');
+							assert.equal(s.description, 'Descripción no debe perderse', 'Borrador conservado');
+							assert.equal(s.newSiteId, 'site-inexistente', 'Sede conservada');
+						}
+
+						// Caso 4: Rechazo de sede inactiva
+						{
+							const store = makeStore({
+								[INCIDENTS_KEY]: '[]',
+								[HISTORY_KEY]: '[]',
+								[MESSAGES_KEY]: '[]'
+							});
+							const h = factory(deps, {
+								actor: orgAdmin,
+								title: 'Ticket en sede cerrada',
+								client: 'Nodhouses Corp',
+								description: 'Intento en sede inactiva',
+								categoryId: 'cat-1',
+								subcategoryId: 'sub-1',
+								impact: 'I2',
+								siteId: inactiveSite.id,
+								categories: defaultCategories,
+								subcategories: defaultSubcategories,
+								matrices: defaultMatrices,
+								slaCatalogState: defaultSlaState,
+								siteList: testSiteCatalog,
+								sitesLoaded: true,
+								incidents: [],
+								history: [],
+								incidentRaw: '[]',
+								historyRaw: '[]',
+								storage: store
+							});
+
+							h.submit();
+							const s = h.getState();
+							assert.equal(s.alerts.length, 1);
+							assert.match(s.alerts[0], /No se puede asignar una sede inactiva/);
+							assert.equal(s.incidentList.length, 0);
+							assert.equal(s.title, 'Ticket en sede cerrada');
+						}
+
+						// Caso 5: Rechazo de sede de otra organización
+						{
+							const store = makeStore({
+								[INCIDENTS_KEY]: '[]',
+								[HISTORY_KEY]: '[]',
+								[MESSAGES_KEY]: '[]'
+							});
+							const h = factory(deps, {
+								actor: orgAdmin,
+								title: 'Ticket cross tenant',
+								client: 'Nodhouses Corp',
+								description: 'Intento de infiltración',
+								categoryId: 'cat-1',
+								subcategoryId: 'sub-1',
+								impact: 'I2',
+								siteId: foreignSite.id,
+								categories: defaultCategories,
+								subcategories: defaultSubcategories,
+								matrices: defaultMatrices,
+								slaCatalogState: defaultSlaState,
+								siteList: testSiteCatalog,
+								sitesLoaded: true,
+								incidents: [],
+								history: [],
+								incidentRaw: '[]',
+								historyRaw: '[]',
+								storage: store
+							});
+
+							h.submit();
+							const s = h.getState();
+							assert.equal(s.alerts.length, 1);
+							assert.match(s.alerts[0], /La sede debe pertenecer a la misma organización/);
+							assert.equal(s.incidentList.length, 0);
+						}
+
+						// Caso 6: Catálogo corrupto bloquea cuando se selecciona sede, pero permite si es sin sede
+						{
+							const store = makeStore({
+								[INCIDENTS_KEY]: '[]',
+								[HISTORY_KEY]: '[]',
+								[MESSAGES_KEY]: '[]'
+							});
+							// 6A: con sede y catálogo corrupto -> bloquea
+							const hCorruptWithSite = factory(deps, {
+								actor: orgAdmin,
+								title: 'Ticket sede con catálogo roto',
+								client: 'Nodhouses Corp',
+								description: 'Detalle',
+								categoryId: 'cat-1',
+								subcategoryId: 'sub-1',
+								impact: 'I2',
+								siteId: validSite.id,
+								categories: defaultCategories,
+								subcategories: defaultSubcategories,
+								matrices: defaultMatrices,
+								slaCatalogState: defaultSlaState,
+								siteList: testSiteCatalog,
+								sitesLoaded: true,
+								siteLoadError: 'Catálogo de sedes corrupto en storage',
+								incidents: [],
+								history: [],
+								incidentRaw: '[]',
+								historyRaw: '[]',
+								storage: store
+							});
+
+							hCorruptWithSite.submit();
+							const s1 = hCorruptWithSite.getState();
+							assert.equal(s1.alerts.length, 1);
+							assert.match(s1.alerts[0], /Catálogo de sedes corrupto en storage/);
+							assert.equal(s1.incidentList.length, 0);
+							assert.equal(s1.title, 'Ticket sede con catálogo roto');
+
+							// 6B: sin sede y catálogo corrupto -> permite crear
+							const hCorruptNoSite = factory(deps, {
+								actor: orgAdmin,
+								title: 'Ticket sin sede con catálogo roto',
+								client: 'Nodhouses Corp',
+								description: 'Detalle',
+								categoryId: 'cat-1',
+								subcategoryId: 'sub-1',
+								impact: 'I2',
+								siteId: '',
+								categories: defaultCategories,
+								subcategories: defaultSubcategories,
+								matrices: defaultMatrices,
+								slaCatalogState: defaultSlaState,
+								siteList: testSiteCatalog,
+								sitesLoaded: true,
+								siteLoadError: 'Catálogo de sedes corrupto en storage',
+								incidents: [],
+								history: [],
+								incidentRaw: '[]',
+								historyRaw: '[]',
+								storage: store
+							});
+
+							hCorruptNoSite.submit();
+							const s2 = hCorruptNoSite.getState();
+							assert.equal(s2.alerts.length, 0);
+							assert.equal(s2.incidentList.length, 1);
+							assert.equal(s2.incidentList[0].siteId, null);
+						}
+
+						// Caso 7: Bloqueo ante diario de primera respuesta pendiente
+						{
+							const store = makeStore({
+								[INCIDENTS_KEY]: '[]',
+								[HISTORY_KEY]: '[]',
+								[MESSAGES_KEY]: '[]',
+								[FIRST_RESPONSE_RECOVERY_KEY]: '{"version":1}'
+							});
+							const h = factory(deps, {
+								actor: orgAdmin,
+								title: 'Ticket con primera respuesta pendiente',
+								client: 'Nodhouses Corp',
+								description: 'Detalle',
+								categoryId: 'cat-1',
+								subcategoryId: 'sub-1',
+								impact: 'I2',
+								siteId: validSite.id,
+								categories: defaultCategories,
+								subcategories: defaultSubcategories,
+								matrices: defaultMatrices,
+								slaCatalogState: defaultSlaState,
+								siteList: testSiteCatalog,
+								sitesLoaded: true,
+								incidents: [],
+								history: [],
+								incidentRaw: '[]',
+								historyRaw: '[]',
+								storage: store
+							});
+
+							h.submit();
+							const s = h.getState();
+							assert.equal(s.alerts.length, 1);
+							assert.match(s.alerts[0], /Hay una primera respuesta pendiente de recuperación/);
+							assert.equal(s.incidentList.length, 0);
+							assert.equal(s.title, 'Ticket con primera respuesta pendiente');
+						}
+					}
+				);
+			}
+		);
 	} finally {
 		await server.close();
 	}
