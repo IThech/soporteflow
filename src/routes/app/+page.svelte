@@ -80,8 +80,7 @@
 		recoverAssignment,
 		commitAssignment,
 		INCIDENTS_KEY,
-		HISTORY_KEY,
-		RECOVERY_KEY
+		HISTORY_KEY
 	} from '$lib/storage/assignment';
 	import { demoOrganization } from '$lib/data/organizations';
 	import { demoUsers } from '$lib/data/users';
@@ -90,11 +89,10 @@
 	import IncidentMessages from '$lib/components/IncidentMessages.svelte';
 	import { completeInternalNoteEffects } from '$lib/storage/internal-note-effects';
 	import { loadMessages, MESSAGES_KEY } from '$lib/storage/messages';
-	import { recoverFirstResponse, FIRST_RESPONSE_RECOVERY_KEY } from '$lib/storage/first-response';
+	import { recoverFirstResponse } from '$lib/storage/first-response';
 	import {
 		commitTransitionWithMessage,
-		recoverTransitionWithMessage,
-		TRANSITION_RECOVERY_KEY
+		recoverTransitionWithMessage
 	} from '$lib/storage/transition-message';
 	import { syncAndCommitAutoClosures } from '$lib/storage/auto-close';
 	import {
@@ -107,6 +105,7 @@
 		removePriorityOverride
 	} from '$lib/incidents/lifecycle';
 	import { commitIncidentEdit, type IncidentEditChange } from '$lib/storage/incident-edit';
+	import { commitIncidentDeletion } from '$lib/storage/incident-deletion';
 	import { demoSupportTeams } from '$lib/data/teams';
 	import { demoSupportLevels } from '$lib/data/support-levels';
 	import type { SupportLevelDefinition, SupportTeam } from '$lib/types/support';
@@ -1579,26 +1578,6 @@
 		}
 	}
 
-	function saveIncidents() {
-		if (incidentLoadError) return;
-		try {
-			if (
-				localStorage.getItem(STORAGE_KEY) !== storedIncidentSnapshot ||
-				localStorage.getItem(HISTORY_KEY) !== storedHistorySnapshot ||
-				localStorage.getItem(RECOVERY_KEY) !== null ||
-				localStorage.getItem(FIRST_RESPONSE_RECOVERY_KEY) !== null ||
-				localStorage.getItem(TRANSITION_RECOVERY_KEY) !== null
-			)
-				throw new Error('Los datos han cambiado en otra pestaña. Recarga antes de continuar.');
-			localStorage.setItem(STORAGE_KEY, JSON.stringify(incidentList));
-			storedIncidentSnapshot = JSON.stringify(incidentList);
-		} catch {
-			incidentLoadError =
-				'No se pudieron guardar los cambios o los datos han cambiado en otra pestaña. Recarga antes de continuar.';
-			window.alert(incidentLoadError);
-		}
-	}
-
 	let isFormOpen = $state(false);
 	let newCategoryId = $state('');
 	let newSubcategoryId = $state('');
@@ -1791,9 +1770,28 @@
 
 		if (!confirmed) return;
 
-		incidentList = incidentList.filter((item) => item.id !== id);
-		saveIncidents();
-		if (!incidentLoadError) editingIncident = null;
+		try {
+			const result = commitIncidentDeletion(
+				localStorage,
+				activeUser,
+				id,
+				incidentList,
+				history,
+				storedIncidentSnapshot,
+				storedHistorySnapshot
+			);
+			incidentList = result.incidents;
+			storedIncidentSnapshot = JSON.stringify(result.incidents);
+			if (editingIncident?.id === id) {
+				editingIncident = null;
+			}
+		} catch (error) {
+			incidentLoadError =
+				error instanceof Error
+					? error.message
+					: 'No se pudieron guardar los cambios o los datos han cambiado en otra pestaña. Recarga antes de continuar.';
+			window.alert(incidentLoadError);
+		}
 	}
 
 	function createIncident(event: SubmitEvent) {
