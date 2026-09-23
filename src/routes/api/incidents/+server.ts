@@ -4,8 +4,11 @@ import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import {
 	createIncidentRecord,
+	listIncidents,
 	IncidentServiceError,
-	type IncidentPriority
+	type IncidentPriority,
+	type IncidentStatus,
+	type ListIncidentsFilters
 } from '$lib/server/services/incidents';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -160,6 +163,102 @@ export const POST: RequestHandler = async (event) => {
 						{ status: 403 }
 					);
 			}
+		}
+
+		return json(
+			{
+				error: {
+					code: 'INTERNAL_ERROR',
+					message: 'Internal server error.'
+				}
+			},
+			{ status: 500 }
+		);
+	}
+};
+
+export const GET: RequestHandler = async (event) => {
+	// 1. Read organizationId from query string exclusively
+	const organizationId = event.url.searchParams.get('organizationId');
+
+	// 2. Validate organizationId
+	if (!isValidUuid(organizationId)) {
+		return json(
+			{
+				error: {
+					code: 'INVALID_INPUT',
+					message: 'organizationId must be a valid UUID.'
+				}
+			},
+			{ status: 400 }
+		);
+	}
+
+	// 3. Authenticate
+	const principal = await resolvePrincipal(event.request.headers);
+	if (!principal) {
+		return json(
+			{
+				error: {
+					code: 'UNAUTHORIZED',
+					message: 'Authentication required.'
+				}
+			},
+			{ status: 401 }
+		);
+	}
+
+	// 4. Authorize with incidents:view_all
+	const authorized = await authorizeAction(event.request.headers, {
+		organizationId,
+		permissionId: 'incidents:view_all'
+	});
+	if (!authorized) {
+		return json(
+			{
+				error: {
+					code: 'FORBIDDEN',
+					message: 'Permission denied.'
+				}
+			},
+			{ status: 403 }
+		);
+	}
+
+	// 5. Extract optional filters from query string
+	const filters: ListIncidentsFilters = {};
+	const statusParam = event.url.searchParams.get('status');
+	if (statusParam !== null) {
+		filters.status = statusParam as IncidentStatus;
+	}
+
+	const priorityParam = event.url.searchParams.get('priority');
+	if (priorityParam !== null) {
+		filters.priority = priorityParam as IncidentPriority;
+	}
+
+	const siteIdParam = event.url.searchParams.get('siteId');
+	if (siteIdParam !== null) {
+		filters.siteId = siteIdParam;
+	}
+
+	// 6. Execute listIncidents
+	try {
+		const incidents = await listIncidents(db, { organizationId }, filters);
+
+		// 7. Success response
+		return json({ incidents }, { status: 200 });
+	} catch (err: unknown) {
+		if (err instanceof IncidentServiceError && err.code === 'INVALID_INPUT') {
+			return json(
+				{
+					error: {
+						code: 'INVALID_INPUT',
+						message: err.message
+					}
+				},
+				{ status: 400 }
+			);
 		}
 
 		return json(
