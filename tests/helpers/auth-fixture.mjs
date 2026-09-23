@@ -7,7 +7,11 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { applyMigrations } from './persistence-migrations.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const directory = path.join(root, 'drizzle/migrations');
-export const expectedMigrations = ['0000_regular_masque.sql', '0001_authentication.sql'];
+export const expectedMigrations = [
+	'0000_regular_masque.sql',
+	'0001_authentication.sql',
+	'0002_incidents.sql'
+];
 export async function fixture(t, migrate = true) {
 	const server = await createServer({
 		configFile: false,
