@@ -5,6 +5,7 @@ import { createServer } from 'vite';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { applyMigrations } from './persistence-migrations.mjs';
+import { createHmac, randomUUID } from 'node:crypto';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const directory = path.join(root, 'drizzle/migrations');
 export const expectedMigrations = [
@@ -12,20 +13,93 @@ export const expectedMigrations = [
 	'0001_authentication.sql',
 	'0002_incidents.sql'
 ];
+
+export const TEST_SECRET = 'synthetic-phase-b-only-secret-123456789';
+export const TEST_ORIGIN = 'http://localhost';
+
 export async function fixture(t, migrate = true) {
+	const pg = new PGlite();
+	t.after(() => pg.close());
+
 	const server = await createServer({
+		root,
 		configFile: false,
 		envDir: false,
 		server: { middlewareMode: true, hmr: false, watch: null },
-		appType: 'custom'
+		appType: 'custom',
+		resolve: {
+			alias: {
+				$lib: path.resolve(root, 'src/lib')
+			}
+		},
+		plugins: [
+			{
+				name: 'soporteflow-test-virtuals',
+				resolveId(id) {
+					if (id === '$env/dynamic/private') return '\0$env/dynamic/private';
+					if (id === '$app/environment') return '\0$app/environment';
+					if (id === '$lib/server/db') return '\0virtual:soporteflow-test-db';
+				},
+				load(id) {
+					if (id === '\0$env/dynamic/private') {
+						return `export const env = {
+							BETTER_AUTH_ENABLED: 'true',
+							BETTER_AUTH_SECRET: ${JSON.stringify(TEST_SECRET)},
+							BETTER_AUTH_URL: ${JSON.stringify(TEST_ORIGIN)},
+							DATABASE_URL: 'postgresql://synthetic:synthetic@invalid.example/test'
+						};`;
+					}
+					if (id === '\0$app/environment') {
+						return `export const building = false;\nexport const dev = true;`;
+					}
+					const normId = id.split('\\').join('/');
+					if (
+						id === '\0virtual:soporteflow-test-db' ||
+						normId.endsWith('/src/lib/server/db/index.ts') ||
+						normId.endsWith('/src/lib/server/db')
+					) {
+						return `
+							export function getDb() {
+								const db = globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__;
+								if (!db) throw new Error("No active test PGlite database attached.");
+								return db;
+							}
+							export const db = new Proxy({}, {
+								get(_target, prop, receiver) {
+									const instance = getDb();
+									const val = Reflect.get(instance, prop, receiver);
+									return typeof val === 'function' ? val.bind(instance) : val;
+								}
+							});
+							export class DatabaseConfigurationError extends Error {
+								constructor(message = 'DATABASE_URL error') {
+									super(message);
+									this.name = 'DatabaseConfigurationError';
+								}
+							}
+							export * from '/src/lib/server/db/schema/index.ts';
+						`;
+					}
+				}
+			}
+		]
 	});
 	t.after(() => server.close());
+
 	const schema = await server.ssrLoadModule('/src/lib/server/db/schema/index.ts');
-	const pg = new PGlite();
-	t.after(() => pg.close());
 	if (migrate) assert.deepEqual(await applyMigrations(pg, directory), expectedMigrations);
-	return { pg, schema, db: drizzle(pg, { schema }), server };
+
+	const db = drizzle(pg, { schema });
+	globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__ = db;
+	t.after(() => {
+		if (globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__ === db) {
+			globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__ = null;
+		}
+	});
+
+	return { pg, schema, db, server };
 }
+
 export async function identity(f, withProfile = true) {
 	const [user] = await f.db
 		.insert(f.schema.users)
@@ -39,4 +113,79 @@ export async function identity(f, withProfile = true) {
 	if (withProfile)
 		await f.db.insert(f.schema.authUsers).values({ id: user.id, name: user.name, email });
 	return { id: user.id, email, contactId: contact.id };
+}
+
+export async function createSession(f, userId, options = {}) {
+	const token = options.token ?? randomUUID();
+	const expiresAt = options.expiresAt ?? new Date(Date.now() + 60000);
+	const [session] = await f.db
+		.insert(f.schema.authSessions)
+		.values({
+			userId,
+			token,
+			expiresAt,
+			createdAt: options.createdAt ?? new Date(Date.now() - 86400000),
+			updatedAt: options.updatedAt ?? new Date(Date.now() - 86400000)
+		})
+		.returning();
+	const secret = options.secret ?? TEST_SECRET;
+	const signature = createHmac('sha256', secret).update(token).digest('base64');
+	const signed = encodeURIComponent(token + '.' + signature);
+	const cookieHeader = `soporteflow-auth.session_token=${signed}`;
+	return {
+		session,
+		token,
+		cookieHeader,
+		headers: new Headers({ cookie: cookieHeader })
+	};
+}
+
+export function createTamperedCookie(token = randomUUID()) {
+	const signature = createHmac('sha256', 'wrong-secret-tampered').update(token).digest('base64');
+	return `soporteflow-auth.session_token=${encodeURIComponent(token + '.' + signature)}`;
+}
+
+export async function grantPermission(
+	f,
+	{ organizationId, membershipId, permissionId = 'incidents:create' }
+) {
+	await f.db
+		.insert(f.schema.permissions)
+		.values({
+			id: permissionId,
+			name: permissionId,
+			category: 'incidents',
+			allowedScopeTypes: ['organization', 'department', 'team', 'site', 'personal']
+		})
+		.onConflictDoNothing();
+
+	const [role] = await f.db
+		.insert(f.schema.roles)
+		.values({
+			organizationId,
+			name: 'Incident Manager ' + randomUUID().slice(0, 8),
+			code: 'ROLE_' + randomUUID(),
+			active: true
+		})
+		.returning();
+
+	await f.db
+		.insert(f.schema.rolePermissions)
+		.values({
+			roleId: role.id,
+			permissionId
+		})
+		.onConflictDoNothing();
+
+	const [assignment] = await f.db
+		.insert(f.schema.roleAssignments)
+		.values({
+			organizationId,
+			membershipId,
+			roleId: role.id,
+			scopeType: 'organization'
+		})
+		.returning();
+
+	return { role, assignment };
 }
