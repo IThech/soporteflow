@@ -184,8 +184,10 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getMe, signOut, AuthApiError } from '$lib/api/auth';
+	import { listIncidents, IncidentApiError, type IncidentListItem } from '$lib/api/./incidents';
 	import { session } from '$lib/stores/session';
 	import OrganizationSelector from '$lib/components/OrganizationSelector.svelte';
+	import RealIncidentList from '$lib/components/incidents/RealIncidentList.svelte';
 	import { defaultDemoUser } from '$lib/auth/demo-session';
 	import { generateId } from '$lib/utils/id';
 	import { hasPermission, canAccessOrganization } from '$lib/auth/permissions';
@@ -193,6 +195,100 @@
 	import type { AppUser } from '$lib/types/user';
 
 	let sessionLoading = $state(!$session.isAuthenticated);
+
+	let realIncidents = $state<IncidentListItem[]>([]);
+	let realLoading = $state(false);
+	let realError = $state<string | null>(null);
+
+	let incidentRequestId = 0;
+	let incidentAbortController: AbortController | null = null;
+
+	$effect(() => {
+		const isAuth = $session.isAuthenticated;
+		const currentOrg = $session.activeOrganization;
+		const currentUserId = $session.user?.id;
+
+		incidentRequestId += 1;
+		const thisRequestId = incidentRequestId;
+
+		if (incidentAbortController) {
+			incidentAbortController.abort();
+			incidentAbortController = null;
+		}
+
+		if (!isAuth || !currentOrg) {
+			realIncidents = [];
+			realLoading = false;
+			realError = null;
+			return;
+		}
+
+		realIncidents = [];
+		realError = null;
+		realLoading = true;
+
+		const controller = new AbortController();
+		incidentAbortController = controller;
+		const targetOrgId = currentOrg.id;
+		const targetUserId = currentUserId;
+
+		(async () => {
+			try {
+				const data = await listIncidents(targetOrgId, { signal: controller.signal });
+
+				if (
+					thisRequestId !== incidentRequestId ||
+					$session.activeOrganization?.id !== targetOrgId ||
+					$session.user?.id !== targetUserId
+				) {
+					return;
+				}
+
+				realIncidents = data;
+				realError = null;
+			} catch (err: unknown) {
+				if (
+					thisRequestId !== incidentRequestId ||
+					$session.activeOrganization?.id !== targetOrgId ||
+					$session.user?.id !== targetUserId
+				) {
+					return;
+				}
+
+				if ((err as Error)?.name === 'AbortError' || controller.signal.aborted) {
+					return;
+				}
+
+				if (err instanceof IncidentApiError && err.status === 401) {
+					session.clearSession();
+					realIncidents = [];
+					realError = null;
+					realLoading = false;
+					// eslint-disable-next-line svelte/no-navigation-without-resolve
+					await goto('/login?expired=true');
+					return;
+				}
+
+				if (err instanceof IncidentApiError) {
+					realError = err.message;
+				} else {
+					realError = 'No se pudieron cargar las incidencias. Inténtalo de nuevo.';
+				}
+			} finally {
+				if (
+					thisRequestId === incidentRequestId &&
+					$session.activeOrganization?.id === targetOrgId &&
+					$session.user?.id === targetUserId
+				) {
+					realLoading = false;
+				}
+			}
+		})();
+
+		return () => {
+			controller.abort();
+		};
+	});
 
 	onMount(async () => {
 		if (!$session.isAuthenticated) {
@@ -225,6 +321,9 @@
 		try {
 			await signOut();
 			session.clearSession();
+			realIncidents = [];
+			realError = null;
+			realLoading = false;
 			await goto(resolve('/login'));
 		} catch {
 			signOutError = 'No se pudo cerrar la sesión. Inténtalo de nuevo.';
@@ -2304,7 +2403,7 @@
 						onclick={() => (isFormOpen = true)}
 						class="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-400"
 					>
-						Nueva incidencia
+						Nueva incidencia demo
 					</button>
 				{/if}
 			</div>
@@ -2312,6 +2411,48 @@
 	</header>
 
 	<main class="app-main mx-auto max-w-7xl px-6 py-10">
+		<!-- Bloque independiente: Incidencias reales -->
+		<section class="mb-10 rounded-xl border border-slate-800 bg-slate-900 p-6 shadow-sm">
+			<div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+				<div class="flex items-center gap-3">
+					<h2 class="text-xl font-bold text-white">Incidencias reales</h2>
+					<span
+						class="rounded border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-0.5 text-xs font-semibold text-cyan-300"
+					>
+						Datos reales · Solo lectura
+					</span>
+				</div>
+				{#if $session.activeOrganization}
+					<span class="text-sm font-medium text-slate-300">
+						Organización: <span class="text-white">{$session.activeOrganization.name}</span>
+					</span>
+				{/if}
+			</div>
+
+			<div class="mt-4">
+				{#if !$session.activeOrganization}
+					<div class="rounded-lg border border-slate-800 bg-slate-950/40 p-6 text-center">
+						<p class="text-sm text-slate-400">
+							Selecciona una organización para consultar sus incidencias.
+						</p>
+					</div>
+				{:else}
+					<RealIncidentList incidents={realIncidents} loading={realLoading} error={realError} />
+				{/if}
+			</div>
+		</section>
+
+		<!-- Zona demo separada visualmente -->
+		<div class="mb-8 border-t border-slate-800 pt-8">
+			<div class="flex items-center gap-2">
+				<h2 class="text-lg font-semibold text-slate-400">Demostración</h2>
+				<span
+					class="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300"
+				>
+					Incidencias en modo demo
+				</span>
+			</div>
+		</div>
 		{#if currentView === 'settings' && canAccessSettings(activeUser)}
 			{#key activeUser.id}
 				<SettingsView
