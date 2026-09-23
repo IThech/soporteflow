@@ -6,6 +6,7 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { applyMigrations } from './persistence-migrations.mjs';
 import { createHmac, randomUUID } from 'node:crypto';
+import { hashPassword } from 'better-auth/crypto';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const directory = path.join(root, 'drizzle/migrations');
 export const expectedMigrations = [
@@ -113,6 +114,43 @@ export async function identity(f, withProfile = true) {
 	if (withProfile)
 		await f.db.insert(f.schema.authUsers).values({ id: user.id, name: user.name, email });
 	return { id: user.id, email, contactId: contact.id };
+}
+
+export async function createCredentialUser(f, options = {}) {
+	const [user] = await f.db
+		.insert(f.schema.users)
+		.values({ name: options.name ?? 'Credential User', active: options.active ?? true })
+		.returning();
+	const email = options.email ?? `${user.id}@example.test`;
+	const password = options.password ?? 'Password12345!';
+	const [contact] = await f.db
+		.insert(f.schema.userEmails)
+		.values({ userId: user.id, email })
+		.returning();
+	const [authUser] = await f.db
+		.insert(f.schema.authUsers)
+		.values({ id: user.id, name: user.name, email })
+		.returning();
+	const hashedPassword = await hashPassword(password);
+	const [account] = await f.db
+		.insert(f.schema.authAccounts)
+		.values({
+			userId: user.id,
+			providerId: 'credential',
+			accountId: user.id,
+			password: hashedPassword
+		})
+		.returning();
+
+	return {
+		user,
+		authUser,
+		account,
+		email,
+		password,
+		contactId: contact.id,
+		id: user.id
+	};
 }
 
 export async function createSession(f, userId, options = {}) {

@@ -34,7 +34,7 @@ function createInstance(
 			disableCSRFCheck: false,
 			disableOriginCheck: false
 		},
-		emailAndPassword: { enabled: false, disableSignUp: true },
+		emailAndPassword: { enabled: true, disableSignUp: true },
 		user: { changeEmail: { enabled: false }, deleteUser: { enabled: false } },
 		session: { cookieCache: { enabled: false } },
 		disabledPaths: [
@@ -43,10 +43,25 @@ function createInstance(
 			'/request-password-reset',
 			'/reset-password',
 			'/change-email',
+			'/change-password',
+			'/set-password',
+			'/verify-email',
+			'/send-verification-email',
+			'/update-session',
+			'/update-user',
 			'/delete-user',
-			'/delete-user/callback'
+			'/delete-user/callback',
+			'/list-sessions',
+			'/revoke-session',
+			'/revoke-sessions',
+			'/revoke-other-sessions',
+			'/link-social',
+			'/list-user-accounts',
+			'/unlink-account',
+			'/account-info',
+			'/sign-in/social'
 		],
-		// Phase B permits only a direct, uncached, non-renewing server session lookup.
+		// Phase 5.4B permits only /sign-in/email and /sign-out over HTTP POST, and internal uncached server getSession.
 		hooks: {
 			before: createAuthMiddleware(async (ctx) => {
 				if (
@@ -54,6 +69,11 @@ function createInstance(
 					!ctx.request &&
 					ctx.query?.disableCookieCache === true &&
 					ctx.query?.disableRefresh === true
+				)
+					return;
+				if (
+					(ctx.path === '/sign-in/email' || ctx.path === '/sign-out') &&
+					ctx.request?.method === 'POST'
 				)
 					return;
 				throw new APIError('FORBIDDEN', { message: 'Autenticación no habilitada en esta fase.' });

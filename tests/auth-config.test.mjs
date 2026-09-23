@@ -160,7 +160,7 @@ test('Security options keep authentication closed and CSRF/origin checks enabled
 	const f = instance(valid);
 	f.api.getAuth();
 	const o = f.options();
-	assert.equal(o.emailAndPassword.enabled, false);
+	assert.equal(o.emailAndPassword.enabled, true);
 	assert.equal(o.emailAndPassword.disableSignUp, true);
 	assert.equal(o.user.changeEmail.enabled, false);
 	assert.equal(o.user.deleteUser.enabled, false);
