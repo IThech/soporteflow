@@ -745,3 +745,251 @@ test('SoporteFlow — Etapa 5.4C.1: Integración UI de Autenticación, Guard SSR
 		);
 	});
 });
+
+// 5.4D: isolated browser storage and compiled component checks; no PostgreSQL TCP.
+test('5.4D organization selection and persistence', async (t) => {
+	const fs = await import('node:fs');
+	const vm = await import('node:vm');
+	const ts = (await import('typescript')).default;
+	const stores = await import('svelte/store');
+	const { parse } = await import('svelte/compiler');
+
+	const source = fs.readFileSync(new URL('../src/lib/stores/session.ts', import.meta.url), 'utf8');
+	const key = 'soporteflow.activeOrganizationId';
+	const a = { id: randomUUID(), name: 'Alpha', slug: 'alpha' },
+		b = { id: randomUUID(), name: 'Beta', slug: 'beta' };
+	const context = {
+		user: { id: randomUUID(), name: 'User', email: 'user@example.test' },
+		organizations: [a, b]
+	};
+	function harness(storage = new Map(), browser = true, blocked = false) {
+		const writes = [];
+		const window = {
+			get sessionStorage() {
+				if (blocked) throw Error('Unavailable');
+				return {
+					getItem: (k) => storage.get(k) ?? null,
+					setItem: (k, v) => {
+						writes.push([k, v]);
+						storage.set(k, v);
+					},
+					removeItem: (k) => {
+						writes.push([k, null]);
+						storage.delete(k);
+					}
+				};
+			}
+		};
+		const module = { exports: {} };
+		vm.runInNewContext(
+			ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } })
+				.outputText,
+			{
+				module,
+				exports: module.exports,
+				...(browser ? { window } : {}),
+				require: (id) => {
+					assert.equal(id, 'svelte/store');
+					return stores;
+				}
+			}
+		);
+		const session = module.exports.session;
+		return { session, storage, writes, state: () => stores.get(session) };
+	}
+	await t.test(
+		'valid ID selects, invalid ID/object leaves state and storage unchanged; no session denies',
+		() => {
+			const h = harness();
+			assert.equal(h.session.setActiveOrganization(a.id), false);
+			h.session.setSession(context);
+			assert.equal(h.state().activeOrganization, null);
+			assert.equal(h.session.setActiveOrganization(b.id), true);
+			assert.equal(h.state().activeOrganization, b);
+			const before = h.state(),
+				calls = h.writes.length;
+			for (const invalid of [randomUUID(), { id: a.id }, null])
+				assert.equal(h.session.setActiveOrganization(invalid), false);
+			assert.equal(h.state(), before);
+			assert.equal(h.writes.length, calls);
+			assert.equal(h.storage.get(key), b.id);
+		}
+	);
+	await t.test('zero and one organization rules, clearSession and reset touch only own key', () => {
+		const h = harness();
+		h.storage.set('unrelated', 'keep');
+		h.session.setSession({ ...context, organizations: [a] });
+		assert.equal(h.state().activeOrganization, a);
+		assert.equal(h.storage.get(key), a.id);
+		h.session.setSession({ ...context, organizations: [] });
+		assert.equal(h.state().activeOrganization, null);
+		assert.equal(h.storage.has(key), false);
+		for (const method of ['clearSession', 'reset']) {
+			h.session.setSession({ ...context, organizations: [a] });
+			h.session[method]();
+			assert.equal(h.state().user, null);
+			assert.equal(h.state().activeOrganization, null);
+			assert.equal(h.storage.has(key), false);
+			assert.equal(h.storage.get('unrelated'), 'keep');
+		}
+	});
+	await t.test(
+		'F5 restores only after fresh context; unauthorized and corrupt values discarded',
+		() => {
+			const map = new Map([[key, b.id]]),
+				h = harness(map);
+			assert.equal(h.state().activeOrganization, null);
+			h.session.setSession(context);
+			assert.equal(h.state().activeOrganization, b);
+			for (const value of [randomUUID(), 'broken', JSON.stringify(a), '']) {
+				map.set(key, value);
+				h.session.setSession(context);
+				assert.equal(h.state().activeOrganization, null);
+				assert.equal(map.has(key), false);
+			}
+		}
+	);
+	await t.test('SSR and inaccessible storage fall back to memory', () => {
+		for (const h of [harness(new Map(), false), harness(new Map(), true, true)]) {
+			h.session.setSession(context);
+			assert.equal(h.session.setActiveOrganization(a.id), true);
+			assert.equal(h.state().activeOrganization, a);
+			h.session.clearSession();
+			h.session.reset();
+		}
+	});
+	await t.test('only UUID is persisted; changing context cannot mutate demo data', () => {
+		const h = harness();
+		const demo = {
+			user: { id: 'demo', role: 'organization_admin' },
+			incidents: [{ id: 'demo-incident' }]
+		};
+		const snapshot = JSON.stringify(demo);
+		h.session.setSession(context);
+		h.session.setActiveOrganization(a.id);
+		h.session.setActiveOrganization(b.id);
+		for (const [k, v] of h.writes) {
+			assert.equal(k, key);
+			if (v !== null) assert.ok([a.id, b.id].includes(v));
+		}
+		assert.equal(JSON.stringify(demo), snapshot);
+		assert.equal(h.state().user, context.user);
+		const app = fs.readFileSync(new URL('../src/routes/app/+page.svelte', import.meta.url), 'utf8');
+		assert.ok(app.includes('Incidencias en modo demo'));
+		assert.equal(app.includes('/api/incidents'), false);
+		assert.match(app, /onchange=\{\(id\) => \{\s*session.setActiveOrganization\(id\);\s*\}\}/);
+	});
+	await t.test(
+		'new credential attempt clears preference before signIn; merely loading login does not',
+		async () => {
+			const login = fs.readFileSync(
+				new URL('../src/routes/login/+page.svelte', import.meta.url),
+				'utf8'
+			);
+			const ast = parse(login, { modern: true });
+			const fn = ast.instance.content.body.find(
+				(n) => n.type === 'FunctionDeclaration' && n.id.name === 'handleSubmit'
+			);
+			assert.ok(fn);
+			assert.equal(login.slice(0, fn.start).includes('session.clearSession()'), false);
+			assert.equal(login.slice(fn.end).includes('session.clearSession()'), false);
+			const h = harness();
+			h.session.setSession({ ...context, organizations: [a] });
+			const code = ts.transpileModule(login.slice(fn.start, fn.end), {
+				compilerOptions: { target: ts.ScriptTarget.ES2022 }
+			}).outputText;
+			const scope = {
+				email: 'user@example.test',
+				password: 'synthetic',
+				loading: false,
+				errorMessage: '',
+				session: h.session,
+				AuthApiError: class extends Error {},
+				signIn: async () => {
+					assert.equal(h.storage.has(key), false);
+				},
+				getMe: async () => ({
+					...context,
+					user: { ...context.user, id: randomUUID() },
+					organizations: [b, { ...a, id: randomUUID() }]
+				}),
+				goto: async () => {},
+				resolve: (v) => v
+			};
+			vm.createContext(scope);
+			vm.runInContext(code, scope);
+			assert.equal(h.storage.get(key), a.id);
+			await scope.handleSubmit({ preventDefault() {} });
+			assert.equal(h.state().activeOrganization, null);
+		}
+	);
+	const componentSource = fs.readFileSync(
+		new URL('../src/lib/components/OrganizationSelector.svelte', import.meta.url),
+		'utf8'
+	);
+
+	const { createServer } = await import('vite');
+	const { svelte } = await import('@sveltejs/vite-plugin-svelte');
+	const componentServer = await createServer({
+		configFile: false,
+		envDir: false,
+		plugins: [svelte({ configFile: false })],
+		server: { middlewareMode: true, hmr: false, watch: null },
+		appType: 'custom'
+	});
+	t.after(() => componentServer.close());
+	const { render } = await componentServer.ssrLoadModule('svelte/server');
+	const component = await componentServer.ssrLoadModule(
+		'/src/lib/components/OrganizationSelector.svelte'
+	);
+
+	await t.test('component renders all UUID options, placeholder, label and disabled', () => {
+		const html = render(component.default, {
+			props: { organizations: [a, b], activeOrganizationId: null, disabled: true, onchange() {} }
+		}).body;
+		for (const text of [
+			a.id,
+			b.id,
+			'Alpha',
+			'Beta',
+			'Selecciona una organización',
+			'Organización activa'
+		])
+			assert.ok(html.includes(text), text);
+		assert.match(html, /<select[^>]*disabled/);
+		assert.match(html, /role="status"/);
+	});
+	await t.test('single organization is noninteractive', () => {
+		const html = render(component.default, {
+			props: { organizations: [a], activeOrganizationId: a.id, onchange() {} }
+		}).body;
+		assert.ok(html.includes('Alpha'));
+		assert.equal(html.includes('<select'), false);
+	});
+	await t.test('actual component event expression emits only selected ID', () => {
+		const ast = parse(componentSource, { modern: true });
+		let handler;
+		function visit(n) {
+			if (!n || typeof n !== 'object') return;
+			if (n.type === 'Attribute' && n.name === 'onchange')
+				handler = (Array.isArray(n.value) ? n.value[0] : n.value).expression;
+			for (const v of Object.values(n)) {
+				if (Array.isArray(v)) v.forEach(visit);
+				else if (v && typeof v === 'object') visit(v);
+			}
+		}
+		visit(ast.fragment);
+		assert.ok(handler);
+		let received;
+		const callback = vm.runInNewContext(
+			'(' + componentSource.slice(handler.start, handler.end) + ')',
+			{
+				onchange: (id) => {
+					received = id;
+				}
+			}
+		);
+		callback({ currentTarget: { value: b.id } });
+		assert.equal(received, b.id);
+	});
+});

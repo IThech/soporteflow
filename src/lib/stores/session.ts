@@ -23,6 +23,23 @@ const initialState: SessionState = {
 	error: null
 };
 
+const selectionKey = 'soporteflow.activeOrganizationId';
+function readSelection(): string | null {
+	try {
+		return typeof window === 'undefined' ? null : window.sessionStorage.getItem(selectionKey);
+	} catch {
+		return null;
+	}
+}
+function persistSelection(id: string | null): void {
+	try {
+		if (typeof window === 'undefined') return;
+		if (id === null) window.sessionStorage.removeItem(selectionKey);
+		else window.sessionStorage.setItem(selectionKey, id);
+	} catch {
+		/* Storage is optional; the in-memory selection remains usable. */
+	}
+}
 function createSessionStore() {
 	const { subscribe, set, update } = writable<SessionState>(initialState);
 
@@ -35,10 +52,13 @@ function createSessionStore() {
 			update((state) => ({ ...state, error, isLoading: false }));
 		},
 		setSession: (context: AuthenticatedUserContext) => {
-			// Rule: Only auto-select if strictly 1 active organization exists.
-			// 0 or 2+ organizations -> activeOrganization is strictly null until explicit selection.
+			// Restore only against fresh organizations returned by /api/me.
+			const rememberedId = readSelection();
 			const activeOrganization =
-				context.organizations.length === 1 ? context.organizations[0] : null;
+				context.organizations.length === 1
+					? context.organizations[0]
+					: (context.organizations.find((org) => org.id === rememberedId) ?? null);
+			persistSelection(activeOrganization?.id ?? null);
 
 			set({
 				user: context.user,
@@ -49,7 +69,20 @@ function createSessionStore() {
 				error: null
 			});
 		},
+		setActiveOrganization: (organizationId: string): boolean => {
+			let selected = false;
+			update((state) => {
+				if (!state.isAuthenticated || typeof organizationId !== 'string') return state;
+				const organization = state.organizations.find((org) => org.id === organizationId);
+				if (!organization) return state;
+				persistSelection(organization.id);
+				selected = true;
+				return { ...state, activeOrganization: organization };
+			});
+			return selected;
+		},
 		clearSession: () => {
+			persistSelection(null);
 			set({
 				user: null,
 				organizations: [],
@@ -60,6 +93,7 @@ function createSessionStore() {
 			});
 		},
 		reset: () => {
+			persistSelection(null);
 			set(initialState);
 		}
 	};

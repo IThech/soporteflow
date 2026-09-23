@@ -185,6 +185,7 @@
 	import { resolve } from '$app/paths';
 	import { getMe, signOut, AuthApiError } from '$lib/api/auth';
 	import { session } from '$lib/stores/session';
+	import OrganizationSelector from '$lib/components/OrganizationSelector.svelte';
 	import { defaultDemoUser } from '$lib/auth/demo-session';
 	import { generateId } from '$lib/utils/id';
 	import { hasPermission, canAccessOrganization } from '$lib/auth/permissions';
@@ -2180,15 +2181,15 @@
 							<span class="font-medium text-white">{$session.user.name}</span>
 							<span class="text-slate-500">·</span>
 							{$session.user.email}
-							<span class="text-slate-500">·</span>
-							{#if $session.activeOrganization}
-								<span class="font-medium text-cyan-400">{$session.activeOrganization.name}</span>
-							{:else if $session.organizations.length > 1}
-								<span class="text-amber-300 italic">Selecciona una organización</span>
-							{:else}
-								<span class="text-slate-400">Sin organización activa</span>
-							{/if}
 						</p>
+						<OrganizationSelector
+							organizations={$session.organizations}
+							activeOrganizationId={$session.activeOrganization?.id ?? null}
+							disabled={sessionLoading || isSigningOut}
+							onchange={(id) => {
+								session.setActiveOrganization(id);
+							}}
+						/>
 					{:else}
 						<p class="text-xs text-slate-400">Gestión de soporte técnico</p>
 					{/if}

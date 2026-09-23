@@ -22,6 +22,8 @@
 			return;
 		}
 
+		// Clear previous selection only when starting a new credential attempt.
+		session.clearSession();
 		loading = true;
 		session.setLoading(true);
 
