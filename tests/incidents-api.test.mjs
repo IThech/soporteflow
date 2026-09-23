@@ -10,11 +10,16 @@ import {
 	grantPermission
 } from './helpers/auth-fixture.mjs';
 
-function makeEvent(request, url = new URL(request.url)) {
+function makeEvent(
+	request,
+	url = new URL(request.url),
+	params = {},
+	route = { id: '/api/incidents' }
+) {
 	return {
 		request,
 		url,
-		params: {},
+		params,
 		locals: {},
 		cookies: {
 			get: (name) => {
@@ -33,7 +38,7 @@ function makeEvent(request, url = new URL(request.url)) {
 		isDataRequest: false,
 		isSubRequest: false,
 		platform: {},
-		route: { id: '/api/incidents' },
+		route,
 		setHeaders: () => {}
 	};
 }
@@ -66,6 +71,22 @@ async function callGet(GET, { headers = {}, url = 'http://localhost/api/incident
 		headers: reqHeaders
 	});
 	const event = makeEvent(request, new URL(url));
+	const response = await GET(event);
+	const status = response.status;
+	const json = await response.json();
+	return { status, json, response };
+}
+
+async function callGetDetail(
+	GET,
+	{ headers = {}, url = 'http://localhost/api/incidents/test', params = {} } = {}
+) {
+	const reqHeaders = new Headers(headers);
+	const request = new Request(url, {
+		method: 'GET',
+		headers: reqHeaders
+	});
+	const event = makeEvent(request, new URL(url), params, { id: '/api/incidents/[id]' });
 	const response = await GET(event);
 	const status = response.status;
 	const json = await response.json();
@@ -1443,4 +1464,649 @@ test('SoporteFlow — Etapa 5.2B: Endpoint HTTP GET /api/incidents', async (t) =
 			assert.deepEqual(ids, [incA4.id, incA3.id, incA2.id, incA1.id]);
 		}
 	);
+});
+
+test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async (t) => {
+	const f = await fixture(t);
+	const { db, schema: s, server } = f;
+
+	const { GET } = await server.ssrLoadModule('/src/routes/api/incidents/[id]/+server.ts');
+	const { createIncidentRecord } = await server.ssrLoadModule(
+		'/src/lib/server/services/incidents.ts'
+	);
+
+	// --- SETUP TENANTS & USERS ---
+	const [orgA] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org A Detail', slug: 'org-a-det-' + randomUUID(), status: 'active' })
+		.returning();
+
+	const [orgB] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org B Detail', slug: 'org-b-det-' + randomUUID(), status: 'active' })
+		.returning();
+
+	const [orgSuspended] = await db
+		.insert(s.organizations)
+		.values({
+			name: 'Org Suspended Detail',
+			slug: 'org-susp-det-' + randomUUID(),
+			status: 'suspended'
+		})
+		.returning();
+
+	const [orgTrial] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org Trial Detail', slug: 'org-trial-det-' + randomUUID(), status: 'trial' })
+		.returning();
+
+	// User A - Authorized in Org A with incidents:view_all
+	const userA = await identity(f);
+	const [membershipA] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userA.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: membershipA.id,
+		permissionId: 'incidents:view_all'
+	});
+	const sessionA = await createSession(f, userA.id);
+
+	// User B - Authorized in Org B with incidents:view_all
+	const userB = await identity(f);
+	const [membershipB] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgB.id, userId: userB.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgB.id,
+		membershipId: membershipB.id,
+		permissionId: 'incidents:view_all'
+	});
+	const sessionB = await createSession(f, userB.id);
+
+	// User without incidents:view_all in Org A
+	const userNoPermA = await identity(f);
+	await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userNoPermA.id, active: true });
+	const sessionNoPermA = await createSession(f, userNoPermA.id);
+
+	// User with inactive membership in Org A
+	const userInactiveMemA = await identity(f);
+	const [memInactiveA] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userInactiveMemA.id, active: false })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memInactiveA.id,
+		permissionId: 'incidents:view_all'
+	});
+	const sessionInactiveMemA = await createSession(f, userInactiveMemA.id);
+
+	// User in suspended org
+	const userSuspended = await identity(f);
+	const [memSusp] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgSuspended.id, userId: userSuspended.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgSuspended.id,
+		membershipId: memSusp.id,
+		permissionId: 'incidents:view_all'
+	});
+	const sessionSuspended = await createSession(f, userSuspended.id);
+
+	// User in trial org
+	const userTrial = await identity(f);
+	const [memTrial] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgTrial.id, userId: userTrial.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgTrial.id,
+		membershipId: memTrial.id,
+		permissionId: 'incidents:view_all'
+	});
+	const sessionTrial = await createSession(f, userTrial.id);
+
+	// User inactive
+	const userInactive = await identity(f);
+	const [memInactiveUserA] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userInactive.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memInactiveUserA.id,
+		permissionId: 'incidents:view_all'
+	});
+	const sessionInactive = await createSession(f, userInactive.id);
+	await db.update(s.users).set({ active: false }).where(eq(s.users.id, userInactive.id));
+
+	// Expired session
+	const sessionExpired = await createSession(f, userA.id, {
+		expiresAt: new Date(Date.now() - 3600 * 1000)
+	});
+
+	// --- SETUP INCIDENTS ---
+	// Incident Org A
+	const incA1Created = (
+		await createIncidentRecord(
+			db,
+			{ organizationId: orgA.id, creatorUserId: userA.id },
+			{
+				title: 'Incidente A1 Detalle',
+				description: 'Descripción detallada de prueba para A1',
+				client: 'Cliente Alpha Detalle',
+				priority: 'high'
+			}
+		)
+	).incident;
+
+	// Incident Org B
+	const incB1Created = (
+		await createIncidentRecord(
+			db,
+			{ organizationId: orgB.id, creatorUserId: userB.id },
+			{
+				title: 'Incidente B1 Detalle',
+				description: 'Descripción detallada de prueba para B1',
+				client: 'Cliente Beta Detalle',
+				priority: 'medium'
+			}
+		)
+	).incident;
+
+	// Add additional history events to incA1 for history order testing
+	const baseTime = incA1Created.createdAt.getTime();
+	const event2Id = randomUUID();
+	const event3Id = randomUUID();
+
+	await db.insert(s.incidentHistory).values([
+		{
+			id: event2Id,
+			incidentId: incA1Created.id,
+			organizationId: orgA.id,
+			eventType: 'internal_note_added',
+			actorType: 'user',
+			actorUserId: userA.id,
+			comment: 'Primera nota adicional',
+			createdAt: new Date(baseTime + 10000)
+		},
+		{
+			id: event3Id,
+			incidentId: incA1Created.id,
+			organizationId: orgA.id,
+			eventType: 'priority_changed',
+			actorType: 'user',
+			actorUserId: userA.id,
+			comment: 'Escalada de prioridad',
+			createdAt: new Date(baseTime + 20000)
+		}
+	]);
+
+	// =========================================================================
+	// AUTHENTICATION (Tests 1 - 3)
+	// =========================================================================
+	await t.test('1. detalle sin cookie → 401', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: {}
+		});
+		assert.equal(res.status, 401);
+		assert.equal(res.json.error?.code, 'UNAUTHORIZED');
+	});
+
+	await t.test('2. sesión inválida/expirada → 401', async () => {
+		// Tampered cookie
+		const resTampered = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: createTamperedCookie('invalid-token') }
+		});
+		assert.equal(resTampered.status, 401);
+		assert.equal(resTampered.json.error?.code, 'UNAUTHORIZED');
+
+		// Expired session
+		const resExpired = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionExpired.cookieHeader }
+		});
+		assert.equal(resExpired.status, 401);
+		assert.equal(resExpired.json.error?.code, 'UNAUTHORIZED');
+	});
+
+	await t.test('3. usuario inactive → 401', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionInactive.cookieHeader }
+		});
+		assert.equal(res.status, 401);
+		assert.equal(res.json.error?.code, 'UNAUTHORIZED');
+	});
+
+	// =========================================================================
+	// AUTHORIZATION (Tests 4 - 9)
+	// =========================================================================
+	await t.test('4. usuario sin membership → 403', async () => {
+		const userOutside = await identity(f);
+		const sessionOutside = await createSession(f, userOutside.id);
+
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionOutside.cookieHeader }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	await t.test('5. membership inactive → 403', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionInactiveMemA.cookieHeader }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	await t.test('6. organization suspended → 403', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgSuspended.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionSuspended.cookieHeader }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	await t.test('7. organization trial → 403', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgTrial.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionTrial.cookieHeader }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	await t.test('8. sin incidents:view_all → 403', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionNoPermA.cookieHeader }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	await t.test('9. incidents:view_all solo en otra org → 403', async () => {
+		// User B has incidents:view_all in Org B, but queries Org A
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionB.cookieHeader }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	// =========================================================================
+	// INPUT (Tests 10 - 12)
+	// =========================================================================
+	await t.test('10. organizationId ausente → 400', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('11. organizationId inválido → 400', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=not-a-uuid`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('12. incident id inválido → 400', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/not-a-uuid?organizationId=${orgA.id}`,
+			params: { id: 'not-a-uuid' },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	// =========================================================================
+	// DETAIL (Tests 13 - 17)
+	// =========================================================================
+	await t.test('13. incidencia existente del tenant → 200', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+	});
+
+	await t.test('14. devuelve incident correcto', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+		assert.ok(res.json.incident);
+		assert.equal(res.json.incident.id, incA1Created.id);
+		assert.equal(res.json.incident.organizationId, orgA.id);
+		assert.equal(res.json.incident.title, 'Incidente A1 Detalle');
+		assert.equal(res.json.incident.description, 'Descripción detallada de prueba para A1');
+		assert.equal(res.json.incident.client, 'Cliente Alpha Detalle');
+		assert.equal(res.json.incident.priority, 'high');
+		assert.equal(res.json.incident.status, 'open');
+	});
+
+	await t.test('15. devuelve history', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+		assert.ok(Array.isArray(res.json.history));
+		assert.equal(res.json.history.length, 3);
+	});
+
+	await t.test('16. history ordenado cronológicamente de forma determinista', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+		const history = res.json.history;
+		for (let i = 1; i < history.length; i++) {
+			const prevTime = new Date(history[i - 1].createdAt).getTime();
+			const currTime = new Date(history[i].createdAt).getTime();
+			assert.ok(
+				currTime > prevTime || (currTime === prevTime && history[i].id >= history[i - 1].id),
+				`Historial fuera de orden en índice ${i}`
+			);
+		}
+	});
+
+	await t.test('17. response no contiene membership/roles/permisos/sesión', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+
+		// Top-level
+		const topKeys = Object.keys(res.json);
+		assert.deepEqual(topKeys.sort(), ['history', 'incident']);
+
+		// Incident
+		const allowedIncidentKeys = new Set([
+			'id',
+			'organizationId',
+			'incidentNumber',
+			'title',
+			'description',
+			'status',
+			'priority',
+			'client',
+			'clientUserId',
+			'createdByUserId',
+			'siteId',
+			'createdAt',
+			'updatedAt'
+		]);
+		for (const key of Object.keys(res.json.incident)) {
+			assert.ok(allowedIncidentKeys.has(key), `Campo inesperado en incident: ${key}`);
+		}
+		assert.equal('membership' in res.json.incident, false);
+		assert.equal('roles' in res.json.incident, false);
+		assert.equal('permissions' in res.json.incident, false);
+		assert.equal('session' in res.json.incident, false);
+
+		// History
+		const allowedHistoryKeys = new Set([
+			'id',
+			'incidentId',
+			'organizationId',
+			'eventType',
+			'actorType',
+			'actorUserId',
+			'reason',
+			'comment',
+			'payload',
+			'createdAt'
+		]);
+		for (const entry of res.json.history) {
+			for (const key of Object.keys(entry)) {
+				assert.ok(allowedHistoryKeys.has(key), `Campo inesperado en history: ${key}`);
+			}
+			assert.equal('membership' in entry, false);
+			assert.equal('roles' in entry, false);
+			assert.equal('permissions' in entry, false);
+			assert.equal('session' in entry, false);
+		}
+	});
+
+	// =========================================================================
+	// TENANT ISOLATION (Tests 18 - 22)
+	// =========================================================================
+	await t.test('18. incidencia de org A consultada con organizationId A → 200', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.id, incA1Created.id);
+	});
+
+	await t.test('19. misma incidencia consultada con organizationId B → 404', async () => {
+		// User B is authorized in Org B, queries incA1Created.id with Org B
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgB.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionB.cookieHeader }
+		});
+		assert.equal(res.status, 404);
+		assert.equal(res.json.error?.code, 'INCIDENT_NOT_FOUND');
+	});
+
+	await t.test('20. UUID inexistente → 404', async () => {
+		const missingId = randomUUID();
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${missingId}?organizationId=${orgA.id}`,
+			params: { id: missingId },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 404);
+		assert.equal(res.json.error?.code, 'INCIDENT_NOT_FOUND');
+	});
+
+	await t.test('21. cross-tenant vs inexistente son indistinguibles', async () => {
+		// 1. Cross-tenant request (incA1 queried under orgB by userB)
+		const resCross = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgB.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionB.cookieHeader }
+		});
+
+		// 2. Non-existent UUID under orgB by userB
+		const nonExistentId = randomUUID();
+		const resNonExistent = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${nonExistentId}?organizationId=${orgB.id}`,
+			params: { id: nonExistentId },
+			headers: { cookie: sessionB.cookieHeader }
+		});
+
+		// Same HTTP status
+		assert.equal(resCross.status, 404);
+		assert.equal(resNonExistent.status, 404);
+
+		// Same error structure
+		assert.deepEqual(resCross.json, resNonExistent.json);
+		assert.equal(resCross.json.error.code, 'INCIDENT_NOT_FOUND');
+		assert.equal(resCross.json.error.message, 'Incident not found.');
+	});
+
+	await t.test(
+		'22. usuario autorizado en org A no puede consultar detalle bajo org B → 403 antes de llegar al servicio',
+		async () => {
+			// User A attempts to query incB1 under orgB
+			const res = await callGetDetail(GET, {
+				url: `http://localhost/api/incidents/${incB1Created.id}?organizationId=${orgB.id}`,
+				params: { id: incB1Created.id },
+				headers: { cookie: sessionA.cookieHeader }
+			});
+			assert.equal(res.status, 403);
+			assert.equal(res.json.error?.code, 'FORBIDDEN');
+		}
+	);
+
+	// =========================================================================
+	// SEGURIDAD DE FUENTES (Tests 23 - 25)
+	// =========================================================================
+	await t.test(
+		'23. incidentId enviado en query pero no en route param → debe ignorarse / no sustituir params.id',
+		async () => {
+			// Query string contains valid incA1Created.id, but params.id is invalid
+			const resInvalidParam = await callGetDetail(GET, {
+				url: `http://localhost/api/incidents/invalid-id?organizationId=${orgA.id}&id=${incA1Created.id}`,
+				params: { id: 'invalid-id' },
+				headers: { cookie: sessionA.cookieHeader }
+			});
+			assert.equal(resInvalidParam.status, 400);
+			assert.equal(resInvalidParam.json.error?.code, 'INVALID_INPUT');
+
+			// Query string contains other id, but params.id contains incA1Created.id
+			const otherId = randomUUID();
+			const resValidParam = await callGetDetail(GET, {
+				url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}&id=${otherId}`,
+				params: { id: incA1Created.id },
+				headers: { cookie: sessionA.cookieHeader }
+			});
+			assert.equal(resValidParam.status, 200);
+			assert.equal(resValidParam.json.incident.id, incA1Created.id);
+		}
+	);
+
+	await t.test('24. organizationId enviado en header pero no en query → 400', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}`,
+			params: { id: incA1Created.id },
+			headers: {
+				cookie: sessionA.cookieHeader,
+				'x-organization-id': orgA.id
+			}
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('25. query organizationId prevalece frente a headers alternativos', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: {
+				cookie: sessionA.cookieHeader,
+				'x-organization-id': orgB.id
+			}
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.organizationId, orgA.id);
+	});
+
+	// =========================================================================
+	// HISTORIAL (Tests 26 - 27)
+	// =========================================================================
+	await t.test('26. evento created aparece en historial', async () => {
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
+			params: { id: incA1Created.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+		const createdEvent = res.json.history.find((h) => h.eventType === 'created');
+		assert.ok(createdEvent, 'Debe existir un evento de tipo created en el historial');
+		assert.equal(createdEvent.incidentId, incA1Created.id);
+		assert.equal(createdEvent.organizationId, orgA.id);
+	});
+
+	await t.test('27. varios eventos se devuelven en orden: createdAt ASC, id ASC', async () => {
+		// Create a separate incident to test fine-grained order with identical timestamps
+		const incOrderCreated = (
+			await createIncidentRecord(
+				db,
+				{ organizationId: orgA.id, creatorUserId: userA.id },
+				{
+					title: 'Incidente Orden Historial',
+					description: 'Verificación de orden createdAt ASC, id ASC',
+					client: 'Cliente Test',
+					priority: 'low'
+				}
+			)
+		).incident;
+
+		const fixedTime = new Date('2026-09-23T12:00:00.000Z');
+		const idSmall = '00000000-0000-0000-0000-000000000001';
+		const idLarge = '00000000-0000-0000-0000-000000000002';
+
+		// Insert in reverse order to ensure DB ordering is what dictates the return
+		await db.insert(s.incidentHistory).values([
+			{
+				id: idLarge,
+				incidentId: incOrderCreated.id,
+				organizationId: orgA.id,
+				eventType: 'escalated',
+				actorType: 'user',
+				actorUserId: userA.id,
+				createdAt: fixedTime
+			},
+			{
+				id: idSmall,
+				incidentId: incOrderCreated.id,
+				organizationId: orgA.id,
+				eventType: 'reassigned',
+				actorType: 'user',
+				actorUserId: userA.id,
+				createdAt: fixedTime
+			}
+		]);
+
+		const res = await callGetDetail(GET, {
+			url: `http://localhost/api/incidents/${incOrderCreated.id}?organizationId=${orgA.id}`,
+			params: { id: incOrderCreated.id },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+		const history = res.json.history;
+		// Must have created event + 2 inserted events
+		assert.equal(history.length, 3);
+		// The two events with identical createdAt must be sorted by id ASC
+		const identicalTimeEvents = history.filter((h) => h.createdAt === fixedTime.toISOString());
+		assert.equal(identicalTimeEvents.length, 2);
+		assert.equal(identicalTimeEvents[0].id, idSmall);
+		assert.equal(identicalTimeEvents[1].id, idLarge);
+	});
 });
