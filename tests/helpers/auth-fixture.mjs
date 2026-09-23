@@ -24,7 +24,7 @@ export async function fixture(t, migrate = true) {
 	const pg = new PGlite();
 	t.after(() => pg.close());
 	if (migrate) assert.deepEqual(await applyMigrations(pg, directory), expectedMigrations);
-	return { pg, schema, db: drizzle(pg, { schema }) };
+	return { pg, schema, db: drizzle(pg, { schema }), server };
 }
 export async function identity(f, withProfile = true) {
 	const [user] = await f.db
