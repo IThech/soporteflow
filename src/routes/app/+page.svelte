@@ -50,7 +50,6 @@
 	import {
 		queueIncidents,
 		filterIncidentQueue,
-		validQueue,
 		type IncidentQueue,
 		type QueueStatusFilter
 	} from '$lib/incidents/queue';
@@ -182,12 +181,56 @@
 		PriorityMatrixLoadResult
 	} from '$lib/types/classification';
 
-	import DemoSessionSelector from '$lib/components/DemoSessionSelector.svelte';
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { getMe, signOut, AuthApiError } from '$lib/api/auth';
+	import { session } from '$lib/stores/session';
 	import { defaultDemoUser } from '$lib/auth/demo-session';
 	import { generateId } from '$lib/utils/id';
 	import { hasPermission, canAccessOrganization } from '$lib/auth/permissions';
 	import { canViewIncident, canActOnIncident, canAccessRecord } from '$lib/auth/record-access';
 	import type { AppUser } from '$lib/types/user';
+
+	let sessionLoading = $state(!$session.isAuthenticated);
+
+	onMount(async () => {
+		if (!$session.isAuthenticated) {
+			sessionLoading = true;
+			try {
+				const context = await getMe();
+				session.setSession(context);
+			} catch (err) {
+				if (err instanceof AuthApiError && err.status === 401) {
+					session.clearSession();
+					// eslint-disable-next-line svelte/no-navigation-without-resolve
+					await goto('/login?expired=true');
+					return;
+				}
+				session.setError(
+					err instanceof AuthApiError ? err.message : 'Error al conectar con el servidor.'
+				);
+			} finally {
+				sessionLoading = false;
+			}
+		}
+	});
+
+	let signOutError = $state('');
+	let isSigningOut = $state(false);
+
+	async function handleSignOut() {
+		signOutError = '';
+		isSigningOut = true;
+		try {
+			await signOut();
+			session.clearSession();
+			await goto(resolve('/login'));
+		} catch {
+			signOutError = 'No se pudo cerrar la sesión. Inténtalo de nuevo.';
+		} finally {
+			isSigningOut = false;
+		}
+	}
 
 	let incidentList = $state<Incident[]>([...initialIncidents]);
 	let categoryList = $state<IncidentCategory[]>(
@@ -339,41 +382,6 @@
 	const canEdit = $derived(hasPermission(activeUser, 'incidents:edit'));
 	const canDelete = $derived(hasPermission(activeUser, 'incidents:delete'));
 	const canCreate = $derived(hasPermission(activeUser, 'incidents:create'));
-
-	function changeDemoUser(user: AppUser) {
-		if (!user?.active || !userList.some((u) => u.id === user.id && u.active)) return;
-		editingIncident = null;
-		assignmentIncident = null;
-		assignmentError = '';
-		classificationIncident = null;
-		classificationError = '';
-		reclassifyIncidentTarget = null;
-		reclassifyError = '';
-		overrideIncidentTarget = null;
-		overrideError = '';
-		siteChangeIncident = null;
-		siteChangeError = '';
-		newCategoryId = '';
-		newSubcategoryId = '';
-		newImpact = '';
-		newSiteId = '';
-		categorySaveError = '';
-		userSaveError = '';
-		siteSaveError = '';
-		isFormOpen = false;
-		title = '';
-		client = '';
-		description = '';
-		searchQuery = '';
-		selectedStatus = user.role === 'technician' ? 'active' : 'all';
-		selectedQueue = validQueue(user, 'all');
-		if (user.role === 'technician') {
-			currentView = 'home';
-		} else if (currentView === 'home' || !canAccessSettings(user)) {
-			currentView = 'incidents';
-		}
-		activeUser = user;
-	}
 
 	const summary = $derived([
 		{
@@ -2151,13 +2159,39 @@
 </svelte:head>
 
 <div class="support-app min-h-screen bg-slate-950 text-white">
-	<DemoSessionSelector user={activeUser} users={userList} onchange={changeDemoUser} />
 	<header class="app-header border-b border-slate-800 bg-slate-900">
 		<div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-6 py-4">
 			<div class="flex flex-wrap items-center gap-4 sm:gap-6">
 				<div>
-					<p class="text-xl font-bold">Soporte<span class="text-cyan-400">Flow</span></p>
-					<p class="text-xs text-slate-400">Gestión de soporte técnico</p>
+					<div class="flex items-center gap-2">
+						<p class="text-xl font-bold">Soporte<span class="text-cyan-400">Flow</span></p>
+						<span
+							class="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300"
+						>
+							Incidencias en modo demo
+						</span>
+					</div>
+					{#if sessionLoading}
+						<p class="text-xs text-slate-400">Cargando sesión...</p>
+					{:else if $session.error}
+						<p class="text-xs text-red-400" role="alert">{$session.error}</p>
+					{:else if $session.user}
+						<p class="text-xs text-slate-300">
+							<span class="font-medium text-white">{$session.user.name}</span>
+							<span class="text-slate-500">·</span>
+							{$session.user.email}
+							<span class="text-slate-500">·</span>
+							{#if $session.activeOrganization}
+								<span class="font-medium text-cyan-400">{$session.activeOrganization.name}</span>
+							{:else if $session.organizations.length > 1}
+								<span class="text-amber-300 italic">Selecciona una organización</span>
+							{:else}
+								<span class="text-slate-400">Sin organización activa</span>
+							{/if}
+						</p>
+					{:else}
+						<p class="text-xs text-slate-400">Gestión de soporte técnico</p>
+					{/if}
 				</div>
 				{#if activeUser.role === 'technician'}
 					<nav
@@ -2207,6 +2241,26 @@
 					onclearall={handleClearNotifications}
 				/>
 				<ThemeSelector />
+				<div class="flex items-center gap-2">
+					<button
+						type="button"
+						onclick={handleSignOut}
+						disabled={isSigningOut}
+						class="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+						aria-label="Cerrar sesión"
+					>
+						{#if isSigningOut}
+							Cerrando sesión...
+						{:else}
+							Cerrar sesión
+						{/if}
+					</button>
+					{#if signOutError}
+						<span role="alert" aria-live="assertive" class="text-xs font-medium text-red-400">
+							{signOutError}
+						</span>
+					{/if}
+				</div>
 				{#if canAccessSettings(activeUser)}
 					<button
 						type="button"

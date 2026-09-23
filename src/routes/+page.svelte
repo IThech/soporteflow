@@ -24,7 +24,7 @@
 			>
 			<nav aria-label="Navegación principal">
 				<a href="#producto">Producto</a><a href="#equipos">Para tu equipo</a><a
-					href={resolve('/app')}
+					href={resolve('/login')}
 					class="portal-link">Acceder al portal <span aria-hidden="true">↗</span></a
 				>
 			</nav>
@@ -42,8 +42,8 @@
 					un único lugar.
 				</p>
 				<div class="hero-actions">
-					<a href={resolve('/app')} class="primary-link"
-						>Probar SoporteFlow <span aria-hidden="true">↗</span></a
+					<a href={resolve('/login')} class="primary-link"
+						>Iniciar sesión <span aria-hidden="true">↗</span></a
 					><a href="#producto" class="text-link"
 						>Conocer SoporteFlow <span aria-hidden="true">↓</span></a
 					>
@@ -71,6 +71,6 @@
 	<footer class="landing-container public-footer">
 		<a href={resolve('/')} class="wordmark">Soporte<span class="wordmark-flow">Flow</span></a>
 		<p>Claridad para cada incidencia.</p>
-		<a href={resolve('/app')}>Abrir demo <span aria-hidden="true">↗</span></a>
+		<a href={resolve('/login')}>Iniciar sesión <span aria-hidden="true">↗</span></a>
 	</footer>
 </div>
