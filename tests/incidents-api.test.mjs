@@ -2951,3 +2951,358 @@ test('SoporteFlow — Etapa 5.4I-A: POST /api/incidents/[id]/assign — Asignaci
 		assert.equal(res.json.incident.assignedToUserId, userTech1.id);
 	});
 });
+
+test('SoporteFlow — Etapa 5.4J-A: Endpoint HTTP GET /api/incidents — Colas (mine, unassigned, all)', async (t) => {
+	const f = await fixture(t);
+	const { db, schema: s, server } = f;
+
+	const { GET } = await server.ssrLoadModule('/src/routes/api/incidents/+server.ts');
+	const { createIncidentRecord, assignIncidentRecord, updateIncidentRecord } =
+		await server.ssrLoadModule('/src/lib/server/services/incidents.ts');
+
+	// Setup organizations:
+	const [orgQ] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org Q API', slug: 'org-q-api-' + randomUUID(), status: 'active' })
+		.returning();
+
+	const [orgOther] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org Other API', slug: 'org-other-api-' + randomUUID(), status: 'active' })
+		.returning();
+
+	// Users in orgQ:
+	// userViewAll: has incidents:view_all
+	const userViewAll = await identity(f);
+	const [memViewAll] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgQ.id, userId: userViewAll.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgQ.id,
+		membershipId: memViewAll.id,
+		permissionId: 'incidents:view_all'
+	});
+	const sessionViewAll = await createSession(f, userViewAll.id);
+
+	// userViewOwn: has ONLY incidents:view_own
+	const userViewOwn = await identity(f);
+	const [memViewOwn] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgQ.id, userId: userViewOwn.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgQ.id,
+		membershipId: memViewOwn.id,
+		permissionId: 'incidents:view_own'
+	});
+	const sessionViewOwn = await createSession(f, userViewOwn.id);
+
+	// userNoPerm: has membership but neither view_all nor view_own
+	const userNoPerm = await identity(f);
+	await db
+		.insert(s.memberships)
+		.values({ organizationId: orgQ.id, userId: userNoPerm.id, active: true });
+	const sessionNoPerm = await createSession(f, userNoPerm.id);
+
+	// userOther: user in orgOther with view_all
+	const userOther = await identity(f);
+	const [memOther] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgOther.id, userId: userOther.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgOther.id,
+		membershipId: memOther.id,
+		permissionId: 'incidents:view_all'
+	});
+	const sessionOther = await createSession(f, userOther.id);
+
+	const [roleTech] = await db
+		.insert(s.roles)
+		.values({ organizationId: orgQ.id, name: 'Technician', code: 'technician', active: true })
+		.returning();
+	await db.insert(s.roleAssignments).values([
+		{
+			organizationId: orgQ.id,
+			membershipId: memViewAll.id,
+			roleId: roleTech.id,
+			scopeType: 'organization'
+		},
+		{
+			organizationId: orgQ.id,
+			membershipId: memViewOwn.id,
+			roleId: roleTech.id,
+			scopeType: 'organization'
+		}
+	]);
+
+	// Incidents creation in orgQ:
+	// 1. Assigned to userViewAll (open, high)
+	const { incident: inc1 } = await createIncidentRecord(
+		db,
+		{ organizationId: orgQ.id, creatorUserId: userViewAll.id },
+		{ title: 'Inc 1 - ViewAll', description: 'Desc 1', client: 'Client A', priority: 'high' }
+	);
+	await assignIncidentRecord(
+		db,
+		{ organizationId: orgQ.id, actorUserId: userViewAll.id },
+		inc1.id,
+		{ assignedToUserId: userViewAll.id }
+	);
+
+	// 2. Assigned to userViewOwn (pending, medium)
+	const { incident: inc2 } = await createIncidentRecord(
+		db,
+		{ organizationId: orgQ.id, creatorUserId: userViewAll.id },
+		{ title: 'Inc 2 - ViewOwn', description: 'Desc 2', client: 'Client B', priority: 'medium' }
+	);
+	await assignIncidentRecord(
+		db,
+		{ organizationId: orgQ.id, actorUserId: userViewAll.id },
+		inc2.id,
+		{ assignedToUserId: userViewOwn.id }
+	);
+	await updateIncidentRecord(
+		db,
+		{ organizationId: orgQ.id, actorUserId: userViewAll.id },
+		inc2.id,
+		{ status: 'pending' }
+	);
+
+	// 3. Unassigned (open, high)
+	const { incident: inc3 } = await createIncidentRecord(
+		db,
+		{ organizationId: orgQ.id, creatorUserId: userViewAll.id },
+		{ title: 'Inc 3 - Unassigned 1', description: 'Desc 3', client: 'Client C', priority: 'high' }
+	);
+
+	// 4. Unassigned (resolved, low)
+	const { incident: inc4 } = await createIncidentRecord(
+		db,
+		{ organizationId: orgQ.id, creatorUserId: userViewAll.id },
+		{ title: 'Inc 4 - Unassigned 2', description: 'Desc 4', client: 'Client D', priority: 'low' }
+	);
+	await updateIncidentRecord(
+		db,
+		{ organizationId: orgQ.id, actorUserId: userViewAll.id },
+		inc4.id,
+		{ status: 'resolved' }
+	);
+
+	// Incidents in orgOther:
+	const { incident: incOther } = await createIncidentRecord(
+		db,
+		{ organizationId: orgOther.id, creatorUserId: userOther.id },
+		{ title: 'Inc Other Org', description: 'Desc Other', client: 'Client Other', priority: 'high' }
+	);
+
+	// Subtests:
+	// 1. queue=all con incidents:view_all -> 200 y devuelve todas las incidencias
+	await t.test(
+		'1. queue=all con incidents:view_all -> 200 y devuelve todas las incidencias',
+		async () => {
+			const res = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=all`,
+				headers: { cookie: sessionViewAll.cookieHeader }
+			});
+			assert.equal(res.status, 200);
+			assert.equal(res.json.incidents.length, 4);
+			const ids = res.json.incidents.map((i) => i.id);
+			assert.ok(ids.includes(inc1.id));
+			assert.ok(ids.includes(inc2.id));
+			assert.ok(ids.includes(inc3.id));
+			assert.ok(ids.includes(inc4.id));
+			assert.ok(!ids.includes(incOther.id));
+		}
+	);
+
+	// 2. queue=unassigned con incidents:view_all -> 200 y solo devuelve assignedToUserId null
+	await t.test(
+		'2. queue=unassigned con incidents:view_all -> 200 y solo devuelve assignedToUserId null',
+		async () => {
+			const res = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=unassigned`,
+				headers: { cookie: sessionViewAll.cookieHeader }
+			});
+			assert.equal(res.status, 200);
+			assert.equal(res.json.incidents.length, 2);
+			for (const inc of res.json.incidents) {
+				assert.equal(inc.assignedToUserId, null);
+			}
+			const ids = res.json.incidents.map((i) => i.id);
+			assert.ok(ids.includes(inc3.id));
+			assert.ok(ids.includes(inc4.id));
+		}
+	);
+
+	// 3. queue=mine con incidents:view_all -> 200 y devuelve solo las del actor autenticado
+	await t.test(
+		'3. queue=mine con incidents:view_all -> 200 y devuelve solo las del actor autenticado',
+		async () => {
+			const res = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=mine`,
+				headers: { cookie: sessionViewAll.cookieHeader }
+			});
+			assert.equal(res.status, 200);
+			assert.equal(res.json.incidents.length, 1);
+			assert.equal(res.json.incidents[0].id, inc1.id);
+			assert.equal(res.json.incidents[0].assignedToUserId, userViewAll.id);
+		}
+	);
+
+	// 4. queue=mine con incidents:view_own (sin view_all) -> 200 y devuelve solo las del actor autenticado
+	await t.test(
+		'4. queue=mine con incidents:view_own (sin view_all) -> 200 y devuelve solo las del actor autenticado',
+		async () => {
+			const res = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=mine`,
+				headers: { cookie: sessionViewOwn.cookieHeader }
+			});
+			assert.equal(res.status, 200);
+			assert.equal(res.json.incidents.length, 1);
+			assert.equal(res.json.incidents[0].id, inc2.id);
+			assert.equal(res.json.incidents[0].assignedToUserId, userViewOwn.id);
+		}
+	);
+
+	// 5. queue=all con solo incidents:view_own -> 403 FORBIDDEN
+	await t.test('5. queue=all con solo incidents:view_own -> 403 FORBIDDEN', async () => {
+		const res = await callGet(GET, {
+			url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=all`,
+			headers: { cookie: sessionViewOwn.cookieHeader }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	// 6. queue=unassigned con solo incidents:view_own -> 403 FORBIDDEN
+	await t.test('6. queue=unassigned con solo incidents:view_own -> 403 FORBIDDEN', async () => {
+		const res = await callGet(GET, {
+			url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=unassigned`,
+			headers: { cookie: sessionViewOwn.cookieHeader }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	// 7. sin queue con solo incidents:view_own -> 403 FORBIDDEN (por default a all)
+	await t.test(
+		'7. sin queue con solo incidents:view_own -> 403 FORBIDDEN (por default a all)',
+		async () => {
+			const res = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgQ.id}`,
+				headers: { cookie: sessionViewOwn.cookieHeader }
+			});
+			assert.equal(res.status, 403);
+			assert.equal(res.json.error?.code, 'FORBIDDEN');
+		}
+	);
+
+	// 8. queue inválida -> 400 INVALID_INPUT
+	await t.test('8. queue inválida -> 400 INVALID_INPUT', async () => {
+		const res = await callGet(GET, {
+			url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=custom`,
+			headers: { cookie: sessionViewAll.cookieHeader }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	// 9. usuario sin ninguno de los dos permisos -> 403 FORBIDDEN en cualquier cola
+	await t.test(
+		'9. usuario sin ninguno de los dos permisos -> 403 FORBIDDEN en cualquier cola',
+		async () => {
+			for (const q of ['all', 'unassigned', 'mine']) {
+				const res = await callGet(GET, {
+					url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=${q}`,
+					headers: { cookie: sessionNoPerm.cookieHeader }
+				});
+				assert.equal(res.status, 403);
+				assert.equal(res.json.error?.code, 'FORBIDDEN');
+			}
+		}
+	);
+
+	// 10. userId en query no permite suplantación de identidad (queue=mine sigue usando sesión)
+	await t.test('10. userId en query no permite suplantación de identidad', async () => {
+		// userViewOwn intenta pedir los tickets de userViewAll pasando userId en query
+		const res = await callGet(GET, {
+			url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=mine&userId=${userViewAll.id}&assignedToUserId=${userViewAll.id}`,
+			headers: { cookie: sessionViewOwn.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+		// Debe devolver SOLO las de userViewOwn, NO las de userViewAll
+		assert.equal(res.json.incidents.length, 1);
+		assert.equal(res.json.incidents[0].id, inc2.id);
+		assert.equal(res.json.incidents[0].assignedToUserId, userViewOwn.id);
+	});
+
+	// 11. aislamiento multi-tenant en todas las colas
+	await t.test('11. aislamiento multi-tenant en todas las colas', async () => {
+		const resAll = await callGet(GET, {
+			url: `http://localhost/api/incidents?organizationId=${orgOther.id}&queue=all`,
+			headers: { cookie: sessionOther.cookieHeader }
+		});
+		assert.equal(resAll.status, 200);
+		assert.equal(resAll.json.incidents.length, 1);
+		assert.equal(resAll.json.incidents[0].id, incOther.id);
+
+		const resUnassigned = await callGet(GET, {
+			url: `http://localhost/api/incidents?organizationId=${orgOther.id}&queue=unassigned`,
+			headers: { cookie: sessionOther.cookieHeader }
+		});
+		assert.equal(resUnassigned.status, 200);
+		assert.equal(resUnassigned.json.incidents.length, 1);
+		assert.equal(resUnassigned.json.incidents[0].id, incOther.id);
+
+		const resMine = await callGet(GET, {
+			url: `http://localhost/api/incidents?organizationId=${orgOther.id}&queue=mine`,
+			headers: { cookie: sessionOther.cookieHeader }
+		});
+		assert.equal(resMine.status, 200);
+		assert.equal(resMine.json.incidents.length, 0);
+	});
+
+	// 12. filtros existentes (status, priority) se combinan correctamente con las colas
+	await t.test(
+		'12. filtros existentes (status, priority) se combinan correctamente con las colas',
+		async () => {
+			// mine + priority
+			const resMineHigh = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=mine&priority=high`,
+				headers: { cookie: sessionViewAll.cookieHeader }
+			});
+			assert.equal(resMineHigh.status, 200);
+			assert.equal(resMineHigh.json.incidents.length, 1);
+			assert.equal(resMineHigh.json.incidents[0].id, inc1.id);
+
+			const resMineLow = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=mine&priority=low`,
+				headers: { cookie: sessionViewAll.cookieHeader }
+			});
+			assert.equal(resMineLow.status, 200);
+			assert.equal(resMineLow.json.incidents.length, 0);
+
+			// unassigned + status
+			const resUnassignedResolved = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=unassigned&status=resolved`,
+				headers: { cookie: sessionViewAll.cookieHeader }
+			});
+			assert.equal(resUnassignedResolved.status, 200);
+			assert.equal(resUnassignedResolved.json.incidents.length, 1);
+			assert.equal(resUnassignedResolved.json.incidents[0].id, inc4.id);
+
+			// all + status + priority
+			const resAllOpenHigh = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=all&status=open&priority=high`,
+				headers: { cookie: sessionViewAll.cookieHeader }
+			});
+			assert.equal(resAllOpenHigh.status, 200);
+			assert.equal(resAllOpenHigh.json.incidents.length, 2);
+			const ids = resAllOpenHigh.json.incidents.map((i) => i.id);
+			assert.ok(ids.includes(inc1.id));
+			assert.ok(ids.includes(inc3.id));
+		}
+	);
+});

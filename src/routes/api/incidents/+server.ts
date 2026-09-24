@@ -8,6 +8,7 @@ import {
 	IncidentServiceError,
 	type IncidentPriority,
 	type IncidentStatus,
+	type IncidentQueue,
 	type ListIncidentsFilters
 } from '$lib/server/services/incidents';
 
@@ -208,11 +209,39 @@ export const GET: RequestHandler = async (event) => {
 		);
 	}
 
-	// 4. Authorize with incidents:view_all
-	const authorized = await authorizeAction(event.request.headers, {
-		organizationId,
-		permissionId: 'incidents:view_all'
-	});
+	// 4. Extract and validate queue param (mine | unassigned | all, default: all)
+	const rawQueue = event.url.searchParams.get('queue');
+	if (rawQueue !== null && rawQueue !== 'mine' && rawQueue !== 'unassigned' && rawQueue !== 'all') {
+		return json(
+			{
+				error: {
+					code: 'INVALID_INPUT',
+					message: `invalid queue parameter '${rawQueue}'. Must be one of: mine, unassigned, all.`
+				}
+			},
+			{ status: 400 }
+		);
+	}
+	const queue: IncidentQueue = (rawQueue as IncidentQueue) ?? 'all';
+
+	// 5. Authorize based on queue:
+	// queue=all or queue=unassigned requires incidents:view_all
+	// queue=mine requires incidents:view_all OR incidents:view_own
+	const authorized =
+		queue === 'mine'
+			? (await authorizeAction(event.request.headers, {
+					organizationId,
+					permissionId: 'incidents:view_all'
+				})) ||
+				(await authorizeAction(event.request.headers, {
+					organizationId,
+					permissionId: 'incidents:view_own'
+				}))
+			: await authorizeAction(event.request.headers, {
+					organizationId,
+					permissionId: 'incidents:view_all'
+				});
+
 	if (!authorized) {
 		return json(
 			{
@@ -225,8 +254,8 @@ export const GET: RequestHandler = async (event) => {
 		);
 	}
 
-	// 5. Extract optional filters from query string
-	const filters: ListIncidentsFilters = {};
+	// 6. Extract optional filters from query string
+	const filters: ListIncidentsFilters = { queue };
 	const statusParam = event.url.searchParams.get('status');
 	if (statusParam !== null) {
 		filters.status = statusParam as IncidentStatus;
@@ -242,11 +271,15 @@ export const GET: RequestHandler = async (event) => {
 		filters.siteId = siteIdParam;
 	}
 
-	// 6. Execute listIncidents
+	// 7. Execute listIncidents
 	try {
-		const incidents = await listIncidents(db, { organizationId }, filters);
+		const incidents = await listIncidents(
+			db,
+			{ organizationId, actorUserId: principal.userId },
+			filters
+		);
 
-		// 7. Success response
+		// 8. Success response
 		return json({ incidents }, { status: 200 });
 	} catch (err: unknown) {
 		if (err instanceof IncidentServiceError && err.code === 'INVALID_INPUT') {

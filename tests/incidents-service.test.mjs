@@ -31,6 +31,27 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 	const f = await fixture(t);
 	const { db, schema: s, server } = f;
 
+	async function createRole(orgId, name, code) {
+		const [role] = await db
+			.insert(s.roles)
+			.values({ organizationId: orgId, name, code, active: true })
+			.returning();
+		return role;
+	}
+
+	async function assignRole(orgId, membershipId, roleId) {
+		const [assignment] = await db
+			.insert(s.roleAssignments)
+			.values({
+				organizationId: orgId,
+				membershipId,
+				roleId,
+				scopeType: 'organization'
+			})
+			.returning();
+		return assignment;
+	}
+
 	const {
 		createIncidentRecord,
 		listIncidents,
@@ -835,27 +856,6 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 	await t.test(
 		'SoporteFlow — Etapa 5.4I-A: Asignación real de técnico, persistencia y catálogo',
 		async (t3) => {
-			// Helper para roles
-			async function createRole(orgId, name, code) {
-				const [role] = await db
-					.insert(s.roles)
-					.values({ organizationId: orgId, name, code, active: true })
-					.returning();
-				return role;
-			}
-			async function assignRole(orgId, membershipId, roleId) {
-				const [assignment] = await db
-					.insert(s.roleAssignments)
-					.values({
-						organizationId: orgId,
-						membershipId,
-						roleId,
-						scopeType: 'organization'
-					})
-					.returning();
-				return assignment;
-			}
-
 			// Roles en orgA
 			const roleTechA = await createRole(orgA.id, 'Técnico Org A', 'technician');
 			const roleAdminA = await createRole(orgA.id, 'Admin Org A', 'organization_admin');
@@ -1126,6 +1126,312 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 				const detailAssigned = await getIncidentById(db, { organizationId: orgA.id }, inc.id);
 				assert.equal(detailAssigned.incident.assignedToUserId, userTech1.id);
 				assert.equal(detailAssigned.incident.assignedToUserName, 'Beatriz Técnico');
+			});
+		}
+	);
+
+	// =========================================================================
+	// 5.4J-A: Colas reales de incidencias (mine, unassigned, all)
+	// =========================================================================
+	await t.test(
+		'SoporteFlow — Etapa 5.4J-A: Colas reales de incidencias (mine, unassigned, all)',
+		async (t4) => {
+			const orgQ = await createOrg(db, s, 'Org Queues Test', 'active');
+			const orgQOther = await createOrg(db, s, 'Org Other Tenant', 'active');
+
+			const userTechQ1 = await createUser(db, s, 'Tech Q1', true);
+			const userTechQ2 = await createUser(db, s, 'Tech Q2', true);
+			const userCreatorQ = await createUser(db, s, 'Creator Q', true);
+
+			const roleTechQ = await createRole(orgQ.id, 'Role Tech Q', 'technician');
+			const memTechQ1 = await createMembership(db, s, orgQ.id, userTechQ1.id, true);
+			const memTechQ2 = await createMembership(db, s, orgQ.id, userTechQ2.id, true);
+			const memCreatorQ = await createMembership(db, s, orgQ.id, userCreatorQ.id, true);
+
+			await assignRole(orgQ.id, memTechQ1.id, roleTechQ.id);
+			await assignRole(orgQ.id, memTechQ2.id, roleTechQ.id);
+			await assignRole(orgQ.id, memCreatorQ.id, roleTechQ.id);
+
+			// Other org creator & tech
+			const userOther = await createUser(db, s, 'User Other Org', true);
+			const memOther = await createMembership(db, s, orgQOther.id, userOther.id, true);
+			const roleOther = await createRole(orgQOther.id, 'Role Other', 'technician');
+			await assignRole(orgQOther.id, memOther.id, roleOther.id);
+
+			// Create incidents in orgQ:
+			// 1. Assigned to userTechQ1 (open, high)
+			const { incident: incQ1 } = await createIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, creatorUserId: userCreatorQ.id },
+				{
+					title: 'Incidente Tech 1 Open High',
+					description: 'Desc 1',
+					client: 'Client A',
+					priority: 'high'
+				}
+			);
+			await assignIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, actorUserId: userCreatorQ.id },
+				incQ1.id,
+				{
+					assignedToUserId: userTechQ1.id
+				}
+			);
+
+			// 2. Assigned to userTechQ1 (closed, medium)
+			const { incident: incQ2 } = await createIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, creatorUserId: userCreatorQ.id },
+				{
+					title: 'Incidente Tech 1 Closed Medium',
+					description: 'Desc 2',
+					client: 'Client A',
+					priority: 'medium'
+				}
+			);
+			await assignIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, actorUserId: userCreatorQ.id },
+				incQ2.id,
+				{
+					assignedToUserId: userTechQ1.id
+				}
+			);
+			await updateIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, actorUserId: userCreatorQ.id },
+				incQ2.id,
+				{
+					status: 'resolved'
+				}
+			);
+			await updateIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, actorUserId: userCreatorQ.id },
+				incQ2.id,
+				{
+					status: 'closed'
+				}
+			);
+
+			// 3. Assigned to userTechQ2 (open, low)
+			const { incident: incQ3 } = await createIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, creatorUserId: userCreatorQ.id },
+				{
+					title: 'Incidente Tech 2 Open Low',
+					description: 'Desc 3',
+					client: 'Client B',
+					priority: 'low'
+				}
+			);
+			await assignIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, actorUserId: userCreatorQ.id },
+				incQ3.id,
+				{
+					assignedToUserId: userTechQ2.id
+				}
+			);
+
+			// 4. Unassigned (open, urgent)
+			const { incident: incQ4 } = await createIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, creatorUserId: userCreatorQ.id },
+				{
+					title: 'Incidente Unassigned Open Urgent',
+					description: 'Desc 4',
+					client: 'Client C',
+					priority: 'urgent'
+				}
+			);
+
+			// 5. Unassigned (pending, high)
+			const { incident: incQ5 } = await createIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, creatorUserId: userCreatorQ.id },
+				{
+					title: 'Incidente Unassigned Pending High',
+					description: 'Desc 5',
+					client: 'Client D',
+					priority: 'high'
+				}
+			);
+			await updateIncidentRecord(
+				db,
+				{ organizationId: orgQ.id, actorUserId: userCreatorQ.id },
+				incQ5.id,
+				{
+					status: 'pending'
+				}
+			);
+
+			// Incident in orgQOther (unassigned)
+			const { incident: incOther } = await createIncidentRecord(
+				db,
+				{ organizationId: orgQOther.id, creatorUserId: userOther.id },
+				{ title: 'Incidente Other Org', description: 'Desc Other', client: 'Client Other' }
+			);
+
+			// 1. queue=all devuelve todas del tenant
+			await t4.test('1. queue=all devuelve todas las incidencias del tenant', async () => {
+				const all = await listIncidents(db, { organizationId: orgQ.id }, { queue: 'all' });
+				assert.equal(all.length, 5);
+				const ids = all.map((i) => i.id);
+				assert.ok(ids.includes(incQ1.id));
+				assert.ok(ids.includes(incQ2.id));
+				assert.ok(ids.includes(incQ3.id));
+				assert.ok(ids.includes(incQ4.id));
+				assert.ok(ids.includes(incQ5.id));
+				assert.ok(!ids.includes(incOther.id));
+			});
+
+			// 2. queue=mine solo las asignadas al actor
+			await t4.test('2. queue=mine solo devuelve las asignadas al actor', async () => {
+				const mineTech1 = await listIncidents(
+					db,
+					{ organizationId: orgQ.id, actorUserId: userTechQ1.id },
+					{ queue: 'mine' }
+				);
+				assert.equal(mineTech1.length, 2);
+				const ids1 = mineTech1.map((i) => i.id);
+				assert.ok(ids1.includes(incQ1.id));
+				assert.ok(ids1.includes(incQ2.id));
+
+				const mineTech2 = await listIncidents(
+					db,
+					{ organizationId: orgQ.id, actorUserId: userTechQ2.id },
+					{ queue: 'mine' }
+				);
+				assert.equal(mineTech2.length, 1);
+				assert.equal(mineTech2[0].id, incQ3.id);
+			});
+
+			// 3. queue=unassigned solo assignedToUserId null
+			await t4.test('3. queue=unassigned solo devuelve incidencias sin técnico', async () => {
+				const unassigned = await listIncidents(
+					db,
+					{ organizationId: orgQ.id },
+					{ queue: 'unassigned' }
+				);
+				assert.equal(unassigned.length, 2);
+				const ids = unassigned.map((i) => i.id);
+				assert.ok(ids.includes(incQ4.id));
+				assert.ok(ids.includes(incQ5.id));
+				for (const inc of unassigned) {
+					assert.equal(inc.assignedToUserId, null);
+				}
+			});
+
+			// 4. mine + status
+			await t4.test('4. mine + status combina correctamente ambos filtros', async () => {
+				const mineOpen = await listIncidents(
+					db,
+					{ organizationId: orgQ.id, actorUserId: userTechQ1.id },
+					{ queue: 'mine', status: 'open' }
+				);
+				assert.equal(mineOpen.length, 1);
+				assert.equal(mineOpen[0].id, incQ1.id);
+
+				const mineClosed = await listIncidents(
+					db,
+					{ organizationId: orgQ.id, actorUserId: userTechQ1.id },
+					{ queue: 'mine', status: 'closed' }
+				);
+				assert.equal(mineClosed.length, 1);
+				assert.equal(mineClosed[0].id, incQ2.id);
+			});
+
+			// 5. mine + priority
+			await t4.test('5. mine + priority combina correctamente ambos filtros', async () => {
+				const mineHigh = await listIncidents(
+					db,
+					{ organizationId: orgQ.id, actorUserId: userTechQ1.id },
+					{ queue: 'mine', priority: 'high' }
+				);
+				assert.equal(mineHigh.length, 1);
+				assert.equal(mineHigh[0].id, incQ1.id);
+
+				const mineLow = await listIncidents(
+					db,
+					{ organizationId: orgQ.id, actorUserId: userTechQ1.id },
+					{ queue: 'mine', priority: 'low' }
+				);
+				assert.equal(mineLow.length, 0);
+			});
+
+			// 6. unassigned + filtros
+			await t4.test('6. unassigned + filtros combina status y priority', async () => {
+				const unassignedUrgent = await listIncidents(
+					db,
+					{ organizationId: orgQ.id },
+					{ queue: 'unassigned', priority: 'urgent' }
+				);
+				assert.equal(unassignedUrgent.length, 1);
+				assert.equal(unassignedUrgent[0].id, incQ4.id);
+
+				const unassignedPending = await listIncidents(
+					db,
+					{ organizationId: orgQ.id },
+					{ queue: 'unassigned', status: 'pending' }
+				);
+				assert.equal(unassignedPending.length, 1);
+				assert.equal(unassignedPending[0].id, incQ5.id);
+			});
+
+			// 7. aislamiento multi-tenant
+			await t4.test('7. aislamiento multi-tenant en todas las colas', async () => {
+				const otherAll = await listIncidents(
+					db,
+					{ organizationId: orgQOther.id },
+					{ queue: 'all' }
+				);
+				assert.equal(otherAll.length, 1);
+				assert.equal(otherAll[0].id, incOther.id);
+
+				const otherUnassigned = await listIncidents(
+					db,
+					{ organizationId: orgQOther.id },
+					{ queue: 'unassigned' }
+				);
+				assert.equal(otherUnassigned.length, 1);
+				assert.equal(otherUnassigned[0].id, incOther.id);
+
+				const otherMine = await listIncidents(
+					db,
+					{ organizationId: orgQOther.id, actorUserId: userOther.id },
+					{ queue: 'mine' }
+				);
+				assert.equal(otherMine.length, 0);
+			});
+
+			// 8. actorUserId obligatorio para mine
+			await t4.test('8. actorUserId es obligatorio para queue=mine', async () => {
+				await assert.rejects(
+					async () => {
+						await listIncidents(db, { organizationId: orgQ.id }, { queue: 'mine' });
+					},
+					(err) => {
+						assert.equal(err.code, 'INVALID_INPUT');
+						assert.ok(err.message.includes('actorUserId'));
+						return true;
+					}
+				);
+
+				await assert.rejects(
+					async () => {
+						await listIncidents(
+							db,
+							{ organizationId: orgQ.id, actorUserId: 'not-a-uuid' },
+							{ queue: 'mine' }
+						);
+					},
+					(err) => {
+						assert.equal(err.code, 'INVALID_INPUT');
+						return true;
+					}
+				);
 			});
 		}
 	);

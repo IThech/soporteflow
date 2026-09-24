@@ -20,9 +20,11 @@ export type IncidentHistoryRecord = typeof incidentHistory.$inferSelect;
 
 export type IncidentPriority = 'low' | 'medium' | 'high' | 'urgent';
 export type IncidentStatus = 'open' | 'pending' | 'resolved' | 'closed';
+export type IncidentQueue = 'mine' | 'unassigned' | 'all';
 
 const VALID_PRIORITIES = new Set<IncidentPriority>(['low', 'medium', 'high', 'urgent']);
 const VALID_STATUSES = new Set<IncidentStatus>(['open', 'pending', 'resolved', 'closed']);
+const VALID_QUEUES = new Set<IncidentQueue>(['mine', 'unassigned', 'all']);
 
 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isValidUuid(value: unknown): value is string {
@@ -76,6 +78,7 @@ export interface ListIncidentsFilters {
 	status?: IncidentStatus;
 	priority?: IncidentPriority;
 	siteId?: string | null;
+	queue?: IncidentQueue;
 }
 
 export type IncidentDetailRecord = IncidentRecord & {
@@ -321,14 +324,19 @@ export async function createIncidentRecord(
 	return await execute(dbOrTx);
 }
 
+export interface ListIncidentsContext {
+	readonly organizationId: string;
+	readonly actorUserId?: string;
+}
+
 /**
  * Lists incidents strictly scoped to the specified organizationId.
- * Supports optional filtering by status, priority, and siteId.
+ * Supports optional filtering by status, priority, siteId, and queue (mine, unassigned, all).
  * Results are returned in deterministic order (createdAt DESC, incidentNumber DESC).
  */
 export async function listIncidents(
 	db: IncidentDatabase,
-	context: { organizationId: string },
+	context: ListIncidentsContext,
 	filters?: ListIncidentsFilters
 ): Promise<IncidentRecord[]> {
 	if (!isValidUuid(context?.organizationId)) {
@@ -365,6 +373,26 @@ export async function listIncidents(
 				throw new IncidentServiceError('INVALID_INPUT', 'siteId filter must be a valid UUID');
 			}
 			conditions.push(eq(incidents.siteId, filters.siteId));
+		}
+	}
+
+	if (filters?.queue !== undefined) {
+		if (!VALID_QUEUES.has(filters.queue)) {
+			throw new IncidentServiceError(
+				'INVALID_INPUT',
+				`invalid queue filter '${String(filters.queue)}'`
+			);
+		}
+		if (filters.queue === 'mine') {
+			if (!isValidUuid(context.actorUserId)) {
+				throw new IncidentServiceError(
+					'INVALID_INPUT',
+					'actorUserId must be a valid UUID when filtering by queue=mine'
+				);
+			}
+			conditions.push(eq(incidents.assignedToUserId, context.actorUserId));
+		} else if (filters.queue === 'unassigned') {
+			conditions.push(isNull(incidents.assignedToUserId));
 		}
 	}
 
