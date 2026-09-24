@@ -221,15 +221,24 @@ export async function getIncident(
 	}
 
 	const incident = (data as { incident?: unknown }).incident;
-	if (!incident || typeof incident !== 'object' || Array.isArray(incident)) {
+	return parseAndValidateIncident(incident, organizationId, incidentId, res.status);
+}
+
+function parseAndValidateIncident(
+	rawItem: unknown,
+	expectedOrgId: string,
+	expectedIncidentId?: string,
+	status = 200
+): IncidentListItem {
+	if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) {
 		throw new IncidentApiError(
-			res.status,
+			status,
 			'INVALID_PAYLOAD',
 			'No se pudo interpretar la respuesta del servidor.'
 		);
 	}
 
-	const item = incident as Record<string, unknown>;
+	const item = rawItem as Record<string, unknown>;
 	const isValidStatus =
 		item.status === 'open' ||
 		item.status === 'pending' ||
@@ -259,13 +268,109 @@ export async function getIncident(
 		typeof item.updatedAt !== 'string'
 	) {
 		throw new IncidentApiError(
-			res.status,
+			status,
 			'INVALID_PAYLOAD',
 			'No se pudo interpretar la respuesta del servidor.'
 		);
 	}
 
-	if (item.organizationId !== organizationId || item.id !== incidentId) {
+	if (item.organizationId !== expectedOrgId) {
+		throw new IncidentApiError(
+			status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	if (expectedIncidentId !== undefined && item.id !== expectedIncidentId) {
+		throw new IncidentApiError(
+			status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	return item as unknown as IncidentListItem;
+}
+
+export interface CreateIncidentInput {
+	title: string;
+	description: string;
+	client: string;
+	priority: 'low' | 'medium' | 'high' | 'urgent';
+}
+
+export interface CreateIncidentOptions {
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+/**
+ * Creates a new real incident for the specified organization.
+ * Sends POST /api/incidents with Content-Type: application/json.
+ * Validates the complete IncidentListItem contract on success.
+ * Discards history and internal audit records.
+ */
+export async function createIncident(
+	organizationId: string,
+	input: CreateIncidentInput,
+	options?: CreateIncidentOptions
+): Promise<IncidentListItem> {
+	const fetchFn = options?.customFetch ?? fetch;
+	const url = '/api/incidents';
+
+	let res: Response;
+	try {
+		res = await fetchFn(url, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				organizationId,
+				title: input.title,
+				description: input.description,
+				client: input.client,
+				priority: input.priority
+			}),
+			signal: options?.signal
+		});
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) {
+			throw err;
+		}
+		if ((err as Error)?.name === 'AbortError' || options?.signal?.aborted) {
+			throw err;
+		}
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+
+	if (!res.ok) {
+		let message = 'No se pudo crear la incidencia. Inténtalo de nuevo.';
+		let code = 'INTERNAL_ERROR';
+		if (res.status === 400) {
+			message = 'Por favor, revisa los datos de la incidencia.';
+			code = 'INVALID_INPUT';
+		} else if (res.status === 401) {
+			message = 'Tu sesión ya no es válida.';
+			code = 'UNAUTHORIZED';
+		} else if (res.status === 403) {
+			message = 'No tienes permisos para crear incidencias en esta organización.';
+			code = 'FORBIDDEN';
+		} else if (res.status === 404) {
+			message = 'No se pudo asociar la sede o el cliente especificado.';
+			code = 'NOT_FOUND';
+		} else if (res.status >= 500) {
+			message = 'No se pudo crear la incidencia. Inténtalo de nuevo.';
+			code = 'SERVER_ERROR';
+		}
+		throw new IncidentApiError(res.status, code, message);
+	}
+
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
 		throw new IncidentApiError(
 			res.status,
 			'INVALID_PAYLOAD',
@@ -273,5 +378,14 @@ export async function getIncident(
 		);
 	}
 
-	return incident as IncidentListItem;
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	const incident = (data as { incident?: unknown }).incident;
+	return parseAndValidateIncident(incident, organizationId, undefined, res.status);
 }

@@ -2423,9 +2423,17 @@
 					</span>
 				</div>
 				{#if $session.activeOrganization}
-					<span class="text-sm font-medium text-slate-300">
-						Organización: <span class="text-white">{$session.activeOrganization.name}</span>
-					</span>
+					<div class="flex items-center gap-4">
+						<span class="text-sm font-medium text-slate-300">
+							Organización: <span class="text-white">{$session.activeOrganization.name}</span>
+						</span>
+						<a
+							href={resolve(`/app/incidents/new?organizationId=${$session.activeOrganization.id}`)}
+							class="rounded-lg bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-slate-950 transition hover:bg-cyan-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+						>
+							Nueva incidencia
+						</a>
+					</div>
 				{/if}
 			</div>
 
