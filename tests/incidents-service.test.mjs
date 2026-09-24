@@ -31,8 +31,13 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 	const f = await fixture(t);
 	const { db, schema: s, server } = f;
 
-	const { createIncidentRecord, listIncidents, getIncidentById, IncidentServiceError } =
-		await server.ssrLoadModule('/src/lib/server/services/incidents.ts');
+	const {
+		createIncidentRecord,
+		listIncidents,
+		getIncidentById,
+		updateIncidentRecord,
+		IncidentServiceError
+	} = await server.ssrLoadModule('/src/lib/server/services/incidents.ts');
 
 	// Configuración base de organizaciones
 	const orgA = await createOrg(db, s, 'Organización Alpha', 'active');
@@ -525,6 +530,300 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 				'not-a-uuid'
 			);
 			assert.equal(invalidUuidDetail, null);
+		}
+	);
+
+	// =========================================================================
+	// 10. UPDATE: Edición básica real de status y priority, transiciones y auditoría
+	// =========================================================================
+	await t.test(
+		'UPDATE: modificación real de status y priority con transiciones 5.4H, auditoría y multi-tenant',
+		async (t2) => {
+			const contextA = { organizationId: orgA.id, actorUserId: userCreatorA.id };
+			const contextB = { organizationId: orgB.id, actorUserId: userCreatorB.id };
+
+			// Helper para crear un ticket fresco en Org A
+			async function createFreshIncident(status = 'open', priority = 'medium') {
+				const created = await createIncidentRecord(
+					db,
+					{ organizationId: orgA.id, creatorUserId: userCreatorA.id },
+					{
+						title: 'Ticket Test Edición ' + randomUUID(),
+						description: 'Descripción para pruebas de actualización',
+						client: 'Cliente Test',
+						priority
+					}
+				);
+				// Si se requiere un status diferente a open inicial, actualizarlo directamente en la BD
+				if (status !== 'open') {
+					await db
+						.update(s.incidents)
+						.set({ status })
+						.where(eq(s.incidents.id, created.incident.id));
+					created.incident.status = status;
+				}
+				return created.incident;
+			}
+
+			// 1. update status válido: open -> pending
+			await t2.test('1. update status válido', async () => {
+				const inc = await createFreshIncident('open', 'medium');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'pending' });
+				assert.equal(res.incident.status, 'pending');
+				assert.equal(res.history.length, 1);
+				assert.equal(res.history[0].eventType, 'status_changed');
+			});
+
+			// 2. update priority válido: medium -> high
+			await t2.test('2. update priority válido', async () => {
+				const inc = await createFreshIncident('open', 'medium');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { priority: 'high' });
+				assert.equal(res.incident.priority, 'high');
+				assert.equal(res.history.length, 1);
+				assert.equal(res.history[0].eventType, 'priority_changed');
+			});
+
+			// 3. ambos simultáneamente
+			await t2.test('3. ambos simultáneamente', async () => {
+				const inc = await createFreshIncident('open', 'low');
+				const res = await updateIncidentRecord(db, contextA, inc.id, {
+					status: 'pending',
+					priority: 'urgent'
+				});
+				assert.equal(res.incident.status, 'pending');
+				assert.equal(res.incident.priority, 'urgent');
+				assert.equal(res.history.length, 2);
+				assert.equal(res.history[0].eventType, 'status_changed');
+				assert.equal(res.history[1].eventType, 'priority_changed');
+			});
+
+			// 4. open → pending
+			await t2.test('4. open → pending', async () => {
+				const inc = await createFreshIncident('open');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'pending' });
+				assert.equal(res.incident.status, 'pending');
+				assert.equal(res.history[0].eventType, 'status_changed');
+			});
+
+			// 5. pending → open
+			await t2.test('5. pending → open', async () => {
+				const inc = await createFreshIncident('pending');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'open' });
+				assert.equal(res.incident.status, 'open');
+				assert.equal(res.history[0].eventType, 'status_changed');
+			});
+
+			// 6. open → resolved
+			await t2.test('6. open → resolved', async () => {
+				const inc = await createFreshIncident('open');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'resolved' });
+				assert.equal(res.incident.status, 'resolved');
+				assert.equal(res.history[0].eventType, 'resolved');
+			});
+
+			// 7. pending → resolved
+			await t2.test('7. pending → resolved', async () => {
+				const inc = await createFreshIncident('pending');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'resolved' });
+				assert.equal(res.incident.status, 'resolved');
+				assert.equal(res.history[0].eventType, 'resolved');
+			});
+
+			// 8. resolved → open
+			await t2.test('8. resolved → open', async () => {
+				const inc = await createFreshIncident('resolved');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'open' });
+				assert.equal(res.incident.status, 'open');
+				assert.equal(res.history[0].eventType, 'reopened');
+			});
+
+			// 9. resolved → closed
+			await t2.test('9. resolved → closed', async () => {
+				const inc = await createFreshIncident('resolved');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'closed' });
+				assert.equal(res.incident.status, 'closed');
+				assert.equal(res.history[0].eventType, 'closed');
+			});
+
+			// 10. closed → open
+			await t2.test('10. closed → open', async () => {
+				const inc = await createFreshIncident('closed');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'open' });
+				assert.equal(res.incident.status, 'open');
+				assert.equal(res.history[0].eventType, 'reopened');
+			});
+
+			// 11. open → closed rechazado
+			await t2.test('11. open → closed rechazado', async () => {
+				const inc = await createFreshIncident('open');
+				await assert.rejects(
+					updateIncidentRecord(db, contextA, inc.id, { status: 'closed' }),
+					(err) => err instanceof IncidentServiceError && err.code === 'INVALID_INPUT'
+				);
+			});
+
+			// 12. pending → closed rechazado
+			await t2.test('12. pending → closed rechazado', async () => {
+				const inc = await createFreshIncident('pending');
+				await assert.rejects(
+					updateIncidentRecord(db, contextA, inc.id, { status: 'closed' }),
+					(err) => err instanceof IncidentServiceError && err.code === 'INVALID_INPUT'
+				);
+			});
+
+			// 13. closed → pending rechazado
+			await t2.test('13. closed → pending rechazado', async () => {
+				const inc = await createFreshIncident('closed');
+				await assert.rejects(
+					updateIncidentRecord(db, contextA, inc.id, { status: 'pending' }),
+					(err) => err instanceof IncidentServiceError && err.code === 'INVALID_INPUT'
+				);
+			});
+
+			// 14. resolved → pending rechazado
+			await t2.test('14. resolved → pending rechazado', async () => {
+				const inc = await createFreshIncident('resolved');
+				await assert.rejects(
+					updateIncidentRecord(db, contextA, inc.id, { status: 'pending' }),
+					(err) => err instanceof IncidentServiceError && err.code === 'INVALID_INPUT'
+				);
+			});
+
+			// 15. status no-op sin history
+			await t2.test('15. status no-op sin history', async () => {
+				const inc = await createFreshIncident('open', 'high');
+				const res = await updateIncidentRecord(db, contextA, inc.id, {
+					status: 'open',
+					priority: 'high'
+				});
+				assert.equal(res.incident.status, 'open');
+				assert.equal(res.history.length, 0);
+			});
+
+			// 16. priority no-op sin history
+			await t2.test('16. priority no-op sin history', async () => {
+				const inc = await createFreshIncident('open', 'medium');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { priority: 'medium' });
+				assert.equal(res.incident.priority, 'medium');
+				assert.equal(res.history.length, 0);
+			});
+
+			// 17. ambos no-op sin updatedAt nuevo
+			await t2.test('17. ambos no-op sin updatedAt nuevo', async () => {
+				const inc = await createFreshIncident('open', 'low');
+				const res = await updateIncidentRecord(db, contextA, inc.id, {
+					status: 'open',
+					priority: 'low'
+				});
+				assert.equal(new Date(res.incident.updatedAt).getTime(), new Date(inc.updatedAt).getTime());
+				assert.equal(res.history.length, 0);
+			});
+
+			// 18. status genera eventType correcto
+			await t2.test('18. status genera eventType correcto', async () => {
+				const inc = await createFreshIncident('open');
+				const resResolved = await updateIncidentRecord(db, contextA, inc.id, {
+					status: 'resolved'
+				});
+				assert.equal(resResolved.history[0].eventType, 'resolved');
+
+				const resClosed = await updateIncidentRecord(db, contextA, inc.id, { status: 'closed' });
+				assert.equal(resClosed.history[0].eventType, 'closed');
+
+				const resReopened = await updateIncidentRecord(db, contextA, inc.id, { status: 'open' });
+				assert.equal(resReopened.history[0].eventType, 'reopened');
+			});
+
+			// 19. priority genera priority_changed
+			await t2.test('19. priority genera priority_changed', async () => {
+				const inc = await createFreshIncident('open', 'low');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { priority: 'urgent' });
+				assert.equal(res.history[0].eventType, 'priority_changed');
+			});
+
+			// 20. ambos generan dos filas
+			await t2.test('20. ambos generan dos filas', async () => {
+				const inc = await createFreshIncident('open', 'low');
+				const res = await updateIncidentRecord(db, contextA, inc.id, {
+					status: 'resolved',
+					priority: 'high'
+				});
+				assert.equal(res.history.length, 2);
+				assert.equal(res.history[0].eventType, 'resolved');
+				assert.equal(res.history[1].eventType, 'priority_changed');
+			});
+
+			// 21. actorUserId correcto
+			await t2.test('21. actorUserId correcto', async () => {
+				const inc = await createFreshIncident('open');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'pending' });
+				assert.equal(res.history[0].actorUserId, userCreatorA.id);
+			});
+
+			// 22. organizationId correcto
+			await t2.test('22. organizationId correcto', async () => {
+				const inc = await createFreshIncident('open');
+				const res = await updateIncidentRecord(db, contextA, inc.id, { status: 'pending' });
+				assert.equal(res.history[0].organizationId, orgA.id);
+			});
+
+			// 23. payload old/new correcto
+			await t2.test('23. payload old/new correcto', async () => {
+				const inc = await createFreshIncident('open', 'low');
+				const res = await updateIncidentRecord(db, contextA, inc.id, {
+					status: 'pending',
+					priority: 'high'
+				});
+				assert.deepEqual(res.history[0].payload, { oldStatus: 'open', newStatus: 'pending' });
+				assert.deepEqual(res.history[1].payload, { oldPriority: 'low', newPriority: 'high' });
+			});
+
+			// 24. cross-tenant no encuentra incidencia
+			await t2.test('24. cross-tenant no encuentra incidencia', async () => {
+				const inc = await createFreshIncident('open');
+				await assert.rejects(
+					updateIncidentRecord(db, contextB, inc.id, { status: 'pending' }),
+					(err) => err instanceof IncidentServiceError && err.code === 'INCIDENT_NOT_FOUND'
+				);
+			});
+
+			// 25. rollback si falla history
+			await t2.test('25. rollback si falla history', async () => {
+				const inc = await createFreshIncident('open', 'low');
+
+				await assert.rejects(
+					db.transaction(async (tx) => {
+						await updateIncidentRecord(tx, contextA, inc.id, { status: 'pending' });
+						throw new Error('Forced failure to trigger transaction rollback');
+					}),
+					/Forced failure to trigger transaction rollback/
+				);
+
+				// Verificar que el incidente sigue con el status original 'open'
+				const current = await getIncidentById(db, { organizationId: orgA.id }, inc.id);
+				assert.equal(current.incident.status, 'open');
+			});
+
+			// 26. updatedAt cambia solo con mutación
+			await t2.test('26. updatedAt cambia solo con mutación', async () => {
+				const inc = await createFreshIncident('open', 'low');
+				// Esperamos un instante pequeño para garantizar delta de tiempo
+				await new Promise((res) => setTimeout(res, 20));
+				const resMutated = await updateIncidentRecord(db, contextA, inc.id, { priority: 'high' });
+				assert.ok(
+					new Date(resMutated.incident.updatedAt).getTime() > new Date(inc.updatedAt).getTime(),
+					'updatedAt debe avanzar en mutación efectiva'
+				);
+
+				const beforeNoopTime = resMutated.incident.updatedAt;
+				await new Promise((res) => setTimeout(res, 20));
+				const resNoop = await updateIncidentRecord(db, contextA, inc.id, { priority: 'high' });
+				assert.equal(
+					new Date(resNoop.incident.updatedAt).getTime(),
+					new Date(beforeNoopTime).getTime(),
+					'updatedAt no debe avanzar en no-op'
+				);
+			});
 		}
 	);
 });

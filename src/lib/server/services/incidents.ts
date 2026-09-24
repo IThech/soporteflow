@@ -37,7 +37,8 @@ export type IncidentServiceErrorCode =
 	| 'CLIENT_USER_INACTIVE'
 	| 'SITE_NOT_FOUND'
 	| 'SITE_INACTIVE'
-	| 'INVALID_INPUT';
+	| 'INVALID_INPUT'
+	| 'INCIDENT_NOT_FOUND';
 
 export class IncidentServiceError extends Error {
 	constructor(
@@ -408,4 +409,237 @@ export async function getIncidentById(
 		.orderBy(asc(incidentHistory.createdAt), asc(incidentHistory.id));
 
 	return { incident, history };
+}
+
+const ALLOWED_STATUS_TRANSITIONS: Record<IncidentStatus, ReadonlySet<IncidentStatus>> = {
+	open: new Set<IncidentStatus>(['pending', 'resolved']),
+	pending: new Set<IncidentStatus>(['open', 'resolved']),
+	resolved: new Set<IncidentStatus>(['open', 'closed']),
+	closed: new Set<IncidentStatus>(['open'])
+};
+
+export interface UpdateIncidentContext {
+	readonly organizationId: string;
+	readonly actorUserId: string;
+}
+
+export interface UpdateIncidentInput {
+	status?: IncidentStatus;
+	priority?: IncidentPriority;
+}
+
+export interface UpdateIncidentResult {
+	incident: IncidentRecord;
+	history: IncidentHistoryRecord[];
+}
+
+/**
+ * Updates an incident's status and/or priority atomically within a single Drizzle transaction.
+ * Enforces multi-tenant isolation, active tenant and actor membership, status transition matrix,
+ * updates updatedAt only on effective change, generates granular audit history records,
+ * and handles no-ops gracefully without mutation or history entries.
+ */
+export async function updateIncidentRecord(
+	dbOrTx: IncidentDatabase,
+	context: UpdateIncidentContext,
+	incidentId: string,
+	input: UpdateIncidentInput
+): Promise<UpdateIncidentResult> {
+	// 1. Context and input validation
+	if (!isValidUuid(context?.organizationId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
+	}
+	if (!isValidUuid(context?.actorUserId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
+	}
+	if (!isValidUuid(incidentId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'incidentId must be a valid UUID');
+	}
+
+	if (input?.status !== undefined && !VALID_STATUSES.has(input.status)) {
+		throw new IncidentServiceError('INVALID_INPUT', `invalid status '${String(input.status)}'`);
+	}
+
+	if (input?.priority !== undefined && !VALID_PRIORITIES.has(input.priority)) {
+		throw new IncidentServiceError('INVALID_INPUT', `invalid priority '${String(input.priority)}'`);
+	}
+
+	const execute = async (tx: IncidentDatabase): Promise<UpdateIncidentResult> => {
+		// A. Validate Organization existence & operational status
+		const [org] = await tx
+			.select({ id: organizations.id, status: organizations.status })
+			.from(organizations)
+			.where(eq(organizations.id, context.organizationId))
+			.limit(1);
+
+		if (!org) {
+			throw new IncidentServiceError('ORGANIZATION_NOT_FOUND', 'Organization does not exist');
+		}
+
+		if (org.status !== 'active') {
+			throw new IncidentServiceError(
+				'ORGANIZATION_NOT_OPERATIONAL',
+				`Organization is not operational (status: '${org.status}')`
+			);
+		}
+
+		// B. Validate Actor Membership and User activity
+		const [actorRecord] = await tx
+			.select({
+				membershipActive: memberships.active,
+				userActive: users.active
+			})
+			.from(memberships)
+			.innerJoin(users, eq(users.id, memberships.userId))
+			.where(
+				and(
+					eq(memberships.organizationId, context.organizationId),
+					eq(memberships.userId, context.actorUserId)
+				)
+			)
+			.limit(1);
+
+		if (!actorRecord) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_NOT_FOUND',
+				'Actor user is not a member of this organization'
+			);
+		}
+
+		if (!actorRecord.membershipActive) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_INACTIVE',
+				'Actor user membership is inactive'
+			);
+		}
+
+		if (!actorRecord.userActive) {
+			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+		}
+
+		// C. Query existing incident strictly within tenant
+		const [currentIncident] = await tx
+			.select()
+			.from(incidents)
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.limit(1);
+
+		if (!currentIncident) {
+			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
+		}
+
+		const currentStatus = currentIncident.status as IncidentStatus;
+		const currentPriority = currentIncident.priority as IncidentPriority;
+
+		const isStatusSent = input?.status !== undefined;
+		const isPrioritySent = input?.priority !== undefined;
+
+		const isStatusChanged = isStatusSent && input.status !== currentStatus;
+		const isPriorityChanged = isPrioritySent && input.priority !== currentPriority;
+
+		// D. Validate status transition if status changed
+		if (isStatusChanged) {
+			const allowedTransitions = ALLOWED_STATUS_TRANSITIONS[currentStatus];
+			if (!allowedTransitions || !allowedTransitions.has(input.status!)) {
+				throw new IncidentServiceError(
+					'INVALID_INPUT',
+					`Transition from status '${currentStatus}' to '${input.status}' is not permitted`
+				);
+			}
+		}
+
+		// E. No-op handling: if neither status nor priority effectively changes
+		if (!isStatusChanged && !isPriorityChanged) {
+			return { incident: currentIncident, history: [] };
+		}
+
+		// F. Update incident
+		const updateValues: Partial<typeof incidents.$inferInsert> = {
+			updatedAt: new Date()
+		};
+
+		if (isStatusChanged) {
+			updateValues.status = input.status!;
+		}
+
+		if (isPriorityChanged) {
+			updateValues.priority = input.priority!;
+		}
+
+		const [updatedIncident] = await tx
+			.update(incidents)
+			.set(updateValues)
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.returning();
+
+		// G. Insert audit history events
+		const historyRecords: IncidentHistoryRecord[] = [];
+
+		if (isStatusChanged) {
+			let statusEventType: 'resolved' | 'closed' | 'reopened' | 'status_changed';
+			const oldStatus = currentStatus;
+			const newStatus = input.status!;
+
+			if ((oldStatus === 'open' || oldStatus === 'pending') && newStatus === 'resolved') {
+				statusEventType = 'resolved';
+			} else if (oldStatus === 'resolved' && newStatus === 'closed') {
+				statusEventType = 'closed';
+			} else if ((oldStatus === 'resolved' || oldStatus === 'closed') && newStatus === 'open') {
+				statusEventType = 'reopened';
+			} else {
+				statusEventType = 'status_changed';
+			}
+
+			const [statusHistory] = await tx
+				.insert(incidentHistory)
+				.values({
+					incidentId,
+					organizationId: context.organizationId,
+					eventType: statusEventType,
+					actorType: 'user',
+					actorUserId: context.actorUserId,
+					reason: null,
+					comment: null,
+					payload: {
+						oldStatus,
+						newStatus
+					}
+				})
+				.returning();
+
+			historyRecords.push(statusHistory);
+		}
+
+		if (isPriorityChanged) {
+			const [priorityHistory] = await tx
+				.insert(incidentHistory)
+				.values({
+					incidentId,
+					organizationId: context.organizationId,
+					eventType: 'priority_changed',
+					actorType: 'user',
+					actorUserId: context.actorUserId,
+					reason: null,
+					comment: null,
+					payload: {
+						oldPriority: currentPriority,
+						newPriority: input.priority!
+					}
+				})
+				.returning();
+
+			historyRecords.push(priorityHistory);
+		}
+
+		return { incident: updatedIncident, history: historyRecords };
+	};
+
+	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+		return await dbOrTx.transaction(async (tx) => execute(tx));
+	}
+	return await execute(dbOrTx);
 }

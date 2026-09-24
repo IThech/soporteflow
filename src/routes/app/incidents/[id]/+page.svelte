@@ -1,17 +1,28 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/stores';
 	import { getMe, AuthApiError } from '$lib/api/auth';
-	import { getIncident, IncidentApiError, type IncidentListItem } from '$lib/api/incidents';
+	import {
+		getIncident,
+		updateIncident,
+		IncidentApiError,
+		type IncidentListItem
+	} from '$lib/api/incidents';
 	import { session } from '$lib/stores/session';
 	import RealIncidentDetail from '$lib/components/incidents/RealIncidentDetail.svelte';
+	import RealIncidentEditForm from '$lib/components/incidents/RealIncidentEditForm.svelte';
 
 	let sessionLoading = $state(!$session.isAuthenticated);
 	let incident = $state<IncidentListItem | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+
+	let isEditing = $state(false);
+	let submitting = $state(false);
+	let updateError = $state<string | null>(null);
+	let editAbortController: AbortController | null = null;
 
 	let detailRequestId = 0;
 	let detailAbortController: AbortController | null = null;
@@ -150,6 +161,63 @@
 			controller.abort();
 		};
 	});
+
+	onDestroy(() => {
+		if (editAbortController) {
+			editAbortController.abort();
+		}
+	});
+
+	async function handleSaveEdit(changes: {
+		status?: 'open' | 'pending' | 'resolved' | 'closed';
+		priority?: 'low' | 'medium' | 'high' | 'urgent';
+	}) {
+		if (submitting || !incident) return;
+		const targetOrgId = $session.activeOrganization?.id;
+		if (!targetOrgId) return;
+
+		submitting = true;
+		updateError = null;
+
+		if (editAbortController) {
+			editAbortController.abort();
+		}
+		const controller = new AbortController();
+		editAbortController = controller;
+
+		try {
+			const updated = await updateIncident(targetOrgId, incident.id, changes, {
+				signal: controller.signal
+			});
+			incident = updated;
+			isEditing = false;
+			updateError = null;
+		} catch (err: unknown) {
+			if ((err as Error)?.name === 'AbortError' || controller.signal.aborted) {
+				return;
+			}
+
+			if (err instanceof IncidentApiError && err.status === 401) {
+				session.clearSession();
+				await goto(resolve('/login?expired=true'));
+				return;
+			}
+
+			if (err instanceof IncidentApiError) {
+				updateError = err.message;
+			} else {
+				updateError = 'No se pudo actualizar la incidencia. Inténtalo de nuevo.';
+			}
+		} finally {
+			submitting = false;
+		}
+	}
+
+	function handleCancelEdit() {
+		if (submitting) return;
+		isEditing = false;
+		updateError = null;
+	}
 </script>
 
 <div class="min-h-screen bg-slate-950 text-slate-100 antialiased">
@@ -161,7 +229,7 @@
 				<span
 					class="rounded-full border border-slate-700 bg-slate-800 px-2.5 py-0.5 text-xs text-slate-300"
 				>
-					Datos reales · Solo lectura
+					Datos reales
 				</span>
 			</div>
 			{#if $session.activeOrganization}
@@ -193,8 +261,24 @@
 			>
 				<span class="text-sm font-medium text-slate-400">Verificando sesión...</span>
 			</div>
+		{:else if isEditing && incident}
+			<RealIncidentEditForm
+				{incident}
+				{submitting}
+				error={updateError}
+				onSave={handleSaveEdit}
+				onCancel={handleCancelEdit}
+			/>
 		{:else}
-			<RealIncidentDetail {incident} {loading} {error} />
+			<RealIncidentDetail
+				{incident}
+				{loading}
+				{error}
+				onEdit={() => {
+					isEditing = true;
+					updateError = null;
+				}}
+			/>
 		{/if}
 	</main>
 </div>

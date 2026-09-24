@@ -93,6 +93,28 @@ async function callGetDetail(
 	return { status, json, response };
 }
 
+async function callPatchDetail(
+	PATCH,
+	{ body, headers = {}, rawBody, url = 'http://localhost/api/incidents/test', params = {} } = {}
+) {
+	const reqHeaders = new Headers(headers);
+	if (!reqHeaders.has('content-type') && rawBody === undefined) {
+		reqHeaders.set('content-type', 'application/json');
+	}
+	const reqBody =
+		rawBody !== undefined ? rawBody : body !== undefined ? JSON.stringify(body) : undefined;
+	const request = new Request(url, {
+		method: 'PATCH',
+		headers: reqHeaders,
+		body: reqBody
+	});
+	const event = makeEvent(request, new URL(url), params, { id: '/api/incidents/[id]' });
+	const response = await PATCH(event);
+	const status = response.status;
+	const json = await response.json();
+	return { status, json, response };
+}
+
 test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) => {
 	const f = await fixture(t);
 	const { db, schema: s, server } = f;
@@ -2108,5 +2130,344 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 		assert.equal(identicalTimeEvents.length, 2);
 		assert.equal(identicalTimeEvents[0].id, idSmall);
 		assert.equal(identicalTimeEvents[1].id, idLarge);
+	});
+});
+
+test('SoporteFlow — Etapa 5.4H: Endpoint HTTP PATCH /api/incidents/[id]', async (t) => {
+	const f = await fixture(t);
+	const { db, schema: s, server } = f;
+
+	const { PATCH } = await server.ssrLoadModule('/src/routes/api/incidents/[id]/+server.ts');
+	const { createIncidentRecord } = await server.ssrLoadModule(
+		'/src/lib/server/services/incidents.ts'
+	);
+
+	// 1. SETUP TENANTS & USERS
+	const [orgA] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org A 5.4H', slug: 'org-a-54h-' + randomUUID(), status: 'active' })
+		.returning();
+
+	const [orgB] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org B 5.4H', slug: 'org-b-54h-' + randomUUID(), status: 'active' })
+		.returning();
+
+	// Técnico en Org A con permiso incidents:edit
+	const userTechA = await identity(f);
+	const [membershipTechA] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userTechA.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: membershipTechA.id,
+		permissionId: 'incidents:edit'
+	});
+	const sessionTechA = await createSession(f, userTechA.id);
+
+	// Administrador en Org A con permiso incidents:edit
+	const userOrgAdminA = await identity(f);
+	const [membershipAdminA] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userOrgAdminA.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: membershipAdminA.id,
+		permissionId: 'incidents:edit'
+	});
+	const sessionAdminA = await createSession(f, userOrgAdminA.id);
+
+	// Cliente en Org A (SIN incidents:edit)
+	const userClientA = await identity(f);
+	const [membershipClientA] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userClientA.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: membershipClientA.id,
+		permissionId: 'incidents:create'
+	});
+	const sessionClientA = await createSession(f, userClientA.id);
+
+	// Usuario en Org B con permiso incidents:edit
+	const userB = await identity(f);
+	const [membershipB] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgB.id, userId: userB.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgB.id,
+		membershipId: membershipB.id,
+		permissionId: 'incidents:edit'
+	});
+	const sessionB = await createSession(f, userB.id);
+
+	// Helper para crear incidentes iniciales en Org A
+	async function createFreshIncident(status = 'open', priority = 'medium') {
+		const created = (
+			await createIncidentRecord(
+				db,
+				{ organizationId: orgA.id, creatorUserId: userTechA.id },
+				{
+					title: 'Incidente PATCH ' + randomUUID(),
+					description: 'Descripción para PATCH test',
+					client: 'Cliente Test',
+					priority
+				}
+			)
+		).incident;
+
+		if (status !== 'open') {
+			await db.update(s.incidents).set({ status }).where(eq(s.incidents.id, created.id));
+			created.status = status;
+		}
+
+		return created;
+	}
+
+	await t.test('1. 401 si no hay sesión autenticada', async () => {
+		const inc = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 401);
+		assert.equal(res.json.error?.code, 'UNAUTHORIZED');
+	});
+
+	await t.test('2. 401 con cookie manipulada o sesión inexistente', async () => {
+		const inc = await createFreshIncident();
+		const tamperedCookie = createTamperedCookie('invalid-session');
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: tamperedCookie },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 401);
+		assert.equal(res.json.error?.code, 'UNAUTHORIZED');
+	});
+
+	await t.test('3. 400 si organizationId es inválido o ausente', async () => {
+		const inc = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=not-a-uuid`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('4. 400 si incidentId es inválido o no es UUID', async () => {
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/not-a-uuid?organizationId=${orgA.id}`,
+			params: { id: 'not-a-uuid' },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('5. 400 si el JSON está malformado', async () => {
+		const inc = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			rawBody: '{ invalid json'
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('6. 400 si el body está vacío', async () => {
+		const inc = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: {}
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('7. 400 si status no pertenece al enum permitido', async () => {
+		const inc = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'invented_status' }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('8. 400 si priority no pertenece al enum permitido', async () => {
+		const inc = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { priority: 'super_urgent' }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('9. 400 si se envían propiedades desconocidas', async () => {
+		const inc = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'pending', reason: 'motivo no admitido' }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('10. 400 si la transición de status es inválida (open -> closed)', async () => {
+		const inc = await createFreshIncident('open');
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'closed' }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error?.code, 'INVALID_INPUT');
+	});
+
+	await t.test('11. 403 Forbidden para usuario cliente sin incidents:edit', async () => {
+		const inc = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionClientA.cookieHeader },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	await t.test('12. 200 OK para técnico autorizado con incidents:edit', async () => {
+		const inc = await createFreshIncident('open');
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.status, 'pending');
+	});
+
+	await t.test('13. 200 OK para org admin autorizado', async () => {
+		const inc = await createFreshIncident('pending');
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionAdminA.cookieHeader },
+			body: { status: 'resolved' }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.status, 'resolved');
+	});
+
+	await t.test('14. cross-tenant con organizationId propio devuelve 404', async () => {
+		const incA = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${incA.id}?organizationId=${orgB.id}`,
+			params: { id: incA.id },
+			headers: { cookie: sessionB.cookieHeader },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 404);
+		assert.equal(res.json.error?.code, 'INCIDENT_NOT_FOUND');
+	});
+
+	await t.test('15. cross-tenant con organizationId ajeno devuelve 403', async () => {
+		const incA = await createFreshIncident();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${incA.id}?organizationId=${orgA.id}`,
+			params: { id: incA.id },
+			headers: { cookie: sessionB.cookieHeader },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error?.code, 'FORBIDDEN');
+	});
+
+	await t.test('16. 404 para incident inexistente', async () => {
+		const fakeId = randomUUID();
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${fakeId}?organizationId=${orgA.id}`,
+			params: { id: fakeId },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 404);
+		assert.equal(res.json.error?.code, 'INCIDENT_NOT_FOUND');
+	});
+
+	await t.test('17. 200 para actualización exclusiva de status', async () => {
+		const inc = await createFreshIncident('open', 'medium');
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'resolved' }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.status, 'resolved');
+		assert.equal(res.json.incident.priority, 'medium');
+	});
+
+	await t.test('18. 200 para actualización exclusiva de priority', async () => {
+		const inc = await createFreshIncident('open', 'low');
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { priority: 'urgent' }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.priority, 'urgent');
+		assert.equal(res.json.incident.status, 'open');
+	});
+
+	await t.test('19. 200 para actualización simultánea de status y priority', async () => {
+		const inc = await createFreshIncident('open', 'low');
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'pending', priority: 'high' }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.status, 'pending');
+		assert.equal(res.json.incident.priority, 'high');
+	});
+
+	await t.test('20. el payload de respuesta NO contiene history confidencial', async () => {
+		const inc = await createFreshIncident('open');
+		const res = await callPatchDetail(PATCH, {
+			url: `http://localhost/api/incidents/${inc.id}?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTechA.cookieHeader },
+			body: { status: 'pending' }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.history, undefined);
+		assert.ok(res.json.incident);
 	});
 });

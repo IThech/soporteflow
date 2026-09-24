@@ -389,3 +389,93 @@ export async function createIncident(
 	const incident = (data as { incident?: unknown }).incident;
 	return parseAndValidateIncident(incident, organizationId, undefined, res.status);
 }
+
+export interface UpdateIncidentInput {
+	status?: 'open' | 'pending' | 'resolved' | 'closed';
+	priority?: 'low' | 'medium' | 'high' | 'urgent';
+}
+
+export interface UpdateIncidentOptions {
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+/**
+ * Updates an incident's status and/or priority for the specified organization.
+ * Sends PATCH /api/incidents/<id>?organizationId=<orgId> with Content-Type: application/json.
+ * Validates the complete IncidentListItem contract on success.
+ * Discards history and internal audit records.
+ */
+export async function updateIncident(
+	organizationId: string,
+	incidentId: string,
+	input: UpdateIncidentInput,
+	options?: UpdateIncidentOptions
+): Promise<IncidentListItem> {
+	const fetchFn = options?.customFetch ?? fetch;
+	const url = `/api/incidents/${encodeURIComponent(incidentId)}?organizationId=${encodeURIComponent(organizationId)}`;
+
+	let res: Response;
+	try {
+		res = await fetchFn(url, {
+			method: 'PATCH',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify(input),
+			signal: options?.signal
+		});
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) {
+			throw err;
+		}
+		if ((err as Error)?.name === 'AbortError' || options?.signal?.aborted) {
+			throw err;
+		}
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+
+	if (!res.ok) {
+		let message = 'No se pudo actualizar la incidencia. Inténtalo de nuevo.';
+		let code = 'INTERNAL_ERROR';
+		if (res.status === 400) {
+			message = 'Por favor, revisa los cambios de la incidencia.';
+			code = 'INVALID_INPUT';
+		} else if (res.status === 401) {
+			message = 'Tu sesión ya no es válida.';
+			code = 'UNAUTHORIZED';
+		} else if (res.status === 403) {
+			message = 'No tienes permisos para modificar esta incidencia.';
+			code = 'FORBIDDEN';
+		} else if (res.status === 404) {
+			message = 'La incidencia no está disponible.';
+			code = 'NOT_FOUND';
+		} else if (res.status >= 500) {
+			message = 'No se pudo actualizar la incidencia. Inténtalo de nuevo.';
+			code = 'SERVER_ERROR';
+		}
+		throw new IncidentApiError(res.status, code, message);
+	}
+
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	const incident = (data as { incident?: unknown }).incident;
+	return parseAndValidateIncident(incident, organizationId, incidentId, res.status);
+}

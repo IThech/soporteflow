@@ -12,9 +12,10 @@
 		incident: IncidentListItem | null;
 		loading?: boolean;
 		error?: string | null;
+		onEdit?: () => void;
 	}
 
-	let { incident = null, loading = false, error = null }: Props = $props();
+	let { incident = null, loading = false, error = null, onEdit }: Props = $props();
 </script>
 
 <div class="real-incident-detail">
@@ -46,26 +47,37 @@
 		</div>
 	{:else if incident}
 		<div class="space-y-6 rounded-xl border border-slate-800 bg-slate-900/60 p-6 md:p-8">
-			<!-- Header: Ticket Number, Badges, Title -->
+			<!-- Header: Ticket Number, Badges, Title, Edit Button -->
 			<div class="space-y-3 border-b border-slate-800 pb-6">
-				<div class="flex flex-wrap items-center gap-3">
-					<span class="font-mono text-sm font-bold text-cyan-400">
-						#{incident.incidentNumber}
-					</span>
-					<span
-						class={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${
-							STATUS_STYLES[incident.status] ?? 'border-slate-700 bg-slate-800 text-slate-300'
-						}`}
-					>
-						{STATUS_LABELS[incident.status] ?? incident.status}
-					</span>
-					<span
-						class={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${
-							PRIORITY_STYLES[incident.priority] ?? 'border-slate-700 bg-slate-800 text-slate-300'
-						}`}
-					>
-						{PRIORITY_LABELS[incident.priority] ?? incident.priority}
-					</span>
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<div class="flex flex-wrap items-center gap-3">
+						<span class="font-mono text-sm font-bold text-cyan-400">
+							#{incident.incidentNumber}
+						</span>
+						<span
+							class={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+								STATUS_STYLES[incident.status] ?? 'border-slate-700 bg-slate-800 text-slate-300'
+							}`}
+						>
+							{STATUS_LABELS[incident.status] ?? incident.status}
+						</span>
+						<span
+							class={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+								PRIORITY_STYLES[incident.priority] ?? 'border-slate-700 bg-slate-800 text-slate-300'
+							}`}
+						>
+							{PRIORITY_LABELS[incident.priority] ?? incident.priority}
+						</span>
+					</div>
+					{#if onEdit}
+						<button
+							type="button"
+							onclick={onEdit}
+							class="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/80 px-3.5 py-1.5 text-xs font-medium text-slate-200 transition hover:border-slate-600 hover:bg-slate-700 hover:text-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+						>
+							Editar incidencia
+						</button>
+					{/if}
 				</div>
 				<h1 class="text-xl font-bold tracking-tight text-white md:text-2xl">
 					{incident.title}
