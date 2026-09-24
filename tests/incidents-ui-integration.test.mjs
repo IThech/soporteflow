@@ -964,7 +964,7 @@ test('SoporteFlow — Etapa 5.4E: Integración UI Incidencias Reales', async (t)
 		}
 	);
 
-	await t.test('27. no existe navegación ni enlaces ni clicks en filas', () => {
+	await t.test('27. filas no tienen onclick ni botones de acción', () => {
 		const orgId = randomUUID();
 		const item = makeSampleIncident({ organizationId: orgId });
 
@@ -972,7 +972,6 @@ test('SoporteFlow — Etapa 5.4E: Integración UI Incidencias Reales', async (t)
 			props: { incidents: [item], loading: false, error: null }
 		}).body;
 
-		assert.equal(html.includes('<a '), false, 'No debe contener etiquetas <a>');
 		assert.equal(html.includes('<button'), false, 'No debe contener etiquetas <button>');
 		assert.equal(html.includes('cursor-pointer'), false, 'No debe sugerir clickabilidad');
 	});

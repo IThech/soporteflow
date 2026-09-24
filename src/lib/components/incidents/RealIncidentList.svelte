@@ -1,5 +1,12 @@
 <script lang="ts">
 	import type { IncidentListItem } from '$lib/api/incidents';
+	import {
+		STATUS_LABELS,
+		STATUS_STYLES,
+		PRIORITY_LABELS,
+		PRIORITY_STYLES,
+		formatDate
+	} from './presentation';
 
 	interface Props {
 		incidents: IncidentListItem[];
@@ -8,52 +15,9 @@
 	}
 
 	let { incidents = [], loading = false, error = null }: Props = $props();
-
-	const STATUS_LABELS: Record<string, string> = {
-		open: 'Abierta',
-		pending: 'Pendiente',
-		resolved: 'Resuelta',
-		closed: 'Cerrada'
-	};
-
-	const STATUS_STYLES: Record<string, string> = {
-		open: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400',
-		pending: 'border-amber-500/30 bg-amber-500/10 text-amber-400',
-		resolved: 'border-blue-500/30 bg-blue-500/10 text-blue-400',
-		closed: 'border-slate-500/30 bg-slate-500/10 text-slate-400'
-	};
-
-	const PRIORITY_LABELS: Record<string, string> = {
-		low: 'Baja',
-		medium: 'Media',
-		high: 'Alta',
-		urgent: 'Urgente'
-	};
-
-	const PRIORITY_STYLES: Record<string, string> = {
-		low: 'border-slate-500/20 bg-slate-500/10 text-slate-400',
-		medium: 'border-blue-500/20 bg-blue-500/10 text-blue-400',
-		high: 'border-amber-500/20 bg-amber-500/10 text-amber-400',
-		urgent: 'border-rose-500/20 bg-rose-500/10 font-semibold text-rose-400'
-	};
-
-	function formatDate(dateStr: string): string {
-		if (!dateStr) return '';
-		try {
-			const d = new Date(dateStr);
-			if (isNaN(d.getTime())) return dateStr;
-			return new Intl.DateTimeFormat('es-ES', {
-				day: '2-digit',
-				month: '2-digit',
-				year: 'numeric',
-				hour: '2-digit',
-				minute: '2-digit'
-			}).format(d);
-		} catch {
-			return dateStr;
-		}
-	}
 </script>
+
+<!-- eslint-disable svelte/no-navigation-without-resolve -->
 
 <div class="real-incidents-container">
 	{#if loading}
@@ -105,10 +69,20 @@
 					{#each incidents as incident (incident.id)}
 						<tr class="transition-colors hover:bg-slate-800/30">
 							<td class="px-4 py-3 font-mono text-xs font-bold whitespace-nowrap text-cyan-400">
-								#{incident.incidentNumber}
+								<a
+									href="/app/incidents/{incident.id}?organizationId={incident.organizationId}"
+									class="text-cyan-400 hover:text-cyan-300 hover:underline"
+								>
+									#{incident.incidentNumber}
+								</a>
 							</td>
 							<td class="px-4 py-3 font-medium text-white">
-								<span class="line-clamp-2">{incident.title}</span>
+								<a
+									href="/app/incidents/{incident.id}?organizationId={incident.organizationId}"
+									class="line-clamp-2 text-white hover:text-cyan-300 hover:underline"
+								>
+									{incident.title}
+								</a>
 							</td>
 							<td class="px-4 py-3 whitespace-nowrap text-slate-300">
 								{incident.client}
