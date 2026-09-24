@@ -49,6 +49,7 @@ export const incidents = pgTable(
 		clientUserId: uuid('client_user_id'),
 		createdByUserId: uuid('created_by_user_id').notNull(),
 		siteId: uuid('site_id'),
+		assignedToUserId: uuid('assigned_to_user_id'),
 		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
 	},
@@ -63,6 +64,11 @@ export const incidents = pgTable(
 		foreignKey({
 			name: 'incidents_client_user_org_fk',
 			columns: [table.organizationId, table.clientUserId],
+			foreignColumns: [memberships.organizationId, memberships.userId]
+		}).onDelete('restrict'),
+		foreignKey({
+			name: 'incidents_assigned_user_org_fk',
+			columns: [table.organizationId, table.assignedToUserId],
 			foreignColumns: [memberships.organizationId, memberships.userId]
 		}).onDelete('restrict'),
 		foreignKey({

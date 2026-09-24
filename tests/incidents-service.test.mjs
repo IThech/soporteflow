@@ -36,6 +36,8 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 		listIncidents,
 		getIncidentById,
 		updateIncidentRecord,
+		getAssignableTechnicians,
+		assignIncidentRecord,
 		IncidentServiceError
 	} = await server.ssrLoadModule('/src/lib/server/services/incidents.ts');
 
@@ -823,6 +825,307 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 					new Date(beforeNoopTime).getTime(),
 					'updatedAt no debe avanzar en no-op'
 				);
+			});
+		}
+	);
+
+	// =========================================================================
+	// Etapa 5.4I-A: Asignación real de técnico y catálogo
+	// =========================================================================
+	await t.test(
+		'SoporteFlow — Etapa 5.4I-A: Asignación real de técnico, persistencia y catálogo',
+		async (t3) => {
+			// Helper para roles
+			async function createRole(orgId, name, code) {
+				const [role] = await db
+					.insert(s.roles)
+					.values({ organizationId: orgId, name, code, active: true })
+					.returning();
+				return role;
+			}
+			async function assignRole(orgId, membershipId, roleId) {
+				const [assignment] = await db
+					.insert(s.roleAssignments)
+					.values({
+						organizationId: orgId,
+						membershipId,
+						roleId,
+						scopeType: 'organization'
+					})
+					.returning();
+				return assignment;
+			}
+
+			// Roles en orgA
+			const roleTechA = await createRole(orgA.id, 'Técnico Org A', 'technician');
+			const roleAdminA = await createRole(orgA.id, 'Admin Org A', 'organization_admin');
+			const roleClientA = await createRole(orgA.id, 'Cliente Org A', 'client');
+
+			// Usuarios en orgA
+			const userTech1 = await createUser(db, s, 'Beatriz Técnico', true);
+			const memTech1 = await createMembership(db, s, orgA.id, userTech1.id, true);
+			await assignRole(orgA.id, memTech1.id, roleTechA.id);
+
+			const userTech2 = await createUser(db, s, 'Carlos Técnico', true);
+			const memTech2 = await createMembership(db, s, orgA.id, userTech2.id, true);
+			await assignRole(orgA.id, memTech2.id, roleTechA.id);
+
+			const userAdmin = await createUser(db, s, 'Alberto Admin', true);
+			const memAdmin = await createMembership(db, s, orgA.id, userAdmin.id, true);
+			await assignRole(orgA.id, memAdmin.id, roleAdminA.id);
+
+			const userClientOnly = await createUser(db, s, 'Daniel Cliente', true);
+			const memClientOnly = await createMembership(db, s, orgA.id, userClientOnly.id, true);
+			await assignRole(orgA.id, memClientOnly.id, roleClientA.id);
+
+			const userInactiveAccount = await createUser(db, s, 'Elena Inactiva User', false);
+			const memInactiveAccount = await createMembership(
+				db,
+				s,
+				orgA.id,
+				userInactiveAccount.id,
+				true
+			);
+			await assignRole(orgA.id, memInactiveAccount.id, roleTechA.id);
+
+			const userInactiveMem = await createUser(db, s, 'Fernando Inactivo Mem', true);
+			const memInactiveMem = await createMembership(db, s, orgA.id, userInactiveMem.id, false);
+			await assignRole(orgA.id, memInactiveMem.id, roleTechA.id);
+
+			// Usuario y rol en orgB
+			const roleTechB = await createRole(orgB.id, 'Técnico Org B', 'technician');
+			const userTechB = await createUser(db, s, 'Zoe Técnico Org B', true);
+			const memTechB = await createMembership(db, s, orgB.id, userTechB.id, true);
+			await assignRole(orgB.id, memTechB.id, roleTechB.id);
+
+			const contextA = { organizationId: orgA.id, actorUserId: userCreatorA.id };
+
+			async function createUnassignedIncident() {
+				const { incident } = await createIncidentRecord(
+					db,
+					{
+						organizationId: orgA.id,
+						creatorUserId: userCreatorA.id
+					},
+					{
+						title: 'Incidencia para asignación ' + randomUUID().slice(0, 6),
+						description: 'Descripción de prueba asignación',
+						client: 'Cliente Test Asignación'
+					}
+				);
+				return incident;
+			}
+
+			// 1. Catálogo getAssignableTechnicians: orden determinista, técnicos y admins, excluye clientes e inactivos
+			await t3.test('Catálogo getAssignableTechnicians filtra y ordena correctamente', async () => {
+				const assignees = await getAssignableTechnicians(db, orgA.id);
+				// Deben estar: Alberto Admin, Beatriz Técnico, Carlos Técnico
+				// NO deben estar: Daniel Cliente, Elena Inactiva User, Fernando Inactivo Mem, Zoe Org B
+				const ids = assignees.map((a) => a.id);
+				assert.ok(ids.includes(userAdmin.id), 'Debe incluir organization_admin');
+				assert.ok(ids.includes(userTech1.id), 'Debe incluir technician 1');
+				assert.ok(ids.includes(userTech2.id), 'Debe incluir technician 2');
+				assert.ok(!ids.includes(userClientOnly.id), 'NO debe incluir client-only');
+				assert.ok(!ids.includes(userInactiveAccount.id), 'NO debe incluir user inactivo');
+				assert.ok(!ids.includes(userInactiveMem.id), 'NO debe incluir membership inactiva');
+				assert.ok(!ids.includes(userTechB.id), 'NO debe incluir técnico de otra org');
+
+				// Orden alfabético por nombre
+				assert.equal(assignees[0].name, 'Alberto Admin');
+				assert.equal(assignees[1].name, 'Beatriz Técnico');
+				assert.equal(assignees[2].name, 'Carlos Técnico');
+			});
+
+			// 2. Primera asignación: persiste, assigned event, actor y payload correctos
+			await t3.test('Primera asignación persiste y registra evento assigned', async () => {
+				const inc = await createUnassignedIncident();
+				assert.equal(inc.assignedToUserId, null);
+
+				const result = await assignIncidentRecord(db, contextA, inc.id, {
+					assignedToUserId: userTech1.id
+				});
+
+				// assignedToUserId persistido
+				assert.equal(result.incident.assignedToUserId, userTech1.id);
+
+				// Verificar en DB
+				const [dbRow] = await db.select().from(s.incidents).where(eq(s.incidents.id, inc.id));
+				assert.equal(dbRow.assignedToUserId, userTech1.id);
+
+				// Evento 'assigned'
+				assert.ok(result.history);
+				assert.equal(result.history.eventType, 'assigned');
+				assert.equal(result.history.actorUserId, userCreatorA.id);
+				assert.equal(result.history.reason, null);
+				assert.deepEqual(result.history.payload, {
+					previousAssigneeUserId: null,
+					newAssigneeUserId: userTech1.id
+				});
+			});
+
+			// 3. Reasignación: requires reason, trims reason, records reassigned event
+			await t3.test('Reasignación exige motivo y registra evento reassigned', async () => {
+				const inc = await createUnassignedIncident();
+				await assignIncidentRecord(db, contextA, inc.id, { assignedToUserId: userTech1.id });
+
+				// Reasignación sin motivo falla con INVALID_INPUT
+				await assert.rejects(
+					assignIncidentRecord(db, contextA, inc.id, {
+						assignedToUserId: userTech2.id
+					}),
+					(err) => err instanceof IncidentServiceError && err.code === 'INVALID_INPUT'
+				);
+
+				// Reasignación con motivo de solo espacios falla
+				await assert.rejects(
+					assignIncidentRecord(db, contextA, inc.id, {
+						assignedToUserId: userTech2.id,
+						reason: '   '
+					}),
+					(err) => err instanceof IncidentServiceError && err.code === 'INVALID_INPUT'
+				);
+
+				// Reasignación con motivo válido tiene éxito y hace trim
+				const result = await assignIncidentRecord(db, contextA, inc.id, {
+					assignedToUserId: userTech2.id,
+					reason: '  Cambio de turno  '
+				});
+
+				assert.equal(result.incident.assignedToUserId, userTech2.id);
+				assert.ok(result.history);
+				assert.equal(result.history.eventType, 'reassigned');
+				assert.equal(result.history.reason, 'Cambio de turno');
+				assert.deepEqual(result.history.payload, {
+					previousAssigneeUserId: userTech1.id,
+					newAssigneeUserId: userTech2.id
+				});
+			});
+
+			// 4. No-op: no cambia updatedAt, no genera history, no requiere reason
+			await t3.test('No-op no muta registro, no genera history y no avanza updatedAt', async () => {
+				const inc = await createUnassignedIncident();
+				const assigned = await assignIncidentRecord(db, contextA, inc.id, {
+					assignedToUserId: userTech1.id
+				});
+				const originalUpdatedAt = assigned.incident.updatedAt;
+
+				// Contar historial antes del no-op
+				const histBefore = await db
+					.select()
+					.from(s.incidentHistory)
+					.where(eq(s.incidentHistory.incidentId, inc.id));
+
+				await new Promise((res) => setTimeout(res, 20));
+
+				// Asignar al mismo técnico
+				const noopResult = await assignIncidentRecord(db, contextA, inc.id, {
+					assignedToUserId: userTech1.id
+				});
+
+				assert.equal(noopResult.incident.assignedToUserId, userTech1.id);
+				assert.equal(
+					new Date(noopResult.incident.updatedAt).getTime(),
+					new Date(originalUpdatedAt).getTime()
+				);
+				assert.equal(noopResult.history, undefined);
+
+				const histAfter = await db
+					.select()
+					.from(s.incidentHistory)
+					.where(eq(s.incidentHistory.incidentId, inc.id));
+				assert.equal(histAfter.length, histBefore.length);
+			});
+
+			// 5. Técnico inexistente o de otra organización -> ASSIGNEE_NOT_FOUND
+			await t3.test('Técnico inexistente o cross-tenant lanza ASSIGNEE_NOT_FOUND', async () => {
+				const inc = await createUnassignedIncident();
+
+				// Inexistente
+				await assert.rejects(
+					assignIncidentRecord(db, contextA, inc.id, { assignedToUserId: randomUUID() }),
+					(err) => err instanceof IncidentServiceError && err.code === 'ASSIGNEE_NOT_FOUND'
+				);
+
+				// Cross-tenant (pertenece a orgB)
+				await assert.rejects(
+					assignIncidentRecord(db, contextA, inc.id, { assignedToUserId: userTechB.id }),
+					(err) => err instanceof IncidentServiceError && err.code === 'ASSIGNEE_NOT_FOUND'
+				);
+			});
+
+			// 6. Usuario o membresía inactiva -> ASSIGNEE_NOT_FOUND
+			await t3.test('Usuario o membresía inactiva lanza ASSIGNEE_NOT_FOUND', async () => {
+				const inc = await createUnassignedIncident();
+
+				// Usuario inactivo
+				await assert.rejects(
+					assignIncidentRecord(db, contextA, inc.id, { assignedToUserId: userInactiveAccount.id }),
+					(err) => err instanceof IncidentServiceError && err.code === 'ASSIGNEE_NOT_FOUND'
+				);
+
+				// Membresía inactiva
+				await assert.rejects(
+					assignIncidentRecord(db, contextA, inc.id, { assignedToUserId: userInactiveMem.id }),
+					(err) => err instanceof IncidentServiceError && err.code === 'ASSIGNEE_NOT_FOUND'
+				);
+			});
+
+			// 7. Client-only no es asignable -> ASSIGNEE_NOT_FOUND
+			await t3.test('Usuario con solo rol client lanza ASSIGNEE_NOT_FOUND', async () => {
+				const inc = await createUnassignedIncident();
+
+				await assert.rejects(
+					assignIncidentRecord(db, contextA, inc.id, { assignedToUserId: userClientOnly.id }),
+					(err) => err instanceof IncidentServiceError && err.code === 'ASSIGNEE_NOT_FOUND'
+				);
+			});
+
+			// 8. Organization Admin sí es asignable
+			await t3.test('Organization admin es asignable correctamente', async () => {
+				const inc = await createUnassignedIncident();
+
+				const res = await assignIncidentRecord(db, contextA, inc.id, {
+					assignedToUserId: userAdmin.id
+				});
+				assert.equal(res.incident.assignedToUserId, userAdmin.id);
+			});
+
+			// 9. Rollback transaccional ante fallo de inserción de historial
+			await t3.test('Rollback transaccional si falla el historial', async () => {
+				const inc = await createUnassignedIncident();
+
+				await assert.rejects(
+					db.transaction(async (tx) => {
+						await assignIncidentRecord(tx, contextA, inc.id, {
+							assignedToUserId: userTech1.id
+						});
+						throw new Error('Forced failure to trigger assignment rollback');
+					}),
+					/Forced failure to trigger assignment rollback/
+				);
+
+				const [current] = await db.select().from(s.incidents).where(eq(s.incidents.id, inc.id));
+				assert.equal(
+					current.assignedToUserId,
+					null,
+					'No debe persistirse si la transacción hace rollback'
+				);
+			});
+
+			// 10. getIncidentById enriquece con assignedToUserName
+			await t3.test('getIncidentById devuelve assignedToUserName legible o null', async () => {
+				const inc = await createUnassignedIncident();
+
+				// Antes de asignar
+				const detailUnassigned = await getIncidentById(db, { organizationId: orgA.id }, inc.id);
+				assert.equal(detailUnassigned.incident.assignedToUserId, null);
+				assert.equal(detailUnassigned.incident.assignedToUserName, null);
+
+				// Tras asignar
+				await assignIncidentRecord(db, contextA, inc.id, { assignedToUserId: userTech1.id });
+				const detailAssigned = await getIncidentById(db, { organizationId: orgA.id }, inc.id);
+				assert.equal(detailAssigned.incident.assignedToUserId, userTech1.id);
+				assert.equal(detailAssigned.incident.assignedToUserName, 'Beatriz Técnico');
 			});
 		}
 	);

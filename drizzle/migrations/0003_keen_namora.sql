@@ -1,0 +1,2 @@
+ALTER TABLE "incidents" ADD COLUMN "assigned_to_user_id" uuid;--> statement-breakpoint
+ALTER TABLE "incidents" ADD CONSTRAINT "incidents_assigned_user_org_fk" FOREIGN KEY ("organization_id","assigned_to_user_id") REFERENCES "public"."memberships"("organization_id","user_id") ON DELETE restrict ON UPDATE no action;

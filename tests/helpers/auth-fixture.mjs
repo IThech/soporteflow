@@ -12,7 +12,8 @@ export const directory = path.join(root, 'drizzle/migrations');
 export const expectedMigrations = [
 	'0000_regular_masque.sql',
 	'0001_authentication.sql',
-	'0002_incidents.sql'
+	'0002_incidents.sql',
+	'0003_keen_namora.sql'
 ];
 
 export const TEST_SECRET = 'synthetic-phase-b-only-secret-123456789';

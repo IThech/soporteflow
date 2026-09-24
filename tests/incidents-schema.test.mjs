@@ -586,4 +586,67 @@ test('SoporteFlow — Etapa 3: validación de esquema relacional de incidencias 
 			assert.equal(counterRow[0].lastIncidentNumber, 2);
 		}
 	);
+
+	await t.test(
+		'3.K Validación de assigned_to_user_id: nullable, FK multi-tenant hacia memberships',
+		async () => {
+			// 1. Inserción con assignedToUserId = null es válida
+			const [incNull] = await db
+				.insert(s.incidents)
+				.values({
+					organizationId: orgA.id,
+					incidentNumber: 1001,
+					title: 'Incidencia sin asignar',
+					description: 'Prueba null',
+					client: 'Cliente A',
+					createdByUserId: userCreatorA.id,
+					assignedToUserId: null
+				})
+				.returning();
+			assert.equal(incNull.assignedToUserId, null);
+
+			// 2. Inserción con miembro de la misma organización es válida
+			const [incAssigned] = await db
+				.insert(s.incidents)
+				.values({
+					organizationId: orgA.id,
+					incidentNumber: 1002,
+					title: 'Incidencia asignada a miembro orgA',
+					description: 'Prueba miembro orgA',
+					client: 'Cliente A',
+					createdByUserId: userCreatorA.id,
+					assignedToUserId: userCreatorA.id
+				})
+				.returning();
+			assert.equal(incAssigned.assignedToUserId, userCreatorA.id);
+
+			// 3. Rechazo de usuario perteneciente a otra organización (cross-tenant FK)
+			await rejected(
+				db.insert(s.incidents).values({
+					organizationId: orgA.id,
+					incidentNumber: 1003,
+					title: 'Cross tenant assignment',
+					description: 'Prueba cross-tenant',
+					client: 'Cliente A',
+					createdByUserId: userCreatorA.id,
+					assignedToUserId: userOtherOrg.id
+				}),
+				'23503'
+			);
+
+			// 4. Rechazo de usuario sin membresía
+			await rejected(
+				db.insert(s.incidents).values({
+					organizationId: orgA.id,
+					incidentNumber: 1004,
+					title: 'No membership assignment',
+					description: 'Prueba no membership',
+					client: 'Cliente A',
+					createdByUserId: userCreatorA.id,
+					assignedToUserId: userNoMembership.id
+				}),
+				'23503'
+			);
+		}
+	);
 });

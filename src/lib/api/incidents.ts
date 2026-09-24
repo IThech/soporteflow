@@ -10,6 +10,8 @@ export interface IncidentListItem {
 	clientUserId: string | null;
 	createdByUserId: string;
 	siteId: string | null;
+	assignedToUserId: string | null;
+	assignedToUserName?: string | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -251,6 +253,14 @@ function parseAndValidateIncident(
 		item.priority === 'urgent';
 	const isValidClientUserId = item.clientUserId === null || typeof item.clientUserId === 'string';
 	const isValidSiteId = item.siteId === null || typeof item.siteId === 'string';
+	const isValidAssignedToUserId =
+		item.assignedToUserId === undefined ||
+		item.assignedToUserId === null ||
+		typeof item.assignedToUserId === 'string';
+	const isValidAssignedToUserName =
+		item.assignedToUserName === undefined ||
+		item.assignedToUserName === null ||
+		typeof item.assignedToUserName === 'string';
 
 	if (
 		typeof item.id !== 'string' ||
@@ -264,6 +274,8 @@ function parseAndValidateIncident(
 		!isValidClientUserId ||
 		typeof item.createdByUserId !== 'string' ||
 		!isValidSiteId ||
+		!isValidAssignedToUserId ||
+		!isValidAssignedToUserName ||
 		typeof item.createdAt !== 'string' ||
 		typeof item.updatedAt !== 'string'
 	) {
@@ -272,6 +284,10 @@ function parseAndValidateIncident(
 			'INVALID_PAYLOAD',
 			'No se pudo interpretar la respuesta del servidor.'
 		);
+	}
+
+	if (item.assignedToUserId === undefined) {
+		item.assignedToUserId = null;
 	}
 
 	if (item.organizationId !== expectedOrgId) {

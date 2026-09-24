@@ -7,7 +7,9 @@ import {
 	organizations,
 	memberships,
 	users,
-	sites
+	sites,
+	roles,
+	roleAssignments
 } from '../db/schema';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -38,7 +40,8 @@ export type IncidentServiceErrorCode =
 	| 'SITE_NOT_FOUND'
 	| 'SITE_INACTIVE'
 	| 'INVALID_INPUT'
-	| 'INCIDENT_NOT_FOUND';
+	| 'INCIDENT_NOT_FOUND'
+	| 'ASSIGNEE_NOT_FOUND';
 
 export class IncidentServiceError extends Error {
 	constructor(
@@ -75,8 +78,12 @@ export interface ListIncidentsFilters {
 	siteId?: string | null;
 }
 
+export type IncidentDetailRecord = IncidentRecord & {
+	assignedToUserName: string | null;
+};
+
 export interface IncidentDetail {
-	incident: IncidentRecord;
+	incident: IncidentDetailRecord;
 	history: IncidentHistoryRecord[];
 }
 
@@ -388,8 +395,25 @@ export async function getIncidentById(
 	}
 
 	const [incident] = await db
-		.select()
+		.select({
+			id: incidents.id,
+			organizationId: incidents.organizationId,
+			incidentNumber: incidents.incidentNumber,
+			title: incidents.title,
+			description: incidents.description,
+			status: incidents.status,
+			priority: incidents.priority,
+			client: incidents.client,
+			clientUserId: incidents.clientUserId,
+			createdByUserId: incidents.createdByUserId,
+			siteId: incidents.siteId,
+			assignedToUserId: incidents.assignedToUserId,
+			createdAt: incidents.createdAt,
+			updatedAt: incidents.updatedAt,
+			assignedToUserName: users.name
+		})
 		.from(incidents)
+		.leftJoin(users, eq(users.id, incidents.assignedToUserId))
 		.where(and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId)))
 		.limit(1);
 
@@ -636,6 +660,263 @@ export async function updateIncidentRecord(
 		}
 
 		return { incident: updatedIncident, history: historyRecords };
+	};
+
+	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+		return await dbOrTx.transaction(async (tx) => execute(tx));
+	}
+	return await execute(dbOrTx);
+}
+
+export interface AssignableTechnician {
+	id: string;
+	name: string;
+}
+
+/**
+ * Retrieves eligible assignable technicians and organization admins for the organization.
+ * Filters for active memberships, active user accounts, and operational roles.
+ * Returns deterministic list sorted by name ASC, id ASC.
+ */
+export async function getAssignableTechnicians(
+	db: IncidentDatabase,
+	organizationId: string
+): Promise<AssignableTechnician[]> {
+	if (!isValidUuid(organizationId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
+	}
+
+	const rows = await db
+		.selectDistinct({
+			id: users.id,
+			name: users.name
+		})
+		.from(users)
+		.innerJoin(memberships, eq(memberships.userId, users.id))
+		.innerJoin(
+			roleAssignments,
+			and(
+				eq(roleAssignments.membershipId, memberships.id),
+				eq(roleAssignments.organizationId, organizationId)
+			)
+		)
+		.innerJoin(
+			roles,
+			and(eq(roles.id, roleAssignments.roleId), eq(roles.organizationId, organizationId))
+		)
+		.where(
+			and(
+				eq(memberships.organizationId, organizationId),
+				eq(memberships.active, true),
+				eq(users.active, true),
+				eq(roles.active, true),
+				sql`lower(${roles.code}) IN ('technician', 'organization_admin')`
+			)
+		)
+		.orderBy(asc(users.name), asc(users.id));
+
+	return rows;
+}
+
+export interface AssignIncidentContext {
+	readonly organizationId: string;
+	readonly actorUserId: string;
+}
+
+export interface AssignIncidentInput {
+	readonly assignedToUserId: string;
+	readonly reason?: string;
+}
+
+export interface AssignIncidentResult {
+	readonly incident: IncidentRecord;
+	readonly history?: IncidentHistoryRecord;
+}
+
+/**
+ * Assigns or reassigns an incident to a designated technician within the tenant.
+ * Operates in a single atomic transaction:
+ * - Validates operational organization and actor permissions.
+ * - Validates target assignee is an active technician/organization_admin of the organization.
+ * - If assignee is unchanged, returns current incident as a no-op (no history, no updatedAt change).
+ * - If already assigned to another technician, requires non-empty reason and records 'reassigned' audit event.
+ * - If unassigned, sets assignee, records 'assigned' audit event with null reason.
+ */
+export async function assignIncidentRecord(
+	dbOrTx: IncidentDatabase,
+	context: AssignIncidentContext,
+	incidentId: string,
+	input: AssignIncidentInput
+): Promise<AssignIncidentResult> {
+	// 1. Context and ID validation
+	if (!isValidUuid(context?.organizationId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
+	}
+	if (!isValidUuid(context?.actorUserId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
+	}
+	if (!isValidUuid(incidentId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'incidentId must be a valid UUID');
+	}
+	if (!isValidUuid(input?.assignedToUserId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'assignedToUserId must be a valid UUID');
+	}
+
+	const execute = async (tx: IncidentDatabase): Promise<AssignIncidentResult> => {
+		// A. Validate Organization existence & operational status
+		const [org] = await tx
+			.select({ id: organizations.id, status: organizations.status })
+			.from(organizations)
+			.where(eq(organizations.id, context.organizationId))
+			.limit(1);
+
+		if (!org) {
+			throw new IncidentServiceError('ORGANIZATION_NOT_FOUND', 'Organization does not exist');
+		}
+
+		if (org.status !== 'active') {
+			throw new IncidentServiceError(
+				'ORGANIZATION_NOT_OPERATIONAL',
+				`Organization is '${org.status}', operations require 'active'`
+			);
+		}
+
+		// B. Validate Actor Membership and User Activity
+		const [actorRecord] = await tx
+			.select({
+				membershipActive: memberships.active,
+				userActive: users.active
+			})
+			.from(memberships)
+			.innerJoin(users, eq(users.id, memberships.userId))
+			.where(
+				and(
+					eq(memberships.organizationId, context.organizationId),
+					eq(memberships.userId, context.actorUserId)
+				)
+			)
+			.limit(1);
+
+		if (!actorRecord) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_NOT_FOUND',
+				'Actor user is not a member of this organization'
+			);
+		}
+
+		if (!actorRecord.membershipActive) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_INACTIVE',
+				'Actor user membership is inactive'
+			);
+		}
+
+		if (!actorRecord.userActive) {
+			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+		}
+
+		// C. Query existing incident strictly within tenant
+		const [currentIncident] = await tx
+			.select()
+			.from(incidents)
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.limit(1);
+
+		if (!currentIncident) {
+			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
+		}
+
+		// D. Validate target assignee: user active, membership active, role technician or organization_admin
+		const [assigneeRecord] = await tx
+			.select({
+				id: users.id,
+				name: users.name
+			})
+			.from(users)
+			.innerJoin(memberships, eq(memberships.userId, users.id))
+			.innerJoin(
+				roleAssignments,
+				and(
+					eq(roleAssignments.membershipId, memberships.id),
+					eq(roleAssignments.organizationId, context.organizationId)
+				)
+			)
+			.innerJoin(
+				roles,
+				and(eq(roles.id, roleAssignments.roleId), eq(roles.organizationId, context.organizationId))
+			)
+			.where(
+				and(
+					eq(users.id, input.assignedToUserId),
+					eq(memberships.organizationId, context.organizationId),
+					eq(memberships.active, true),
+					eq(users.active, true),
+					eq(roles.active, true),
+					sql`lower(${roles.code}) IN ('technician', 'organization_admin')`
+				)
+			)
+			.limit(1);
+
+		if (!assigneeRecord) {
+			throw new IncidentServiceError(
+				'ASSIGNEE_NOT_FOUND',
+				'Assignee user not found or not eligible in this organization'
+			);
+		}
+
+		// E. No-op: if assignedToUserId is unchanged, return current state without DB update or history
+		if (currentIncident.assignedToUserId === input.assignedToUserId) {
+			return { incident: currentIncident };
+		}
+
+		// F. Check reassignment vs initial assignment
+		const isReassignment = currentIncident.assignedToUserId !== null;
+		let cleanReason: string | null = null;
+
+		if (isReassignment) {
+			if (typeof input.reason !== 'string' || input.reason.trim().length === 0) {
+				throw new IncidentServiceError(
+					'INVALID_INPUT',
+					'Reason is required when reassigning an incident'
+				);
+			}
+			cleanReason = input.reason.trim();
+		}
+
+		// G. Update incident record
+		const [updatedIncident] = await tx
+			.update(incidents)
+			.set({
+				assignedToUserId: input.assignedToUserId,
+				updatedAt: new Date()
+			})
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.returning();
+
+		// H. Insert audit history event
+		const eventType = isReassignment ? 'reassigned' : 'assigned';
+		const [historyRecord] = await tx
+			.insert(incidentHistory)
+			.values({
+				incidentId,
+				organizationId: context.organizationId,
+				eventType,
+				actorType: 'user',
+				actorUserId: context.actorUserId,
+				reason: cleanReason,
+				comment: null,
+				payload: {
+					previousAssigneeUserId: currentIncident.assignedToUserId,
+					newAssigneeUserId: input.assignedToUserId
+				}
+			})
+			.returning();
+
+		return { incident: updatedIncident, history: historyRecord };
 	};
 
 	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {

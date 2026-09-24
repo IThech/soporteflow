@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm';
 import {
 	fixture,
 	identity,
+	createCredentialUser,
 	createSession,
 	createTamperedCookie,
 	grantPermission
@@ -110,6 +111,50 @@ async function callPatchDetail(
 	});
 	const event = makeEvent(request, new URL(url), params, { id: '/api/incidents/[id]' });
 	const response = await PATCH(event);
+	const status = response.status;
+	const json = await response.json();
+	return { status, json, response };
+}
+
+async function callGetAssignees(
+	GET,
+	{ headers = {}, url = 'http://localhost/api/incidents/assignees' } = {}
+) {
+	const reqHeaders = new Headers(headers);
+	const request = new Request(url, {
+		method: 'GET',
+		headers: reqHeaders
+	});
+	const event = makeEvent(request, new URL(url), {}, { id: '/api/incidents/assignees' });
+	const response = await GET(event);
+	const status = response.status;
+	const json = await response.json();
+	return { status, json, response };
+}
+
+async function callPostAssign(
+	POST,
+	{
+		body,
+		headers = {},
+		rawBody,
+		url = 'http://localhost/api/incidents/test/assign',
+		params = {}
+	} = {}
+) {
+	const reqHeaders = new Headers(headers);
+	if (!reqHeaders.has('content-type') && rawBody === undefined) {
+		reqHeaders.set('content-type', 'application/json');
+	}
+	const reqBody =
+		rawBody !== undefined ? rawBody : body !== undefined ? JSON.stringify(body) : undefined;
+	const request = new Request(url, {
+		method: 'POST',
+		headers: reqHeaders,
+		body: reqBody
+	});
+	const event = makeEvent(request, new URL(url), params, { id: '/api/incidents/[id]/assign' });
+	const response = await POST(event);
 	const status = response.status;
 	const json = await response.json();
 	return { status, json, response };
@@ -1450,6 +1495,7 @@ test('SoporteFlow — Etapa 5.2B: Endpoint HTTP GET /api/incidents', async (t) =
 				'clientUserId',
 				'createdByUserId',
 				'siteId',
+				'assignedToUserId',
 				'createdAt',
 				'updatedAt'
 			]);
@@ -1896,6 +1942,8 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 			'clientUserId',
 			'createdByUserId',
 			'siteId',
+			'assignedToUserId',
+			'assignedToUserName',
 			'createdAt',
 			'updatedAt'
 		]);
@@ -2469,5 +2517,437 @@ test('SoporteFlow — Etapa 5.4H: Endpoint HTTP PATCH /api/incidents/[id]', asyn
 		assert.equal(res.status, 200);
 		assert.equal(res.json.history, undefined);
 		assert.ok(res.json.incident);
+	});
+});
+
+test('SoporteFlow — Etapa 5.4I-A: GET /api/incidents/assignees — Catálogo de técnicos asignables', async (t) => {
+	const f = await fixture(t);
+	const { db, schema: s, server } = f;
+
+	const { GET: getAssignees } = await server.ssrLoadModule(
+		'/src/routes/api/incidents/assignees/+server.ts'
+	);
+
+	// Setup orgs
+	const [orgA] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org Assignees A', slug: 'assign-a-' + randomUUID(), status: 'active' })
+		.returning();
+
+	// Helper for roles
+	async function createRole(orgId, name, code) {
+		const [role] = await db
+			.insert(s.roles)
+			.values({ organizationId: orgId, name, code, active: true })
+			.returning();
+		return role;
+	}
+	async function assignRole(orgId, membershipId, roleId) {
+		const [assignment] = await db
+			.insert(s.roleAssignments)
+			.values({ organizationId: orgId, membershipId, roleId, scopeType: 'organization' })
+			.returning();
+		return assignment;
+	}
+
+	const roleTechA = await createRole(orgA.id, 'Técnico', 'technician');
+	const roleAdminA = await createRole(orgA.id, 'Admin', 'organization_admin');
+	const roleClientA = await createRole(orgA.id, 'Cliente', 'client');
+
+	// Users in Org A
+	const userTech1 = await createCredentialUser(f, { name: 'Bernardo Técnico' });
+	const memTech1 = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userTech1.id, active: true })
+		.returning();
+	await assignRole(orgA.id, memTech1[0].id, roleTechA.id);
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memTech1[0].id,
+		permissionId: 'incidents:assign'
+	});
+	const sessionTechA = await createSession(f, userTech1.id);
+
+	const userTech2 = await createCredentialUser(f, { name: 'Carlos Técnico' });
+	const memTech2 = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userTech2.id, active: true })
+		.returning();
+	await assignRole(orgA.id, memTech2[0].id, roleTechA.id);
+
+	const userAdmin = await createCredentialUser(f, { name: 'Alicia Admin' });
+	const memAdmin = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userAdmin.id, active: true })
+		.returning();
+	await assignRole(orgA.id, memAdmin[0].id, roleAdminA.id);
+
+	const userClient = await createCredentialUser(f, { name: 'David Cliente' });
+	const memClient = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userClient.id, active: true })
+		.returning();
+	await assignRole(orgA.id, memClient[0].id, roleClientA.id);
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memClient[0].id,
+		permissionId: 'incidents:create'
+	});
+	const sessionClientA = await createSession(f, userClient.id);
+
+	const userInactive = await createCredentialUser(f, { name: 'Elena Inactiva', active: false });
+	const memInactive = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userInactive.id, active: true })
+		.returning();
+	await assignRole(orgA.id, memInactive[0].id, roleTechA.id);
+
+	const userInactiveMem = await createCredentialUser(f, { name: 'Fernando Inactivo' });
+	const memInactiveMem = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userInactiveMem.id, active: false })
+		.returning();
+	await assignRole(orgA.id, memInactiveMem[0].id, roleTechA.id);
+
+	// 1. 401 si no hay sesión
+	await t.test('1. 401 si no hay sesión autenticada', async () => {
+		const res = await callGetAssignees(getAssignees, {
+			url: `http://localhost/api/incidents/assignees?organizationId=${orgA.id}`
+		});
+		assert.equal(res.status, 401);
+		assert.equal(res.json.error.code, 'UNAUTHORIZED');
+	});
+
+	// 2. 403 si el rol no tiene incidents:assign (cliente)
+	await t.test('2. 403 si el usuario carece del permiso incidents:assign', async () => {
+		const res = await callGetAssignees(getAssignees, {
+			url: `http://localhost/api/incidents/assignees?organizationId=${orgA.id}`,
+			headers: { cookie: sessionClientA.cookieHeader }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error.code, 'FORBIDDEN');
+	});
+
+	// 3. 400 si organizationId no es UUID válido
+	await t.test('3. 400 si organizationId no es UUID', async () => {
+		const res = await callGetAssignees(getAssignees, {
+			url: 'http://localhost/api/incidents/assignees?organizationId=invalid-uuid',
+			headers: { cookie: sessionTechA.cookieHeader }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error.code, 'INVALID_INPUT');
+	});
+
+	// 4. 200 catálogo filtra y ordena deterministamente
+	await t.test(
+		'4. 200 devuelve solo técnicos/admins activos ordenados alfabéticamente',
+		async () => {
+			const res = await callGetAssignees(getAssignees, {
+				url: `http://localhost/api/incidents/assignees?organizationId=${orgA.id}`,
+				headers: { cookie: sessionTechA.cookieHeader }
+			});
+			assert.equal(res.status, 200);
+			assert.ok(Array.isArray(res.json.assignees));
+			const list = res.json.assignees;
+			const ids = list.map((a) => a.id);
+
+			assert.ok(ids.includes(userAdmin.id), 'Debe incluir admin');
+			assert.ok(ids.includes(userTech1.id), 'Debe incluir tech 1');
+			assert.ok(ids.includes(userTech2.id), 'Debe incluir tech 2');
+			assert.ok(!ids.includes(userClient.id), 'NO debe incluir client');
+			assert.ok(!ids.includes(userInactive.id), 'NO debe incluir user inactivo');
+			assert.ok(!ids.includes(userInactiveMem.id), 'NO debe incluir membership inactiva');
+
+			// Orden alfabético: Alicia Admin < Bernardo Técnico < Carlos Técnico
+			assert.equal(list[0].name, 'Alicia Admin');
+			assert.equal(list[1].name, 'Bernardo Técnico');
+			assert.equal(list[2].name, 'Carlos Técnico');
+		}
+	);
+});
+
+test('SoporteFlow — Etapa 5.4I-A: POST /api/incidents/[id]/assign — Asignación y Reasignación', async (t) => {
+	const f = await fixture(t);
+	const { db, schema: s, server } = f;
+
+	const { POST: postAssign } = await server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/assign/+server.ts'
+	);
+	const { createIncidentRecord } = await server.ssrLoadModule(
+		'/src/lib/server/services/incidents.ts'
+	);
+
+	const [orgA] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org Assign Test A', slug: 'assign-test-a-' + randomUUID(), status: 'active' })
+		.returning();
+	const [orgB] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org Assign Test B', slug: 'assign-test-b-' + randomUUID(), status: 'active' })
+		.returning();
+
+	async function createRole(orgId, name, code) {
+		const [role] = await db
+			.insert(s.roles)
+			.values({ organizationId: orgId, name, code, active: true })
+			.returning();
+		return role;
+	}
+	async function assignRole(orgId, membershipId, roleId) {
+		const [assignment] = await db
+			.insert(s.roleAssignments)
+			.values({ organizationId: orgId, membershipId, roleId, scopeType: 'organization' })
+			.returning();
+		return assignment;
+	}
+
+	const roleTechA = await createRole(orgA.id, 'Técnico', 'technician');
+	const roleClientA = await createRole(orgA.id, 'Cliente', 'client');
+
+	const userTech1 = await createCredentialUser(f, { name: 'Técnico A1' });
+	const [memTech1] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userTech1.id, active: true })
+		.returning();
+	await assignRole(orgA.id, memTech1.id, roleTechA.id);
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memTech1.id,
+		permissionId: 'incidents:assign'
+	});
+	const sessionTech1 = await createSession(f, userTech1.id);
+
+	const userTech2 = await createCredentialUser(f, { name: 'Técnico A2' });
+	const [memTech2] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userTech2.id, active: true })
+		.returning();
+	await assignRole(orgA.id, memTech2.id, roleTechA.id);
+
+	const userClient = await createCredentialUser(f, { name: 'Cliente A' });
+	const [memClient] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: userClient.id, active: true })
+		.returning();
+	await assignRole(orgA.id, memClient.id, roleClientA.id);
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memClient.id,
+		permissionId: 'incidents:create'
+	});
+	const sessionClient = await createSession(f, userClient.id);
+
+	// Técnico en orgB
+	const roleTechB = await createRole(orgB.id, 'Técnico B', 'technician');
+	const userTechB = await createCredentialUser(f, { name: 'Técnico B1' });
+	const [memTechB] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgB.id, userId: userTechB.id, active: true })
+		.returning();
+	await assignRole(orgB.id, memTechB.id, roleTechB.id);
+
+	async function createIncidentA() {
+		const { incident } = await createIncidentRecord(
+			db,
+			{
+				organizationId: orgA.id,
+				creatorUserId: userTech1.id
+			},
+			{
+				title: 'Incidencia API Test ' + randomUUID().slice(0, 6),
+				description: 'Test descripción',
+				client: 'Cliente Test'
+			}
+		);
+		return incident;
+	}
+
+	// 1. 401 sin sesión
+	await t.test('1. 401 si no hay sesión autenticada', async () => {
+		const inc = await createIncidentA();
+		const res = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			body: { assignedToUserId: userTech1.id }
+		});
+		assert.equal(res.status, 401);
+		assert.equal(res.json.error.code, 'UNAUTHORIZED');
+	});
+
+	// 2. 403 sin permiso incidents:assign
+	await t.test('2. 403 si el usuario carece de incidents:assign', async () => {
+		const inc = await createIncidentA();
+		const res = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionClient.cookieHeader },
+			body: { assignedToUserId: userTech1.id }
+		});
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error.code, 'FORBIDDEN');
+	});
+
+	// 3. 400 malformed JSON o no object
+	await t.test('3. 400 con body malformado o no-objeto', async () => {
+		const inc = await createIncidentA();
+		const res1 = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			rawBody: '{ bad json'
+		});
+		assert.equal(res1.status, 400);
+
+		const res2 = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			rawBody: '["array_not_object"]'
+		});
+		assert.equal(res2.status, 400);
+	});
+
+	// 4. 400 UUID inválido
+	await t.test('4. 400 si organizationId, incidentId o assignedToUserId no son UUID', async () => {
+		const inc = await createIncidentA();
+		const resOrg = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=not-a-uuid`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech1.id }
+		});
+		assert.equal(resOrg.status, 400);
+
+		const resInc = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/not-a-uuid/assign?organizationId=${orgA.id}`,
+			params: { id: 'not-a-uuid' },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech1.id }
+		});
+		assert.equal(resInc.status, 400);
+
+		const resAssignee = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: 'not-a-uuid' }
+		});
+		assert.equal(resAssignee.status, 400);
+	});
+
+	// 5. 400 unknown keys
+	await t.test('5. 400 si se envían propiedades no permitidas', async () => {
+		const inc = await createIncidentA();
+		const res = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech1.id, teamId: randomUUID() }
+		});
+		assert.equal(res.status, 400);
+		assert.ok(res.json.error.message.includes('teamId'));
+	});
+
+	// 6. 404 si la incidencia no existe o pertenece a otro tenant
+	await t.test('6. 404 si la incidencia no existe en la organización', async () => {
+		const fakeId = randomUUID();
+		const res = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${fakeId}/assign?organizationId=${orgA.id}`,
+			params: { id: fakeId },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech1.id }
+		});
+		assert.equal(res.status, 404);
+		assert.equal(res.json.error.code, 'INCIDENT_NOT_FOUND');
+	});
+
+	// 7. 404 si el técnico pertenece a otra organización
+	await t.test('7. 404 fail-closed si el técnico pertenece a otro tenant', async () => {
+		const inc = await createIncidentA();
+		const res = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTechB.id }
+		});
+		assert.equal(res.status, 404);
+		assert.equal(res.json.error.code, 'ASSIGNEE_NOT_FOUND');
+	});
+
+	// 8. 200 primera asignación: actualiza, devuelve incident y NO history
+	await t.test('8. 200 primera asignación exitosa sin history en payload', async () => {
+		const inc = await createIncidentA();
+		const res = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech1.id }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.assignedToUserId, userTech1.id);
+		assert.equal(res.json.history, undefined);
+	});
+
+	// 9. 400 reasignación sin motivo
+	await t.test('9. 400 reasignación sin motivo falla con INVALID_INPUT', async () => {
+		const inc = await createIncidentA();
+		// Primera asignación
+		await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech1.id }
+		});
+
+		// Reasignación sin reason
+		const res = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech2.id }
+		});
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error.code, 'INVALID_INPUT');
+	});
+
+	// 10. 200 reasignación con motivo válido
+	await t.test('10. 200 reasignación con motivo válido y NO history en respuesta', async () => {
+		const inc = await createIncidentA();
+		await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech1.id }
+		});
+
+		const res = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech2.id, reason: 'Escalado por turno' }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.assignedToUserId, userTech2.id);
+		assert.equal(res.json.history, undefined);
+	});
+
+	// 11. 200 no-op al asignar al mismo técnico
+	await t.test('11. 200 no-op devuelve estado actual sin error', async () => {
+		const inc = await createIncidentA();
+		await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech1.id }
+		});
+
+		const res = await callPostAssign(postAssign, {
+			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
+			params: { id: inc.id },
+			headers: { cookie: sessionTech1.cookieHeader },
+			body: { assignedToUserId: userTech1.id }
+		});
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.assignedToUserId, userTech1.id);
 	});
 });
