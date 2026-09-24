@@ -495,3 +495,207 @@ export async function updateIncident(
 	const incident = (data as { incident?: unknown }).incident;
 	return parseAndValidateIncident(incident, organizationId, incidentId, res.status);
 }
+
+export interface IncidentAssignee {
+	id: string;
+	name: string;
+}
+
+export interface AssignIncidentInput {
+	assignedToUserId: string;
+	reason?: string;
+}
+
+export interface ListAssigneesOptions {
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+/**
+ * Fetches assignable technicians for the active organization.
+ * Read-only client query against GET /api/incidents/assignees?organizationId=<UUID>.
+ */
+export async function listAssignees(
+	organizationId: string,
+	options?: ListAssigneesOptions
+): Promise<IncidentAssignee[]> {
+	const fetchFn = options?.customFetch ?? fetch;
+	const url = `/api/incidents/assignees?organizationId=${encodeURIComponent(organizationId)}`;
+
+	let res: Response;
+	try {
+		res = await fetchFn(url, {
+			method: 'GET',
+			signal: options?.signal
+		});
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) {
+			throw err;
+		}
+		if ((err as Error)?.name === 'AbortError' || options?.signal?.aborted) {
+			throw err;
+		}
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+
+	if (!res.ok) {
+		let message = 'No se pudieron cargar los técnicos disponibles. Inténtalo de nuevo.';
+		let code = 'INTERNAL_ERROR';
+		if (res.status === 400) {
+			message = 'No se pudo consultar la organización seleccionada.';
+			code = 'INVALID_INPUT';
+		} else if (res.status === 401) {
+			message = 'Tu sesión ya no es válida.';
+			code = 'UNAUTHORIZED';
+		} else if (res.status === 403) {
+			message = 'No tienes permisos para asignar incidencias.';
+			code = 'FORBIDDEN';
+		} else if (res.status === 404) {
+			message = 'No se encontró el recurso solicitado.';
+			code = 'NOT_FOUND';
+		} else if (res.status >= 500) {
+			message = 'No se pudieron cargar los técnicos disponibles. Inténtalo de nuevo.';
+			code = 'SERVER_ERROR';
+		}
+		throw new IncidentApiError(res.status, code, message);
+	}
+
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	const assignees = (data as { assignees?: unknown }).assignees;
+	if (!Array.isArray(assignees)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	for (const a of assignees) {
+		if (!a || typeof a !== 'object') {
+			throw new IncidentApiError(
+				res.status,
+				'INVALID_PAYLOAD',
+				'No se pudo interpretar la respuesta del servidor.'
+			);
+		}
+		const item = a as Record<string, unknown>;
+		if (typeof item.id !== 'string' || typeof item.name !== 'string') {
+			throw new IncidentApiError(
+				res.status,
+				'INVALID_PAYLOAD',
+				'No se pudo interpretar la respuesta del servidor.'
+			);
+		}
+	}
+
+	return assignees as IncidentAssignee[];
+}
+
+export interface AssignIncidentOptions {
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+/**
+ * Assigns or reassigns an incident to a technician.
+ * Invokes POST /api/incidents/<id>/assign?organizationId=<UUID>.
+ */
+export async function assignIncident(
+	organizationId: string,
+	incidentId: string,
+	input: AssignIncidentInput,
+	options?: AssignIncidentOptions
+): Promise<IncidentListItem> {
+	const fetchFn = options?.customFetch ?? fetch;
+	const url = `/api/incidents/${encodeURIComponent(incidentId)}/assign?organizationId=${encodeURIComponent(organizationId)}`;
+
+	const payload: Record<string, unknown> = {
+		assignedToUserId: input.assignedToUserId
+	};
+	if (input.reason !== undefined) {
+		payload.reason = input.reason;
+	}
+
+	let res: Response;
+	try {
+		res = await fetchFn(url, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify(payload),
+			signal: options?.signal
+		});
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) {
+			throw err;
+		}
+		if ((err as Error)?.name === 'AbortError' || options?.signal?.aborted) {
+			throw err;
+		}
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+
+	if (!res.ok) {
+		let message = 'No se pudo asignar la incidencia. Inténtalo de nuevo.';
+		let code = 'INTERNAL_ERROR';
+		if (res.status === 400) {
+			message = 'Los datos de asignación son inválidos.';
+			code = 'INVALID_INPUT';
+		} else if (res.status === 401) {
+			message = 'Tu sesión ya no es válida.';
+			code = 'UNAUTHORIZED';
+		} else if (res.status === 403) {
+			message = 'No tienes permisos para asignar esta incidencia.';
+			code = 'FORBIDDEN';
+		} else if (res.status === 404) {
+			message = 'No se pudo realizar la asignación.';
+			code = 'NOT_FOUND';
+		} else if (res.status >= 500) {
+			message = 'No se pudo asignar la incidencia. Inténtalo de nuevo.';
+			code = 'SERVER_ERROR';
+		}
+		throw new IncidentApiError(res.status, code, message);
+	}
+
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	const rawIncident = (data as { incident?: unknown }).incident;
+	const parsed = parseAndValidateIncident(rawIncident, organizationId, incidentId, res.status);
+	return parsed;
+}

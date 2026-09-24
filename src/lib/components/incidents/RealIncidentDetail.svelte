@@ -13,9 +13,10 @@
 		loading?: boolean;
 		error?: string | null;
 		onEdit?: () => void;
+		onAssign?: () => void;
 	}
 
-	let { incident = null, loading = false, error = null, onEdit }: Props = $props();
+	let { incident = null, loading = false, error = null, onEdit, onAssign }: Props = $props();
 </script>
 
 <div class="real-incident-detail">
@@ -47,7 +48,7 @@
 		</div>
 	{:else if incident}
 		<div class="space-y-6 rounded-xl border border-slate-800 bg-slate-900/60 p-6 md:p-8">
-			<!-- Header: Ticket Number, Badges, Title, Edit Button -->
+			<!-- Header: Ticket Number, Badges, Title, Action Buttons -->
 			<div class="space-y-3 border-b border-slate-800 pb-6">
 				<div class="flex flex-wrap items-center justify-between gap-3">
 					<div class="flex flex-wrap items-center gap-3">
@@ -69,15 +70,26 @@
 							{PRIORITY_LABELS[incident.priority] ?? incident.priority}
 						</span>
 					</div>
-					{#if onEdit}
-						<button
-							type="button"
-							onclick={onEdit}
-							class="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/80 px-3.5 py-1.5 text-xs font-medium text-slate-200 transition hover:border-slate-600 hover:bg-slate-700 hover:text-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-						>
-							Editar incidencia
-						</button>
-					{/if}
+					<div class="flex items-center gap-2">
+						{#if onAssign}
+							<button
+								type="button"
+								onclick={onAssign}
+								class="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/80 px-3.5 py-1.5 text-xs font-medium text-slate-200 transition hover:border-slate-600 hover:bg-slate-700 hover:text-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+							>
+								{incident.assignedToUserId ? 'Reasignar' : 'Asignar técnico'}
+							</button>
+						{/if}
+						{#if onEdit}
+							<button
+								type="button"
+								onclick={onEdit}
+								class="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/80 px-3.5 py-1.5 text-xs font-medium text-slate-200 transition hover:border-slate-600 hover:bg-slate-700 hover:text-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
+							>
+								Editar incidencia
+							</button>
+						{/if}
+					</div>
 				</div>
 				<h1 class="text-xl font-bold tracking-tight text-white md:text-2xl">
 					{incident.title}
@@ -95,10 +107,19 @@
 			</div>
 
 			<!-- Metadata Grid -->
-			<div class="grid grid-cols-1 gap-4 border-t border-slate-800 pt-6 text-sm sm:grid-cols-3">
+			<div
+				class="grid grid-cols-1 gap-4 border-t border-slate-800 pt-6 text-sm sm:grid-cols-2 lg:grid-cols-4"
+			>
 				<div>
 					<span class="block text-xs font-medium text-slate-400">Cliente</span>
 					<span class="mt-1 font-medium text-slate-200">{incident.client}</span>
+				</div>
+				<div>
+					<span class="block text-xs font-medium text-slate-400">Asignado a</span>
+					<span class="mt-1 font-medium text-slate-200">
+						{incident.assignedToUserName ??
+							(incident.assignedToUserId ? 'Técnico asignado' : 'Sin asignar')}
+					</span>
 				</div>
 				<div>
 					<span class="block text-xs font-medium text-slate-400">Fecha de creación</span>
