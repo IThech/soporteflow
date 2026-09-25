@@ -215,7 +215,7 @@ test('SoporteFlow — Etapa 5.4F: Detalle Real de Incidencias Read-Only', async 
 		let requestedUrl = null;
 		const mockFetch = async (url) => {
 			requestedUrl = url;
-			return new Response(JSON.stringify({ incident: sample, history: [] }), {
+			return new Response(JSON.stringify({ incident: sample }), {
 				status: 200,
 				headers: { 'Content-Type': 'application/json' }
 			});
@@ -234,7 +234,7 @@ test('SoporteFlow — Etapa 5.4F: Detalle Real de Incidencias Read-Only', async 
 		let requestedUrl = null;
 		const mockFetch = async (url) => {
 			requestedUrl = url;
-			return new Response(JSON.stringify({ incident: sample, history: [] }), {
+			return new Response(JSON.stringify({ incident: sample }), {
 				status: 200,
 				headers: { 'Content-Type': 'application/json' }
 			});
@@ -252,7 +252,7 @@ test('SoporteFlow — Etapa 5.4F: Detalle Real de Incidencias Read-Only', async 
 		let requestedUrl = null;
 		const mockFetch = async (url) => {
 			requestedUrl = url;
-			return new Response(JSON.stringify({ incident: sample, history: [] }), {
+			return new Response(JSON.stringify({ incident: sample }), {
 				status: 200,
 				headers: { 'Content-Type': 'application/json' }
 			});
@@ -270,7 +270,7 @@ test('SoporteFlow — Etapa 5.4F: Detalle Real de Incidencias Read-Only', async 
 		let usedMethod = null;
 		const mockFetch = async (_url, init) => {
 			usedMethod = init?.method;
-			return new Response(JSON.stringify({ incident: sample, history: [] }), {
+			return new Response(JSON.stringify({ incident: sample }), {
 				status: 200,
 				headers: { 'Content-Type': 'application/json' }
 			});
@@ -295,7 +295,7 @@ test('SoporteFlow — Etapa 5.4F: Detalle Real de Incidencias Read-Only', async 
 		});
 
 		const mockFetch = async () => {
-			return new Response(JSON.stringify({ incident: sample, history: [] }), {
+			return new Response(JSON.stringify({ incident: sample }), {
 				status: 200,
 				headers: { 'Content-Type': 'application/json' }
 			});
@@ -498,7 +498,7 @@ test('SoporteFlow — Etapa 5.4F: Detalle Real de Incidencias Read-Only', async 
 			const sample = makeSampleIncident({ id: incidentId, organizationId: foreignOrgId });
 
 			const mockFetch = async () => {
-				return new Response(JSON.stringify({ incident: sample, history: [] }), {
+				return new Response(JSON.stringify({ incident: sample }), {
 					status: 200,
 					headers: { 'Content-Type': 'application/json' }
 				});
@@ -522,7 +522,7 @@ test('SoporteFlow — Etapa 5.4F: Detalle Real de Incidencias Read-Only', async 
 		const sample = makeSampleIncident({ id: differentId, organizationId: orgId });
 
 		const mockFetch = async () => {
-			return new Response(JSON.stringify({ incident: sample, history: [] }), {
+			return new Response(JSON.stringify({ incident: sample }), {
 				status: 200,
 				headers: { 'Content-Type': 'application/json' }
 			});

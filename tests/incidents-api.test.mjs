@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, asc } from 'drizzle-orm';
 import {
 	fixture,
 	identity,
@@ -10,6 +10,16 @@ import {
 	createTamperedCookie,
 	grantPermission
 } from './helpers/auth-fixture.mjs';
+
+async function persistedHistory(db, schema, incidentId) {
+	return (
+		await db
+			.select()
+			.from(schema.incidentHistory)
+			.where(eq(schema.incidentHistory.incidentId, incidentId))
+			.orderBy(asc(schema.incidentHistory.createdAt), asc(schema.incidentHistory.id))
+	).map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
+}
 
 function makeEvent(
 	request,
@@ -440,7 +450,7 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 		});
 		assert.equal(res.status, 201);
 		assert.ok(res.json.incident);
-		assert.ok(res.json.history);
+		assert.equal('history' in res.json, false);
 		assert.equal(res.json.incident.organizationId, orgA.id);
 		assert.equal(res.json.incident.title, basePayloadA.title);
 		assert.equal(res.json.incident.description, basePayloadA.description);
@@ -484,23 +494,28 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 		assert.equal(resB1.json.incident.incidentNumber, 1);
 	});
 
-	await t.test('13. Devuelve registro en incident_history con event_type = "created"', async () => {
-		const res = await callPost(POST, {
-			body: { ...basePayloadA, title: 'Incidente con auditoría de historial' },
-			headers: { cookie: sessionA.cookieHeader }
-		});
-		assert.equal(res.status, 201);
-		const history = res.json.history;
-		assert.ok(history);
-		assert.equal(history.incidentId, res.json.incident.id);
-		assert.equal(history.organizationId, orgA.id);
-		assert.equal(history.eventType, 'created');
-		assert.equal(history.actorType, 'user');
-		assert.equal(history.actorUserId, userA.id);
-		assert.equal(history.payload.title, 'Incidente con auditoría de historial');
-		assert.equal(history.payload.status, 'open');
-		assert.equal(history.payload.incidentNumber, res.json.incident.incidentNumber);
-	});
+	await t.test(
+		'13. Persiste registro en incident_history sin exponerlo con event_type = "created"',
+		async () => {
+			const res = await callPost(POST, {
+				body: { ...basePayloadA, title: 'Incidente con auditoría de historial' },
+				headers: { cookie: sessionA.cookieHeader }
+			});
+			assert.equal(res.status, 201);
+			assert.equal('history' in res.json, false);
+			const persisted = await persistedHistory(db, s, res.json.incident.id);
+			const history = persisted[0];
+			assert.ok(history);
+			assert.equal(history.incidentId, res.json.incident.id);
+			assert.equal(history.organizationId, orgA.id);
+			assert.equal(history.eventType, 'created');
+			assert.equal(history.actorType, 'user');
+			assert.equal(history.actorUserId, userA.id);
+			assert.equal(history.payload.title, 'Incidente con auditoría de historial');
+			assert.equal(history.payload.status, 'open');
+			assert.equal(history.payload.incidentNumber, res.json.incident.incidentNumber);
+		}
+	);
 
 	await t.test('14. creatorUserId proviene exclusivamente de la sesión (no del body)', async () => {
 		// Intentar suplantar creador pasando IDs ajenos en el body
@@ -518,7 +533,7 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 		// El creador registrado DEBE ser userA (de la sesión), NUNCA el del body
 		assert.equal(res.json.incident.createdByUserId, userA.id);
 		assert.notEqual(res.json.incident.createdByUserId, spoofedUserId);
-		assert.equal(res.json.history.actorUserId, userA.id);
+		assert.equal((await persistedHistory(db, s, res.json.incident.id))[0].actorUserId, userA.id);
 
 		// Verificación directa en base de datos: el registro persistido tiene userA.id
 		const [persistedIncident] = await db
@@ -667,7 +682,10 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 		});
 		assert.equal(res.status, 201);
 		assert.equal(res.json.incident.clientUserId, clientUserA.id);
-		assert.equal(res.json.history.payload.clientUserId, clientUserA.id);
+		assert.equal(
+			(await persistedHistory(db, s, res.json.incident.id))[0].payload.clientUserId,
+			clientUserA.id
+		);
 	});
 
 	await t.test(
@@ -724,7 +742,7 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 		});
 		assert.equal(res.status, 201);
 		assert.equal(res.json.incident.siteId, siteA.id);
-		assert.equal(res.json.history.payload.siteId, siteA.id);
+		assert.equal((await persistedHistory(db, s, res.json.incident.id))[0].payload.siteId, siteA.id);
 	});
 
 	await t.test('25. siteId cross-tenant vs inexistente son indistinguibles -> 404', async () => {
@@ -1890,25 +1908,27 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 		assert.equal(res.json.incident.status, 'open');
 	});
 
-	await t.test('15. devuelve history', async () => {
+	await t.test('15. omite history y conserva auditoría', async () => {
 		const res = await callGetDetail(GET, {
 			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
 			params: { id: incA1Created.id },
 			headers: { cookie: sessionA.cookieHeader }
 		});
 		assert.equal(res.status, 200);
-		assert.ok(Array.isArray(res.json.history));
-		assert.equal(res.json.history.length, 3);
+		assert.equal('history' in res.json, false);
+		assert.equal((await persistedHistory(db, s, res.json.incident.id)).length, 3);
 	});
 
-	await t.test('16. history ordenado cronológicamente de forma determinista', async () => {
+	await t.test('16. auditoría persistida ordenada y detalle sin history', async () => {
 		const res = await callGetDetail(GET, {
 			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
 			params: { id: incA1Created.id },
 			headers: { cookie: sessionA.cookieHeader }
 		});
 		assert.equal(res.status, 200);
-		const history = res.json.history;
+		assert.equal('history' in res.json, false);
+		const persisted = await persistedHistory(db, s, res.json.incident.id);
+		const history = persisted;
 		for (let i = 1; i < history.length; i++) {
 			const prevTime = new Date(history[i - 1].createdAt).getTime();
 			const currTime = new Date(history[i].createdAt).getTime();
@@ -1929,7 +1949,7 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 
 		// Top-level
 		const topKeys = Object.keys(res.json);
-		assert.deepEqual(topKeys.sort(), ['history', 'incident']);
+		assert.deepEqual(topKeys.sort(), ['incident']);
 
 		// Incident
 		const allowedIncidentKeys = new Set([
@@ -1960,28 +1980,7 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 		assert.equal('permissions' in res.json.incident, false);
 		assert.equal('session' in res.json.incident, false);
 
-		// History
-		const allowedHistoryKeys = new Set([
-			'id',
-			'incidentId',
-			'organizationId',
-			'eventType',
-			'actorType',
-			'actorUserId',
-			'reason',
-			'comment',
-			'payload',
-			'createdAt'
-		]);
-		for (const entry of res.json.history) {
-			for (const key of Object.keys(entry)) {
-				assert.ok(allowedHistoryKeys.has(key), `Campo inesperado en history: ${key}`);
-			}
-			assert.equal('membership' in entry, false);
-			assert.equal('roles' in entry, false);
-			assert.equal('permissions' in entry, false);
-			assert.equal('session' in entry, false);
-		}
+		assert.equal('history' in res.json, false);
 	});
 
 	// =========================================================================
@@ -2115,20 +2114,23 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 	// =========================================================================
 	// HISTORIAL (Tests 26 - 27)
 	// =========================================================================
-	await t.test('26. evento created aparece en historial', async () => {
+	await t.test('26. evento created persiste sin exposición HTTP', async () => {
 		const res = await callGetDetail(GET, {
 			url: `http://localhost/api/incidents/${incA1Created.id}?organizationId=${orgA.id}`,
 			params: { id: incA1Created.id },
 			headers: { cookie: sessionA.cookieHeader }
 		});
 		assert.equal(res.status, 200);
-		const createdEvent = res.json.history.find((h) => h.eventType === 'created');
+		assert.equal('history' in res.json, false);
+		const createdEvent = (await persistedHistory(db, s, res.json.incident.id)).find(
+			(h) => h.eventType === 'created'
+		);
 		assert.ok(createdEvent, 'Debe existir un evento de tipo created en el historial');
 		assert.equal(createdEvent.incidentId, incA1Created.id);
 		assert.equal(createdEvent.organizationId, orgA.id);
 	});
 
-	await t.test('27. varios eventos se devuelven en orden: createdAt ASC, id ASC', async () => {
+	await t.test('27. varios eventos persisten en orden sin exposición HTTP', async () => {
 		// Create a separate incident to test fine-grained order with identical timestamps
 		const incOrderCreated = (
 			await createIncidentRecord(
@@ -2175,7 +2177,9 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 			headers: { cookie: sessionA.cookieHeader }
 		});
 		assert.equal(res.status, 200);
-		const history = res.json.history;
+		assert.equal('history' in res.json, false);
+		const persisted = await persistedHistory(db, s, res.json.incident.id);
+		const history = persisted;
 		// Must have created event + 2 inserted events
 		assert.equal(history.length, 3);
 		// The two events with identical createdAt must be sorted by id ASC

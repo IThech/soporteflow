@@ -28,6 +28,7 @@ function makeValidIncidentRecord(overrides = {}) {
 		title: 'Corte de enlace de fibra',
 		description: 'Caída de conectividad entre sede principal y datacenter',
 		status: 'open',
+		supportLevel: 'N1',
 		priority: 'medium',
 		client: 'Acme Corp',
 		clientUserId: null,
@@ -172,8 +173,7 @@ test('Etapa 5.4G — Integración de Creación Real de Incidencias', async (t) =
 			capturedMethod = init.method;
 			return new Response(
 				JSON.stringify({
-					incident: makeValidIncidentRecord({ organizationId: orgId }),
-					history: { eventType: 'created' }
+					incident: makeValidIncidentRecord({ organizationId: orgId })
 				}),
 				{ status: 201, headers: { 'Content-Type': 'application/json' } }
 			);

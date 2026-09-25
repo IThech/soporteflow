@@ -97,7 +97,6 @@ export type IncidentDetailRecord = IncidentRecord & {
 
 export interface IncidentDetail {
 	incident: IncidentDetailRecord;
-	history: IncidentHistoryRecord[];
 }
 
 /**
@@ -439,7 +438,7 @@ export async function listIncidents(
  * Retrieves an incident by internal UUID and organizationId.
  * Always queries jointly by (id, organizationId) to guarantee tenant isolation.
  * Returns null if the incident does not exist or belongs to another tenant.
- * When found, includes the incident's chronological audit history.
+ * History is available only through the separate safe projection service.
  */
 export async function getIncidentById(
 	db: IncidentDatabase,
@@ -485,18 +484,7 @@ export async function getIncidentById(
 		return null;
 	}
 
-	const history = await db
-		.select()
-		.from(incidentHistory)
-		.where(
-			and(
-				eq(incidentHistory.incidentId, incident.id),
-				eq(incidentHistory.organizationId, context.organizationId)
-			)
-		)
-		.orderBy(asc(incidentHistory.createdAt), asc(incidentHistory.id));
-
-	return { incident, history };
+	return { incident };
 }
 
 const ALLOWED_STATUS_TRANSITIONS: Record<IncidentStatus, ReadonlySet<IncidentStatus>> = {

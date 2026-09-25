@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -636,7 +637,12 @@ test('SoporteFlow — Etapa 5.4K-A: Backend y persistencia de equipos reales en 
 
 			// Verificar en historial que solo hay 2 eventos: created y assigned
 			const detail = await getIncidentById(db, { organizationId: orgA.id }, ticket.id);
-			assert.equal(detail.history.length, 2);
+			assert.equal('history' in detail, false);
+			const persisted = await db
+				.select()
+				.from(s.incidentHistory)
+				.where(eq(s.incidentHistory.incidentId, ticket.id));
+			assert.equal(persisted.length, 2);
 		}
 	);
 

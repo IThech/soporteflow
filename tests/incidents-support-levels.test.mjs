@@ -1,3 +1,4 @@
+import { eq, asc } from 'drizzle-orm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -8,6 +9,16 @@ import {
 	grantPermission
 } from './helpers/auth-fixture.mjs';
 import { getIncident, IncidentApiError } from '../src/lib/api/incidents.ts';
+
+async function persistedHistory(db, schema, incidentId) {
+	return (
+		await db
+			.select()
+			.from(schema.incidentHistory)
+			.where(eq(schema.incidentHistory.incidentId, incidentId))
+			.orderBy(asc(schema.incidentHistory.createdAt), asc(schema.incidentHistory.id))
+	).map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
+}
 
 test('SoporteFlow — Etapa 5.4L-A: Backend real de niveles N1 / N2 / N3', async (t) => {
 	const f = await fixture(t, true);
@@ -248,8 +259,8 @@ test('SoporteFlow — Etapa 5.4L-A: Backend real de niveles N1 / N2 / N3', async
 		const detail = await getIncidentById(db, { organizationId: orgA.id }, ticket.id);
 		assert.ok(detail);
 		assert.equal(detail.incident.supportLevel, 'N1');
-		assert.equal(detail.history.length, 1);
-		assert.equal(detail.history[0].eventType, 'created');
+		assert.equal((await persistedHistory(db, s, detail.incident.id)).length, 1);
+		assert.equal((await persistedHistory(db, s, detail.incident.id))[0].eventType, 'created');
 	});
 
 	// =========================================================================
@@ -338,8 +349,8 @@ test('SoporteFlow — Etapa 5.4L-A: Backend real de niveles N1 / N2 / N3', async
 
 		const detail = await getIncidentById(db, { organizationId: orgA.id }, ticket.id);
 		assert.equal(detail.incident.supportLevel, 'N2');
-		assert.equal(detail.history.length, 2);
-		const lastEvent = detail.history[1];
+		assert.equal((await persistedHistory(db, s, detail.incident.id)).length, 2);
+		const lastEvent = (await persistedHistory(db, s, detail.incident.id))[1];
 		assert.equal(lastEvent.eventType, 'support_level_changed');
 		assert.equal(lastEvent.reason, 'Requiere revisión técnica avanzada de N2');
 		assert.deepEqual(lastEvent.payload, {
@@ -387,7 +398,9 @@ test('SoporteFlow — Etapa 5.4L-A: Backend real de niveles N1 / N2 / N3', async
 
 		const detail = await getIncidentById(db, { organizationId: orgA.id }, ticket.id);
 		assert.equal(detail.incident.supportLevel, 'N3');
-		const lastEvent = detail.history[detail.history.length - 1];
+		const lastEvent = (await persistedHistory(db, s, detail.incident.id))[
+			(await persistedHistory(db, s, detail.incident.id)).length - 1
+		];
 		assert.equal(lastEvent.eventType, 'support_level_changed');
 		assert.deepEqual(lastEvent.payload, {
 			previousSupportLevel: 'N2',
@@ -428,7 +441,9 @@ test('SoporteFlow — Etapa 5.4L-A: Backend real de niveles N1 / N2 / N3', async
 		assert.equal(data.incident.supportLevel, 'N3');
 
 		const detail = await getIncidentById(db, { organizationId: orgA.id }, ticket.id);
-		const lastEvent = detail.history[detail.history.length - 1];
+		const lastEvent = (await persistedHistory(db, s, detail.incident.id))[
+			(await persistedHistory(db, s, detail.incident.id)).length - 1
+		];
 		assert.equal(lastEvent.eventType, 'support_level_changed');
 		assert.deepEqual(lastEvent.payload, {
 			previousSupportLevel: 'N1',
@@ -474,7 +489,9 @@ test('SoporteFlow — Etapa 5.4L-A: Backend real de niveles N1 / N2 / N3', async
 		assert.equal(data.incident.supportLevel, 'N2');
 
 		const detail = await getIncidentById(db, { organizationId: orgA.id }, ticket.id);
-		const lastEvent = detail.history[detail.history.length - 1];
+		const lastEvent = (await persistedHistory(db, s, detail.incident.id))[
+			(await persistedHistory(db, s, detail.incident.id)).length - 1
+		];
 		assert.equal(lastEvent.eventType, 'support_level_changed');
 		assert.deepEqual(lastEvent.payload, {
 			previousSupportLevel: 'N3',
@@ -520,7 +537,9 @@ test('SoporteFlow — Etapa 5.4L-A: Backend real de niveles N1 / N2 / N3', async
 		assert.equal(data.incident.supportLevel, 'N1');
 
 		const detail = await getIncidentById(db, { organizationId: orgA.id }, ticket.id);
-		const lastEvent = detail.history[detail.history.length - 1];
+		const lastEvent = (await persistedHistory(db, s, detail.incident.id))[
+			(await persistedHistory(db, s, detail.incident.id)).length - 1
+		];
 		assert.equal(lastEvent.eventType, 'support_level_changed');
 		assert.deepEqual(lastEvent.payload, {
 			previousSupportLevel: 'N3',
@@ -566,7 +585,9 @@ test('SoporteFlow — Etapa 5.4L-A: Backend real de niveles N1 / N2 / N3', async
 		assert.equal(data.incident.supportLevel, 'N1');
 
 		const detail = await getIncidentById(db, { organizationId: orgA.id }, ticket.id);
-		const lastEvent = detail.history[detail.history.length - 1];
+		const lastEvent = (await persistedHistory(db, s, detail.incident.id))[
+			(await persistedHistory(db, s, detail.incident.id)).length - 1
+		];
 		assert.equal(lastEvent.eventType, 'support_level_changed');
 		assert.deepEqual(lastEvent.payload, {
 			previousSupportLevel: 'N2',
@@ -634,8 +655,11 @@ test('SoporteFlow — Etapa 5.4L-A: Backend real de niveles N1 / N2 / N3', async
 			// Verify updatedAt was NOT changed and NO new history record was created
 			const afterDetail = await getIncidentById(db, { organizationId: orgA.id }, ticket.id);
 			assert.equal(afterDetail.incident.updatedAt.getTime(), initialUpdatedAt.getTime());
-			assert.equal(afterDetail.history.length, 1);
-			assert.equal(afterDetail.history[0].eventType, 'created');
+			assert.equal((await persistedHistory(db, s, afterDetail.incident.id)).length, 1);
+			assert.equal(
+				(await persistedHistory(db, s, afterDetail.incident.id))[0].eventType,
+				'created'
+			);
 		}
 	);
 

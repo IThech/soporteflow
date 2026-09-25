@@ -519,7 +519,7 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 	// 9. DETAIL: Detalle por UUID, aislamiento cross-tenant e historial
 	// =========================================================================
 	await t.test(
-		'DETAIL: recupera detalle e historial ordenado, y devuelve null ante cross-tenant o inexistente',
+		'DETAIL: recupera detalle sin historial, y devuelve null ante cross-tenant o inexistente',
 		async () => {
 			const listA = await listIncidents(db, { organizationId: orgA.id });
 			const targetA = listA[0];
@@ -529,10 +529,7 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 			assert.ok(detailA);
 			assert.equal(detailA.incident.id, targetA.id);
 			assert.equal(detailA.incident.organizationId, orgA.id);
-			assert.ok(Array.isArray(detailA.history));
-			assert.ok(detailA.history.length >= 1);
-			assert.equal(detailA.history[0].eventType, 'created');
-			assert.equal(detailA.history[0].incidentId, targetA.id);
+			assert.equal('history' in detailA, false);
 
 			// Intento de consultar la misma incidencia de Org Alpha usando el contexto de Org Beta
 			const crossTenantDetail = await getIncidentById(db, { organizationId: orgB.id }, targetA.id);

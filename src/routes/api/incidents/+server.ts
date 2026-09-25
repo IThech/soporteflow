@@ -128,8 +128,7 @@ export const POST: RequestHandler = async (event) => {
 		// 6. Success response
 		return json(
 			{
-				incident: result.incident,
-				history: result.history
+				incident: result.incident
 			},
 			{ status: 201 }
 		);

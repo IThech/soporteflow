@@ -97,8 +97,7 @@ export const GET: RequestHandler = async (event) => {
 		// 7. Success response
 		return json(
 			{
-				incident: result.incident,
-				history: result.history
+				incident: result.incident
 			},
 			{ status: 200 }
 		);
