@@ -1,7 +1,7 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
-import { authorizeAction } from '$lib/server/auth/authorization';
+import { resolveIncidentAccess } from '$lib/server/auth/incident-access';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import { listIncidentHistory, parseHistoryQuery } from '$lib/server/services/incident-history';
 
@@ -16,19 +16,20 @@ export const GET: RequestHandler = async (event) => {
 		return failure(400, 'INVALID_INPUT', 'Invalid history query.');
 	try {
 		// Authenticate and authorize before validating pagination parameters.
+		// History is part of reading the incident: same access as the detail (view_all, or
+		// view_own on incidents assigned to the principal); no separate history permission.
 		const principal = await resolvePrincipal(event.request.headers);
 		if (!principal) return failure(401, 'UNAUTHORIZED', 'Authentication required.');
-		if (
-			!(await authorizeAction(event.request.headers, {
-				organizationId,
-				permissionId: 'incidents:view_all'
-			}))
-		)
-			return failure(403, 'FORBIDDEN', 'Permission denied.');
+		const access = await resolveIncidentAccess(
+			event.request.headers,
+			organizationId,
+			principal.userId
+		);
+		if (!access) return failure(403, 'FORBIDDEN', 'Permission denied.');
 		parseHistoryQuery(event.url.searchParams);
 		const page = await listIncidentHistory(
 			db,
-			{ organizationId, incidentId },
+			{ organizationId, incidentId, access },
 			event.url.searchParams
 		);
 		return json(page, { headers: { 'Cache-Control': 'private, no-store' } });

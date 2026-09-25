@@ -383,15 +383,26 @@ test('SoporteFlow — Etapa 5.4A: Endpoint HTTP GET /api/me (Bootstrap)', async 
 		);
 	});
 
-	await t.test('20. organizationId malicioso en query -> ignorado', async () => {
+	await t.test('20. organizationId ajeno en query -> 403 sin revelar datos', async () => {
+		// 5.4Q-D: organizationId ya no se ignora; selecciona la organización cuyas capabilities se
+		// piden. Una organización ajena se deniega sin enumerar nada.
 		const res = await callGet(GET, {
 			url: `http://localhost/api/me?organizationId=${orgBExclusive.id}`,
 			headers: { cookie: sessionA.cookieHeader }
 		});
-		assert.equal(res.status, 200);
-		const orgIds = res.json.organizations.map((o) => o.id);
-		assert.equal(orgIds.includes(orgBExclusive.id), false);
-		assert.equal(res.json.organizations.length, 3);
+		assert.equal(res.status, 403);
+		assert.deepEqual(res.json, {
+			error: { code: 'FORBIDDEN', message: 'Organization not accessible.' }
+		});
+		// sin organizationId el contrato de bootstrap no cambia
+		const bootstrap = await callGet(GET, { headers: { cookie: sessionA.cookieHeader } });
+		assert.equal(bootstrap.status, 200);
+		assert.deepEqual(Object.keys(bootstrap.json).sort(), ['organizations', 'user']);
+		assert.equal(bootstrap.json.organizations.length, 3);
+		assert.equal(
+			bootstrap.json.organizations.some((o) => o.id === orgBExclusive.id),
+			false
+		);
 	});
 
 	await t.test('21. x-user-id -> ignorado', async () => {

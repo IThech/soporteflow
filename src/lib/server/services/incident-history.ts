@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { incidents, incidentHistory } from '../db/schema';
-import { IncidentServiceError, type IncidentDatabase } from './incidents';
+import { IncidentServiceError, type IncidentAccess, type IncidentDatabase } from './incidents';
 
 export const SAFE_HISTORY_TYPES = [
 	'created',
@@ -189,16 +189,20 @@ export function projectHistoryItem(row: ProjectionRow): IncidentHistoryItem | nu
 			return null;
 	}
 }
-/** Caller must authorize incidents:view_all. Tenant membership of the incident is checked here too. */
+/**
+ * Caller must resolve incident read access (view_all -> {}, view_own -> { assignedToUserId }).
+ * Tenant membership of the incident is checked here too. With a view_own restriction, an incident
+ * not assigned to the principal is indistinguishable from a missing one (INCIDENT_NOT_FOUND).
+ */
 export async function listIncidentHistory(
 	db: IncidentDatabase,
-	context: { organizationId: string; incidentId: string },
+	context: { organizationId: string; incidentId: string; access?: IncidentAccess },
 	params: URLSearchParams = new URLSearchParams()
 ): Promise<IncidentHistoryPage> {
 	if (!uuid.test(context.organizationId) || !uuid.test(context.incidentId)) throw invalid();
 	const { limit, cursor } = parseHistoryQuery(params);
 	const [incident] = await db
-		.select({ id: incidents.id })
+		.select({ id: incidents.id, assignedToUserId: incidents.assignedToUserId })
 		.from(incidents)
 		.where(
 			and(
@@ -207,7 +211,12 @@ export async function listIncidentHistory(
 			)
 		)
 		.limit(1);
-	if (!incident) throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found.');
+	if (
+		!incident ||
+		(context.access?.assignedToUserId !== undefined &&
+			incident.assignedToUserId !== context.access.assignedToUserId)
+	)
+		throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found.');
 	const conditions = [
 		eq(incidentHistory.incidentId, context.incidentId),
 		eq(incidentHistory.organizationId, context.organizationId),

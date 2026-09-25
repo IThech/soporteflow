@@ -15,9 +15,60 @@ export interface UserOrganizationSummary {
 	slug: string;
 }
 
+/**
+ * Organization selected with getMe({ organizationId }). capabilities are canonical permission
+ * ids (e.g. 'sites:manage') to enable or hide UI actions; they are never a security boundary:
+ * every endpoint still authorizes on the server.
+ */
+export interface ActiveOrganizationContext {
+	id: string;
+	name: string;
+	slug: string;
+	capabilities: string[];
+}
+
 export interface AuthenticatedUserContext {
 	user: AuthUserProfile;
 	organizations: UserOrganizationSummary[];
+	activeOrganization?: ActiveOrganizationContext;
+}
+
+export interface GetMeOptions {
+	/** When set, the response includes activeOrganization with its effective capabilities. */
+	organizationId?: string;
+}
+
+const ME_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CAPABILITY_ID = /^[a-z][a-z_]*:[a-z][a-z_]*$/;
+
+function invalidMePayload(status: number): AuthApiError {
+	return new AuthApiError(
+		status,
+		'INVALID_PAYLOAD',
+		'No se pudo interpretar la respuesta del servidor.'
+	);
+}
+
+/** Strict parser for activeOrganization: rebuilt field by field, extra fields discarded. */
+function parseActiveOrganization(
+	raw: unknown,
+	expectedId: string,
+	status: number
+): ActiveOrganizationContext {
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalidMePayload(status);
+	const org = raw as Record<string, unknown>;
+	const capabilities = org.capabilities;
+	if (
+		org.id !== expectedId ||
+		typeof org.name !== 'string' ||
+		typeof org.slug !== 'string' ||
+		!Array.isArray(capabilities) ||
+		!capabilities.every((c) => typeof c === 'string' && CAPABILITY_ID.test(c)) ||
+		new Set(capabilities).size !== capabilities.length
+	) {
+		throw invalidMePayload(status);
+	}
+	return { id: org.id, name: org.name, slug: org.slug, capabilities: [...capabilities] };
 }
 
 export class AuthApiError extends Error {
@@ -100,9 +151,23 @@ export async function signOut(customFetch: typeof fetch = fetch): Promise<void> 
 /**
  * Fetches authenticated user identity and operational organizations from /api/me.
  */
-export async function getMe(customFetch: typeof fetch = fetch): Promise<AuthenticatedUserContext> {
+export async function getMe(
+	customFetch: typeof fetch = fetch,
+	options: GetMeOptions = {}
+): Promise<AuthenticatedUserContext> {
+	const organizationId = options.organizationId;
+	if (
+		organizationId !== undefined &&
+		(typeof organizationId !== 'string' || !ME_UUID.test(organizationId))
+	) {
+		throw new AuthApiError(0, 'INVALID_INPUT', 'Organización no válida.');
+	}
+	const url =
+		organizationId === undefined
+			? '/api/me'
+			: `/api/me?${new URLSearchParams({ organizationId }).toString()}`;
 	try {
-		const res = await customFetch('/api/me', {
+		const res = await customFetch(url, {
 			method: 'GET'
 		});
 
@@ -121,7 +186,17 @@ export async function getMe(customFetch: typeof fetch = fetch): Promise<Authenti
 			throw new AuthApiError(res.status, code, message);
 		}
 
-		return await res.json();
+		const data: AuthenticatedUserContext = await res.json();
+		if (organizationId === undefined) return data;
+		return {
+			user: data?.user,
+			organizations: data?.organizations,
+			activeOrganization: parseActiveOrganization(
+				(data as { activeOrganization?: unknown })?.activeOrganization,
+				organizationId,
+				res.status
+			)
+		};
 	} catch (err) {
 		if (err instanceof AuthApiError) throw err;
 		throw new AuthApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');

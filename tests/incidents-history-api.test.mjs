@@ -144,7 +144,13 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 			{ cookie: none.session.cookieHeader, query: '&limit=0' },
 			403
 		],
-		['403 view_own is insufficient', { cookie: own.session.cookieHeader }, 403],
+		// 5.4Q-D: view_own reads history of incidents assigned to the principal; any other incident
+		// is indistinguishable from a missing one (404, no existence leak).
+		[
+			'404 view_own on an incident not assigned to the principal',
+			{ cookie: own.session.cookieHeader },
+			404
+		],
 		['403 unauthorized organization', { organizationId: otherOrg.id }, 403],
 		['404 cross tenant incident', { id: other.id }, 404],
 		['404 missing incident', { id: randomUUID() }, 404],
