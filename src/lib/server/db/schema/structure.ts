@@ -65,6 +65,37 @@ export const sites = pgTable(
 );
 
 /**
+ * Flat support categories per organization (Core v1): no subcategories, colors, routing,
+ * SLA or priority rules. Deactivation keeps the row for historical references.
+ * Names are unique per organization ignoring case and redundant whitespace, enforced by
+ * categories_org_normalized_name_unique_idx so concurrent writes cannot create duplicates.
+ * (id, organization_id) is unique to allow tenant-safe composite FKs (future incidents.category_id).
+ * Unrelated to permissions.category, which only groups permissions administratively.
+ */
+export const categories = pgTable(
+	'categories',
+	{
+		id: uuid('id').defaultRandom().primaryKey(),
+		organizationId: uuid('organization_id')
+			.notNull()
+			.references(() => organizations.id, { onDelete: 'restrict' }),
+		name: varchar('name', { length: 100 }).notNull(),
+		description: text('description'),
+		active: boolean('active').default(true).notNull(),
+		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
+	},
+	(table) => [
+		unique('categories_org_name_unique').on(table.organizationId, table.name),
+		unique('categories_id_org_unique').on(table.id, table.organizationId),
+		uniqueIndex('categories_org_normalized_name_unique_idx').on(
+			table.organizationId,
+			sql`lower(regexp_replace(btrim(${table.name}), '\\s+', ' ', 'g'))`
+		)
+	]
+);
+
+/**
  * Operational teams with visibility policy (shared vs restricted).
  */
 export const teams = pgTable(

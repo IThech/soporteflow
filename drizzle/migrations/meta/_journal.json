@@ -64,6 +64,13 @@
 			"when": 1790339204535,
 			"tag": "0008_smooth_james_howlett",
 			"breakpoints": true
+		},
+		{
+			"idx": 9,
+			"version": "7",
+			"when": 1790346699826,
+			"tag": "0009_lumpy_hellion",
+			"breakpoints": true
 		}
 	]
 }
