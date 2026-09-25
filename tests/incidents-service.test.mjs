@@ -958,6 +958,8 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 				assert.equal(result.history.actorUserId, userCreatorA.id);
 				assert.equal(result.history.reason, null);
 				assert.deepEqual(result.history.payload, {
+					previousTeamId: null,
+					newTeamId: null,
 					previousAssigneeUserId: null,
 					newAssigneeUserId: userTech1.id
 				});
@@ -996,6 +998,8 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 				assert.equal(result.history.eventType, 'reassigned');
 				assert.equal(result.history.reason, 'Cambio de turno');
 				assert.deepEqual(result.history.payload, {
+					previousTeamId: null,
+					newTeamId: null,
 					previousAssigneeUserId: userTech1.id,
 					newAssigneeUserId: userTech2.id
 				});

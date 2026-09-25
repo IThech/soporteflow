@@ -1496,6 +1496,7 @@ test('SoporteFlow — Etapa 5.2B: Endpoint HTTP GET /api/incidents', async (t) =
 				'createdByUserId',
 				'siteId',
 				'assignedToUserId',
+				'teamId',
 				'createdAt',
 				'updatedAt'
 			]);
@@ -1944,6 +1945,8 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 			'siteId',
 			'assignedToUserId',
 			'assignedToUserName',
+			'teamId',
+			'teamName',
 			'createdAt',
 			'updatedAt'
 		]);
@@ -2842,10 +2845,10 @@ test('SoporteFlow — Etapa 5.4I-A: POST /api/incidents/[id]/assign — Asignaci
 			url: `http://localhost/api/incidents/${inc.id}/assign?organizationId=${orgA.id}`,
 			params: { id: inc.id },
 			headers: { cookie: sessionTech1.cookieHeader },
-			body: { assignedToUserId: userTech1.id, teamId: randomUUID() }
+			body: { assignedToUserId: userTech1.id, unknownProperty: randomUUID() }
 		});
 		assert.equal(res.status, 400);
-		assert.ok(res.json.error.message.includes('teamId'));
+		assert.ok(res.json.error.message.includes('unknownProperty'));
 	});
 
 	// 6. 404 si la incidencia no existe o pertenece a otro tenant

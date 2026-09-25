@@ -68,8 +68,8 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
-	// 4. Validate allowed keys: only assignedToUserId and optional reason are accepted
-	const allowedKeys = new Set(['assignedToUserId', 'reason']);
+	// 4. Validate allowed keys: teamId, assignedToUserId, and optional reason
+	const allowedKeys = new Set(['teamId', 'assignedToUserId', 'reason']);
 	const bodyKeys = Object.keys(body);
 
 	for (const key of bodyKeys) {
@@ -86,20 +86,49 @@ export const POST: RequestHandler = async (event) => {
 		}
 	}
 
-	// 5. Validate assignedToUserId
-	if (typeof body.assignedToUserId !== 'string' || !isValidUuid(body.assignedToUserId)) {
+	if (body.teamId === undefined && body.assignedToUserId === undefined) {
 		return json(
 			{
 				error: {
 					code: 'INVALID_INPUT',
-					message: 'assignedToUserId must be a valid UUID.'
+					message: 'At least teamId or assignedToUserId must be provided.'
 				}
 			},
 			{ status: 400 }
 		);
 	}
 
-	// 6. Validate reason type if provided
+	// 5. Validate teamId if provided
+	if (body.teamId !== undefined && body.teamId !== null) {
+		if (typeof body.teamId !== 'string' || !isValidUuid(body.teamId)) {
+			return json(
+				{
+					error: {
+						code: 'INVALID_INPUT',
+						message: 'teamId must be a valid UUID.'
+					}
+				},
+				{ status: 400 }
+			);
+		}
+	}
+
+	// 6. Validate assignedToUserId if provided
+	if (body.assignedToUserId !== undefined && body.assignedToUserId !== null) {
+		if (typeof body.assignedToUserId !== 'string' || !isValidUuid(body.assignedToUserId)) {
+			return json(
+				{
+					error: {
+						code: 'INVALID_INPUT',
+						message: 'assignedToUserId must be a valid UUID.'
+					}
+				},
+				{ status: 400 }
+			);
+		}
+	}
+
+	// 7. Validate reason type if provided
 	if (body.reason !== undefined && typeof body.reason !== 'string') {
 		return json(
 			{
@@ -112,7 +141,7 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
-	// 7. Authenticate
+	// 8. Authenticate
 	const principal = await resolvePrincipal(event.request.headers);
 	if (!principal) {
 		return json(
@@ -126,7 +155,7 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
-	// 8. Authorize with incidents:assign
+	// 9. Authorize with incidents:assign
 	const authorized = await authorizeAction(event.request.headers, {
 		organizationId,
 		permissionId: 'incidents:assign'
@@ -143,14 +172,15 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
-	// 9. Execute assignIncidentRecord
+	// 10. Execute assignIncidentRecord
 	try {
 		const result = await assignIncidentRecord(
 			db,
 			{ organizationId, actorUserId: principal.userId },
 			incidentId,
 			{
-				assignedToUserId: body.assignedToUserId,
+				teamId: body.teamId as string | null | undefined,
+				assignedToUserId: body.assignedToUserId as string | null | undefined,
 				reason: body.reason as string | undefined
 			}
 		);

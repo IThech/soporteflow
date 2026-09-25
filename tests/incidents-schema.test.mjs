@@ -649,4 +649,72 @@ test('SoporteFlow — Etapa 3: validación de esquema relacional de incidencias 
 			);
 		}
 	);
+
+	await t.test(
+		'3.L Validación de team_id: nullable, FK multi-tenant hacia teams, ON DELETE RESTRICT e índice',
+		async () => {
+			// Crear equipos en orgA y orgB
+			const [teamA] = await db
+				.insert(s.teams)
+				.values({ organizationId: orgA.id, name: 'Equipo Redes A' })
+				.returning();
+			const [teamB] = await db
+				.insert(s.teams)
+				.values({ organizationId: orgB.id, name: 'Equipo Sistemas B' })
+				.returning();
+
+			// 1. Inserción con teamId = null es válida
+			const [incNullTeam] = await db
+				.insert(s.incidents)
+				.values({
+					organizationId: orgA.id,
+					incidentNumber: 2001,
+					title: 'Incidencia sin equipo',
+					description: 'Prueba teamId null',
+					client: 'Cliente A',
+					createdByUserId: userCreatorA.id,
+					teamId: null
+				})
+				.returning();
+			assert.equal(incNullTeam.teamId, null);
+
+			// 2. Inserción con equipo de la misma organización es válida
+			const [incWithTeam] = await db
+				.insert(s.incidents)
+				.values({
+					organizationId: orgA.id,
+					incidentNumber: 2002,
+					title: 'Incidencia con equipo orgA',
+					description: 'Prueba teamId orgA',
+					client: 'Cliente A',
+					createdByUserId: userCreatorA.id,
+					teamId: teamA.id
+				})
+				.returning();
+			assert.equal(incWithTeam.teamId, teamA.id);
+
+			// 3. Rechazo de equipo de otra organización (cross-tenant FK)
+			await rejected(
+				db.insert(s.incidents).values({
+					organizationId: orgA.id,
+					incidentNumber: 2003,
+					title: 'Cross tenant team assignment',
+					description: 'Prueba cross-tenant team',
+					client: 'Cliente A',
+					createdByUserId: userCreatorA.id,
+					teamId: teamB.id
+				}),
+				'23503'
+			);
+
+			// 4. ON DELETE RESTRICT: no se puede borrar el equipo si tiene incidencias asociadas
+			await rejected(db.delete(s.teams).where(eq(s.teams.id, teamA.id)), ['23001', '23503']);
+
+			// 5. Verificar existencia del índice compuesto incidents_org_team_idx
+			const indexRes = await pg.query(
+				`SELECT indexname FROM pg_indexes WHERE tablename = 'incidents' AND indexname = 'incidents_org_team_idx';`
+			);
+			assert.equal(indexRes.rows.length, 1);
+		}
+	);
 });

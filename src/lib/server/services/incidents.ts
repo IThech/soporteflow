@@ -8,9 +8,12 @@ import {
 	memberships,
 	users,
 	sites,
+	teams,
+	teamMemberships,
 	roles,
 	roleAssignments
 } from '../db/schema';
+export { getActiveTeams } from './teams';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type IncidentDatabase = PgDatabase<any, any>;
@@ -79,10 +82,12 @@ export interface ListIncidentsFilters {
 	priority?: IncidentPriority;
 	siteId?: string | null;
 	queue?: IncidentQueue;
+	teamId?: string | null;
 }
 
 export type IncidentDetailRecord = IncidentRecord & {
 	assignedToUserName: string | null;
+	teamName?: string | null;
 };
 
 export interface IncidentDetail {
@@ -396,6 +401,17 @@ export async function listIncidents(
 		}
 	}
 
+	if (filters?.teamId !== undefined) {
+		if (filters.teamId === null) {
+			conditions.push(isNull(incidents.teamId));
+		} else {
+			if (!isValidUuid(filters.teamId)) {
+				throw new IncidentServiceError('INVALID_INPUT', 'teamId filter must be a valid UUID');
+			}
+			conditions.push(eq(incidents.teamId, filters.teamId));
+		}
+	}
+
 	return await db
 		.select()
 		.from(incidents)
@@ -436,12 +452,15 @@ export async function getIncidentById(
 			createdByUserId: incidents.createdByUserId,
 			siteId: incidents.siteId,
 			assignedToUserId: incidents.assignedToUserId,
+			teamId: incidents.teamId,
 			createdAt: incidents.createdAt,
 			updatedAt: incidents.updatedAt,
-			assignedToUserName: users.name
+			assignedToUserName: users.name,
+			teamName: teams.name
 		})
 		.from(incidents)
 		.leftJoin(users, eq(users.id, incidents.assignedToUserId))
+		.leftJoin(teams, eq(teams.id, incidents.teamId))
 		.where(and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId)))
 		.limit(1);
 
@@ -702,16 +721,77 @@ export interface AssignableTechnician {
 }
 
 /**
- * Retrieves eligible assignable technicians and organization admins for the organization.
+ * Retrieves eligible assignable technicians and organization admins for the organization,
+ * optionally filtered to members of a specific team.
  * Filters for active memberships, active user accounts, and operational roles.
+ * If teamId is specified, also validates that team is active and belongs to org,
+ * and user has an active membership in that team.
  * Returns deterministic list sorted by name ASC, id ASC.
  */
 export async function getAssignableTechnicians(
 	db: IncidentDatabase,
-	organizationId: string
+	organizationId: string,
+	teamId?: string | null
 ): Promise<AssignableTechnician[]> {
 	if (!isValidUuid(organizationId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
+	}
+
+	if (teamId !== undefined && teamId !== null) {
+		if (!isValidUuid(teamId)) {
+			throw new IncidentServiceError('INVALID_INPUT', 'teamId must be a valid UUID');
+		}
+
+		// Verify target team exists in org and is active
+		const [targetTeam] = await db
+			.select({ id: teams.id, active: teams.active })
+			.from(teams)
+			.where(and(eq(teams.id, teamId), eq(teams.organizationId, organizationId)))
+			.limit(1);
+
+		if (!targetTeam || !targetTeam.active) {
+			return [];
+		}
+
+		const rows = await db
+			.selectDistinct({
+				id: users.id,
+				name: users.name
+			})
+			.from(users)
+			.innerJoin(memberships, eq(memberships.userId, users.id))
+			.innerJoin(
+				roleAssignments,
+				and(
+					eq(roleAssignments.membershipId, memberships.id),
+					eq(roleAssignments.organizationId, organizationId)
+				)
+			)
+			.innerJoin(
+				roles,
+				and(eq(roles.id, roleAssignments.roleId), eq(roles.organizationId, organizationId))
+			)
+			.innerJoin(
+				teamMemberships,
+				and(
+					eq(teamMemberships.membershipId, memberships.id),
+					eq(teamMemberships.organizationId, organizationId),
+					eq(teamMemberships.teamId, teamId),
+					eq(teamMemberships.active, true)
+				)
+			)
+			.where(
+				and(
+					eq(memberships.organizationId, organizationId),
+					eq(memberships.active, true),
+					eq(users.active, true),
+					eq(roles.active, true),
+					sql`lower(${roles.code}) IN ('technician', 'organization_admin')`
+				)
+			)
+			.orderBy(asc(users.name), asc(users.id));
+
+		return rows;
 	}
 
 	const rows = await db
@@ -752,7 +832,8 @@ export interface AssignIncidentContext {
 }
 
 export interface AssignIncidentInput {
-	readonly assignedToUserId: string;
+	readonly teamId?: string | null;
+	readonly assignedToUserId?: string | null;
 	readonly reason?: string;
 }
 
@@ -762,13 +843,16 @@ export interface AssignIncidentResult {
 }
 
 /**
- * Assigns or reassigns an incident to a designated technician within the tenant.
+ * Assigns or reassigns an incident to a designated team and/or technician within the tenant.
  * Operates in a single atomic transaction:
  * - Validates operational organization and actor permissions.
- * - Validates target assignee is an active technician/organization_admin of the organization.
- * - If assignee is unchanged, returns current incident as a no-op (no history, no updatedAt change).
- * - If already assigned to another technician, requires non-empty reason and records 'reassigned' audit event.
- * - If unassigned, sets assignee, records 'assigned' audit event with null reason.
+ * - If teamId is specified, validates team is active and belongs to the organization.
+ * - If assignedToUserId is specified, validates target assignee is an active technician/organization_admin.
+ * - If both teamId and assignedToUserId are present, validates active team membership.
+ * - If changing team without specifying a technician, auto-clears assignee if incompatible with new team.
+ * - If target team and assignee are unchanged, returns current incident as a no-op (no history, no updatedAt change).
+ * - If already assigned to another team or technician, requires non-empty reason and records 'reassigned' audit event.
+ * - If completely unassigned (no team, no technician), reason is optional and records 'assigned' audit event.
  */
 export async function assignIncidentRecord(
 	dbOrTx: IncidentDatabase,
@@ -786,8 +870,21 @@ export async function assignIncidentRecord(
 	if (!isValidUuid(incidentId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'incidentId must be a valid UUID');
 	}
-	if (!isValidUuid(input?.assignedToUserId)) {
+	if (input?.teamId !== undefined && input.teamId !== null && !isValidUuid(input.teamId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'teamId must be a valid UUID');
+	}
+	if (
+		input?.assignedToUserId !== undefined &&
+		input.assignedToUserId !== null &&
+		!isValidUuid(input.assignedToUserId)
+	) {
 		throw new IncidentServiceError('INVALID_INPUT', 'assignedToUserId must be a valid UUID');
+	}
+	if (input?.teamId === undefined && input?.assignedToUserId === undefined) {
+		throw new IncidentServiceError(
+			'INVALID_INPUT',
+			'At least teamId or assignedToUserId must be provided'
+		);
 	}
 
 	const execute = async (tx: IncidentDatabase): Promise<AssignIncidentResult> => {
@@ -856,54 +953,138 @@ export async function assignIncidentRecord(
 			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
 		}
 
-		// D. Validate target assignee: user active, membership active, role technician or organization_admin
-		const [assigneeRecord] = await tx
-			.select({
-				id: users.id,
-				name: users.name
-			})
-			.from(users)
-			.innerJoin(memberships, eq(memberships.userId, users.id))
-			.innerJoin(
-				roleAssignments,
-				and(
-					eq(roleAssignments.membershipId, memberships.id),
-					eq(roleAssignments.organizationId, context.organizationId)
-				)
-			)
-			.innerJoin(
-				roles,
-				and(eq(roles.id, roleAssignments.roleId), eq(roles.organizationId, context.organizationId))
-			)
-			.where(
-				and(
-					eq(users.id, input.assignedToUserId),
-					eq(memberships.organizationId, context.organizationId),
-					eq(memberships.active, true),
-					eq(users.active, true),
-					eq(roles.active, true),
-					sql`lower(${roles.code}) IN ('technician', 'organization_admin')`
-				)
-			)
-			.limit(1);
+		// D. Determine target teamId and validate team if not null
+		const finalTeamId = input.teamId !== undefined ? input.teamId : currentIncident.teamId;
 
-		if (!assigneeRecord) {
-			throw new IncidentServiceError(
-				'ASSIGNEE_NOT_FOUND',
-				'Assignee user not found or not eligible in this organization'
-			);
+		if (finalTeamId !== null) {
+			const [targetTeam] = await tx
+				.select({ id: teams.id, active: teams.active })
+				.from(teams)
+				.where(and(eq(teams.id, finalTeamId), eq(teams.organizationId, context.organizationId)))
+				.limit(1);
+
+			if (!targetTeam) {
+				throw new IncidentServiceError('INVALID_INPUT', 'Team not found in this organization');
+			}
+
+			if (!targetTeam.active) {
+				throw new IncidentServiceError('INVALID_INPUT', 'Team is inactive');
+			}
 		}
 
-		// E. No-op: if assignedToUserId is unchanged, return current state without DB update or history
-		if (currentIncident.assignedToUserId === input.assignedToUserId) {
+		// E. Determine candidate assignee
+		const isExplicitAssignee = input.assignedToUserId !== undefined;
+		const candidateAssigneeId = isExplicitAssignee
+			? input.assignedToUserId
+			: currentIncident.assignedToUserId;
+
+		if (candidateAssigneeId !== null) {
+			const [assigneeRecord] = await tx
+				.select({
+					id: users.id,
+					name: users.name
+				})
+				.from(users)
+				.innerJoin(memberships, eq(memberships.userId, users.id))
+				.innerJoin(
+					roleAssignments,
+					and(
+						eq(roleAssignments.membershipId, memberships.id),
+						eq(roleAssignments.organizationId, context.organizationId)
+					)
+				)
+				.innerJoin(
+					roles,
+					and(
+						eq(roles.id, roleAssignments.roleId),
+						eq(roles.organizationId, context.organizationId)
+					)
+				)
+				.where(
+					and(
+						eq(users.id, candidateAssigneeId),
+						eq(memberships.organizationId, context.organizationId),
+						eq(memberships.active, true),
+						eq(users.active, true),
+						eq(roles.active, true),
+						sql`lower(${roles.code}) IN ('technician', 'organization_admin')`
+					)
+				)
+				.limit(1);
+
+			if (!assigneeRecord) {
+				throw new IncidentServiceError(
+					'ASSIGNEE_NOT_FOUND',
+					'Assignee user not found or not eligible in this organization'
+				);
+			}
+		}
+
+		// F. Check team membership for candidate assignee if team is designated
+		let isMemberOfFinalTeam = false;
+		if (finalTeamId !== null && candidateAssigneeId !== null) {
+			const [membershipRow] = await tx
+				.select({ id: teamMemberships.id })
+				.from(teamMemberships)
+				.innerJoin(memberships, eq(memberships.id, teamMemberships.membershipId))
+				.where(
+					and(
+						eq(teamMemberships.organizationId, context.organizationId),
+						eq(teamMemberships.teamId, finalTeamId),
+						eq(teamMemberships.active, true),
+						eq(memberships.organizationId, context.organizationId),
+						eq(memberships.userId, candidateAssigneeId),
+						eq(memberships.active, true)
+					)
+				)
+				.limit(1);
+
+			isMemberOfFinalTeam = !!membershipRow;
+		}
+
+		// G. Determine finalAssigneeId based on explicit vs implicit and team compatibility
+		let finalAssigneeId: string | null;
+		if (isExplicitAssignee) {
+			if (input.assignedToUserId === null) {
+				finalAssigneeId = null;
+			} else {
+				if (finalTeamId !== null && !isMemberOfFinalTeam) {
+					throw new IncidentServiceError(
+						'INVALID_INPUT',
+						'Assignee is not an active member of the designated team'
+					);
+				}
+				finalAssigneeId = input.assignedToUserId;
+			}
+		} else {
+			if (currentIncident.assignedToUserId === null) {
+				finalAssigneeId = null;
+			} else {
+				if (finalTeamId === null) {
+					finalAssigneeId = currentIncident.assignedToUserId;
+				} else if (isMemberOfFinalTeam) {
+					finalAssigneeId = currentIncident.assignedToUserId;
+				} else {
+					// Auto-clear technician if incompatible with the new team!
+					finalAssigneeId = null;
+				}
+			}
+		}
+
+		// H. No-op handling: if both teamId and assignedToUserId are unchanged, return current state
+		if (
+			finalTeamId === currentIncident.teamId &&
+			finalAssigneeId === currentIncident.assignedToUserId
+		) {
 			return { incident: currentIncident };
 		}
 
-		// F. Check reassignment vs initial assignment
-		const isReassignment = currentIncident.assignedToUserId !== null;
-		let cleanReason: string | null = null;
+		// I. Validate reason: required on any reassignment; optional on first assignment from completely unassigned
+		const wasCompletelyUnassigned =
+			currentIncident.teamId === null && currentIncident.assignedToUserId === null;
 
-		if (isReassignment) {
+		let cleanReason: string | null = null;
+		if (!wasCompletelyUnassigned) {
 			if (typeof input.reason !== 'string' || input.reason.trim().length === 0) {
 				throw new IncidentServiceError(
 					'INVALID_INPUT',
@@ -911,13 +1092,16 @@ export async function assignIncidentRecord(
 				);
 			}
 			cleanReason = input.reason.trim();
+		} else if (typeof input.reason === 'string' && input.reason.trim().length > 0) {
+			cleanReason = input.reason.trim();
 		}
 
-		// G. Update incident record
+		// J. Update incident record
 		const [updatedIncident] = await tx
 			.update(incidents)
 			.set({
-				assignedToUserId: input.assignedToUserId,
+				teamId: finalTeamId,
+				assignedToUserId: finalAssigneeId,
 				updatedAt: new Date()
 			})
 			.where(
@@ -925,8 +1109,8 @@ export async function assignIncidentRecord(
 			)
 			.returning();
 
-		// H. Insert audit history event
-		const eventType = isReassignment ? 'reassigned' : 'assigned';
+		// K. Insert audit history event
+		const eventType = wasCompletelyUnassigned ? 'assigned' : 'reassigned';
 		const [historyRecord] = await tx
 			.insert(incidentHistory)
 			.values({
@@ -938,8 +1122,10 @@ export async function assignIncidentRecord(
 				reason: cleanReason,
 				comment: null,
 				payload: {
+					previousTeamId: currentIncident.teamId,
+					newTeamId: finalTeamId,
 					previousAssigneeUserId: currentIncident.assignedToUserId,
-					newAssigneeUserId: input.assignedToUserId
+					newAssigneeUserId: finalAssigneeId
 				}
 			})
 			.returning();

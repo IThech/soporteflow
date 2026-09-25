@@ -2,7 +2,8 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
-import { getAssignableTechnicians, IncidentServiceError } from '$lib/server/services/incidents';
+import { getActiveTeams } from '$lib/server/services/teams';
+import { IncidentServiceError } from '$lib/server/services/incidents';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -11,9 +12,8 @@ function isValidUuid(value: unknown): value is string {
 }
 
 export const GET: RequestHandler = async (event) => {
-	// 1. Read organizationId and optional teamId from query string
+	// 1. Read organizationId from query string
 	const organizationId = event.url.searchParams.get('organizationId');
-	const teamId = event.url.searchParams.get('teamId');
 
 	// 2. Validate organizationId as UUID
 	if (!isValidUuid(organizationId)) {
@@ -22,18 +22,6 @@ export const GET: RequestHandler = async (event) => {
 				error: {
 					code: 'INVALID_INPUT',
 					message: 'organizationId must be a valid UUID.'
-				}
-			},
-			{ status: 400 }
-		);
-	}
-
-	if (teamId !== null && !isValidUuid(teamId)) {
-		return json(
-			{
-				error: {
-					code: 'INVALID_INPUT',
-					message: 'teamId must be a valid UUID.'
 				}
 			},
 			{ status: 400 }
@@ -71,13 +59,13 @@ export const GET: RequestHandler = async (event) => {
 		);
 	}
 
-	// 5. Execute getAssignableTechnicians
+	// 5. Execute getActiveTeams
 	try {
-		const assignees = await getAssignableTechnicians(db, organizationId, teamId);
+		const teams = await getActiveTeams(db, organizationId);
 
 		return json(
 			{
-				assignees
+				teams
 			},
 			{ status: 200 }
 		);

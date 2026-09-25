@@ -271,6 +271,15 @@ export const GET: RequestHandler = async (event) => {
 		filters.siteId = siteIdParam;
 	}
 
+	const teamIdParam = event.url.searchParams.get('teamId');
+	if (teamIdParam !== null) {
+		if (teamIdParam === 'none' || teamIdParam === 'null') {
+			filters.teamId = null;
+		} else {
+			filters.teamId = teamIdParam;
+		}
+	}
+
 	// 7. Execute listIncidents
 	try {
 		const incidents = await listIncidents(

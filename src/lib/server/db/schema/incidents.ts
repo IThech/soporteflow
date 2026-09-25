@@ -13,7 +13,7 @@ import {
 	varchar
 } from 'drizzle-orm/pg-core';
 import { organizations, memberships } from './identity';
-import { sites } from './structure';
+import { sites, teams } from './structure';
 
 /**
  * Sequential incident number counters per organization.
@@ -50,6 +50,7 @@ export const incidents = pgTable(
 		createdByUserId: uuid('created_by_user_id').notNull(),
 		siteId: uuid('site_id'),
 		assignedToUserId: uuid('assigned_to_user_id'),
+		teamId: uuid('team_id'),
 		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
 	},
@@ -76,6 +77,11 @@ export const incidents = pgTable(
 			columns: [table.siteId, table.organizationId],
 			foreignColumns: [sites.id, sites.organizationId]
 		}).onDelete('restrict'),
+		foreignKey({
+			name: 'incidents_team_org_fk',
+			columns: [table.teamId, table.organizationId],
+			foreignColumns: [teams.id, teams.organizationId]
+		}).onDelete('restrict'),
 		check('incidents_title_check', sql`btrim(${table.title}) <> ''`),
 		check('incidents_client_check', sql`btrim(${table.client}) <> ''`),
 		check('incidents_description_check', sql`btrim(${table.description}) <> ''`),
@@ -88,7 +94,8 @@ export const incidents = pgTable(
 			sql`${table.priority} IN ('low', 'medium', 'high', 'urgent')`
 		),
 		index('incidents_org_status_idx').on(table.organizationId, table.status, table.createdAt),
-		index('incidents_org_site_idx').on(table.organizationId, table.siteId)
+		index('incidents_org_site_idx').on(table.organizationId, table.siteId),
+		index('incidents_org_team_idx').on(table.organizationId, table.teamId)
 	]
 );
 
