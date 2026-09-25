@@ -425,22 +425,24 @@ test('SoporteFlow Core v1 — Infraestructura Relacional e Integridad Multiempre
 				// 5.4Q-B: both ids are canonical and already seeded by migration 0011
 				.onConflictDoNothing();
 
-			// 7.2 Create role template (blueprint without organization_id)
+			// 7.2 Create role template (blueprint without organization_id).
+			// 5.4Q-C: tpl_technician is now canonical and seeded by migration 0012, so this structural
+			// check uses its own example template.
 			const [tpl] = await db
 				.insert(schema.roleTemplates)
 				.values({
-					id: 'tpl_technician',
-					code: 'technician',
+					id: 'tpl_test_technician',
+					code: 'test_technician',
 					name: 'Técnico de Soporte',
 					description: 'Plantilla base para técnicos de soporte'
 				})
 				.returning();
-			assert.equal(tpl.id, 'tpl_technician');
+			assert.equal(tpl.id, 'tpl_test_technician');
 
 			// Associate permissions to template
 			await db.insert(schema.roleTemplatePermissions).values([
-				{ roleTemplateId: 'tpl_technician', permissionId: 'incidents:view_all' },
-				{ roleTemplateId: 'tpl_technician', permissionId: 'incidents:edit' }
+				{ roleTemplateId: 'tpl_test_technician', permissionId: 'incidents:view_all' },
+				{ roleTemplateId: 'tpl_test_technician', permissionId: 'incidents:edit' }
 			]);
 
 			// 7.3 Instantiate role in Org 1 from template
@@ -452,12 +454,12 @@ test('SoporteFlow Core v1 — Infraestructura Relacional e Integridad Multiempre
 					organizationId: org1Id,
 					name: 'Técnico Nodhouses',
 					code: 'technician',
-					templateId: 'tpl_technician',
+					templateId: 'tpl_test_technician',
 					isCustom: false
 				})
 				.returning();
 			assert.equal(roleOrg1.organizationId, org1Id);
-			assert.equal(roleOrg1.templateId, 'tpl_technician');
+			assert.equal(roleOrg1.templateId, 'tpl_test_technician');
 
 			// Grant permissions to organizational role
 			await db.insert(schema.rolePermissions).values([

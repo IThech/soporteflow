@@ -85,6 +85,13 @@
 			"when": 1790356746305,
 			"tag": "0011_permissions_catalog",
 			"breakpoints": true
+		},
+		{
+			"idx": 12,
+			"version": "7",
+			"when": 1790357755355,
+			"tag": "0012_role_templates",
+			"breakpoints": true
 		}
 	]
 }

@@ -143,13 +143,8 @@ test('SoporteFlow — Etapa 5.4Q-B: catálogo canónico de permisos', async (t) 
 						}))
 						.sort((a, b) => (a.id < b.id ? -1 : 1))
 				);
-				for (const table of [
-					'roles',
-					'role_permissions',
-					'role_assignments',
-					'role_templates',
-					'role_template_permissions'
-				]) {
+				// 5.4Q-C: 0012 seeds role_templates; with no organizations there are no tenant roles.
+				for (const table of ['roles', 'role_permissions', 'role_assignments']) {
 					const { rows: count } = await clean.query(`SELECT count(*)::int AS n FROM ${table}`);
 					assert.equal(count[0].n, 0, `${table} sigue vacía (sin roles base ni grants)`);
 				}

@@ -21,7 +21,8 @@ export const expectedMigrations = [
 	'0008_smooth_james_howlett.sql',
 	'0009_lumpy_hellion.sql',
 	'0010_odd_angel.sql',
-	'0011_permissions_catalog.sql'
+	'0011_permissions_catalog.sql',
+	'0012_role_templates.sql'
 ];
 
 export const TEST_SECRET = 'synthetic-phase-b-only-secret-123456789';
