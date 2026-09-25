@@ -137,8 +137,14 @@ function validateBody(body: unknown): string {
 			`body must not exceed ${MESSAGE_MAX_LENGTH} characters`
 		);
 	}
+	// PostgreSQL text rejects NUL (would surface as a 500) and the driver silently replaces
+	// lone surrogates with U+FFFD, altering the stored text.
+	if (text.includes('\u0000') || LONE_SURROGATE.test(text)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'body contains invalid characters');
+	}
 	return text;
 }
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
 type AppendContext = CreateInternalNoteContext & { readonly assignedToUserId?: string };
 

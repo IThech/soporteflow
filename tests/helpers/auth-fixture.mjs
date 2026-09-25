@@ -74,6 +74,9 @@ export async function fixture(t, migrate = true) {
 									const instance = getDb();
 									const val = Reflect.get(instance, prop, receiver);
 									return typeof val === 'function' ? val.bind(instance) : val;
+								},
+								has(_target, prop) {
+									return Reflect.has(getDb(), prop);
 								}
 							});
 							export class DatabaseConfigurationError extends Error {

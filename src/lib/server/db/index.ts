@@ -48,12 +48,17 @@ export function getDb(): PostgresJsDatabase<typeof schema> {
 /**
  * Server database proxy.
  * Calls getDb() upon execution, ensuring lazy initialization and proper error propagation.
+ * The `has` trap is required: services detect transaction support with `'transaction' in db`,
+ * which would otherwise inspect the empty target and silently skip the transaction.
  */
 export const db = new Proxy({} as PostgresJsDatabase<typeof schema>, {
 	get(_target, prop, receiver) {
 		const instance = getDb();
 		const value = Reflect.get(instance, prop, receiver);
 		return typeof value === 'function' ? value.bind(instance) : value;
+	},
+	has(_target, prop) {
+		return Reflect.has(getDb(), prop);
 	}
 });
 
