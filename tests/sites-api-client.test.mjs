@@ -317,6 +317,8 @@ test('SoporteFlow — Etapa 5.4O-C: cliente API de sedes', async (t) => {
 			[404, 'INCIDENT_NOT_FOUND', 'NOT_FOUND'],
 			[404, 'SITE_NOT_FOUND', 'SITE_NOT_FOUND'],
 			[409, 'SITE_INACTIVE', 'SITE_INACTIVE'],
+			[409, 'INCIDENT_CLOSED', 'INCIDENT_CLOSED'],
+			[409, 'OTHER', 'CONFLICT'],
 			[500, 'INTERNAL_ERROR', 'SERVER_ERROR']
 		]) {
 			const { fetchFn } = mockFetch(() => json({ error: { code, message: 'SQL secret' } }, status));

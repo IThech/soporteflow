@@ -15,8 +15,21 @@ export interface IncidentListItem {
 	assignedToUserName?: string | null;
 	teamId?: string | null;
 	teamName?: string | null;
+	/** Core category id (5.4P). Names are resolved from the categories catalog client-side. */
+	categoryId: string | null;
 	createdAt: string;
 	updatedAt: string;
+}
+
+const CATEGORY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** categoryId in incident payloads: absent (legacy) or null -> null; otherwise a UUID. */
+function isValidIncidentCategoryId(value: unknown): boolean {
+	return (
+		value === undefined ||
+		value === null ||
+		(typeof value === 'string' && CATEGORY_UUID.test(value))
+	);
 }
 
 export class IncidentApiError extends Error {
@@ -40,6 +53,8 @@ export interface ListIncidentsOptions {
 	priority?: 'low' | 'medium' | 'high' | 'urgent';
 	siteId?: string;
 	supportLevel?: SupportLevel;
+	/** Filters by Core category id (UUID); the category may be inactive. */
+	categoryId?: string;
 	signal?: AbortSignal;
 	customFetch?: typeof fetch;
 }
@@ -68,6 +83,12 @@ export async function listIncidents(
 	}
 	if (options?.supportLevel) {
 		url += `&supportLevel=${encodeURIComponent(options.supportLevel)}`;
+	}
+	if (options?.categoryId !== undefined) {
+		if (typeof options.categoryId !== 'string' || !CATEGORY_UUID.test(options.categoryId)) {
+			throw new IncidentApiError(0, 'INVALID_INPUT', 'El filtro de categoría no es válido.');
+		}
+		url += `&categoryId=${encodeURIComponent(options.categoryId)}`;
 	}
 
 	let res: Response;
@@ -163,12 +184,15 @@ export async function listIncidents(
 				'No se pudo interpretar la respuesta del servidor.'
 			);
 		}
-		if (item.organizationId !== organizationId) {
+		if (item.organizationId !== organizationId || !isValidIncidentCategoryId(item.categoryId)) {
 			throw new IncidentApiError(
 				res.status,
 				'INVALID_PAYLOAD',
 				'No se pudo interpretar la respuesta del servidor.'
 			);
+		}
+		if (item.categoryId === undefined) {
+			item.categoryId = null;
 		}
 	}
 
@@ -314,6 +338,7 @@ function parseAndValidateIncident(
 		!isValidAssignedToUserName ||
 		!isValidTeamId ||
 		!isValidTeamName ||
+		!isValidIncidentCategoryId(item.categoryId) ||
 		typeof item.createdAt !== 'string' ||
 		typeof item.updatedAt !== 'string'
 	) {
@@ -332,6 +357,9 @@ function parseAndValidateIncident(
 	}
 	if (item.teamName === undefined) {
 		item.teamName = null;
+	}
+	if (item.categoryId === undefined) {
+		item.categoryId = null;
 	}
 
 	if (item.organizationId !== expectedOrgId) {
@@ -358,6 +386,8 @@ export interface CreateIncidentInput {
 	description: string;
 	client: string;
 	priority: 'low' | 'medium' | 'high' | 'urgent';
+	/** Optional Core category (active, same organization). Omitted or null: no category. */
+	categoryId?: string | null;
 }
 
 export interface CreateIncidentOptions {
@@ -378,6 +408,22 @@ export async function createIncident(
 ): Promise<IncidentListItem> {
 	const fetchFn = options?.customFetch ?? fetch;
 	const url = '/api/incidents';
+	if (
+		input?.categoryId !== undefined &&
+		input.categoryId !== null &&
+		(typeof input.categoryId !== 'string' || !CATEGORY_UUID.test(input.categoryId))
+	) {
+		throw new IncidentApiError(0, 'INVALID_INPUT', 'La categoría seleccionada no es válida.');
+	}
+	// Explicit allowlist: the strict server contract rejects any other property.
+	const payload: Record<string, unknown> = {
+		organizationId,
+		title: input.title,
+		description: input.description,
+		client: input.client,
+		priority: input.priority
+	};
+	if (input.categoryId !== undefined) payload.categoryId = input.categoryId;
 
 	let res: Response;
 	try {
@@ -386,13 +432,7 @@ export async function createIncident(
 			headers: {
 				'Content-Type': 'application/json'
 			},
-			body: JSON.stringify({
-				organizationId,
-				title: input.title,
-				description: input.description,
-				client: input.client,
-				priority: input.priority
-			}),
+			body: JSON.stringify(payload),
 			signal: options?.signal
 		});
 	} catch (err: unknown) {
@@ -406,6 +446,14 @@ export async function createIncident(
 	}
 
 	if (!res.ok) {
+		let backendCode: unknown;
+		if (res.status === 404 || res.status === 409) {
+			try {
+				backendCode = ((await res.json()) as { error?: { code?: unknown } })?.error?.code;
+			} catch {
+				backendCode = undefined;
+			}
+		}
 		let message = 'No se pudo crear la incidencia. Inténtalo de nuevo.';
 		let code = 'INTERNAL_ERROR';
 		if (res.status === 400) {
@@ -418,8 +466,21 @@ export async function createIncident(
 			message = 'No tienes permisos para crear incidencias en esta organización.';
 			code = 'FORBIDDEN';
 		} else if (res.status === 404) {
-			message = 'No se pudo asociar la sede o el cliente especificado.';
-			code = 'NOT_FOUND';
+			if (backendCode === 'CATEGORY_NOT_FOUND') {
+				message = 'La categoría seleccionada no está disponible.';
+				code = 'CATEGORY_NOT_FOUND';
+			} else {
+				message = 'No se pudo asociar la sede o el cliente especificado.';
+				code = 'NOT_FOUND';
+			}
+		} else if (res.status === 409) {
+			if (backendCode === 'CATEGORY_INACTIVE') {
+				message = 'La categoría seleccionada está inactiva.';
+				code = 'CATEGORY_INACTIVE';
+			} else {
+				message = 'No se pudo crear la incidencia con los datos indicados.';
+				code = 'CONFLICT';
+			}
 		} else if (res.status >= 500) {
 			message = 'No se pudo crear la incidencia. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
@@ -1041,11 +1102,16 @@ export async function updateIncidentSite(
 				code = 'NOT_FOUND';
 			}
 		} else if (res.status === 409) {
-			message =
-				backendCode === 'SITE_INACTIVE'
-					? 'La sede seleccionada está inactiva.'
-					: 'No se pudo cambiar la sede. Inténtalo de nuevo.';
-			code = backendCode === 'SITE_INACTIVE' ? 'SITE_INACTIVE' : 'CONFLICT';
+			if (backendCode === 'SITE_INACTIVE') {
+				message = 'La sede seleccionada está inactiva.';
+				code = 'SITE_INACTIVE';
+			} else if (backendCode === 'INCIDENT_CLOSED') {
+				message = 'La incidencia está cerrada y no admite cambios.';
+				code = 'INCIDENT_CLOSED';
+			} else {
+				message = 'No se pudo cambiar la sede. Inténtalo de nuevo.';
+				code = 'CONFLICT';
+			}
 		} else if (res.status >= 500) {
 			code = 'SERVER_ERROR';
 		}
@@ -1076,6 +1142,139 @@ export async function updateIncidentSite(
 		res.status
 	);
 	if ((parsed.siteId ?? null) !== input.siteId) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	return parsed;
+}
+
+export interface UpdateIncidentCategoryInput {
+	/** Target category UUID, or null to remove the category. */
+	categoryId: string | null;
+	/** Required by the server when replacing or removing an existing category. */
+	reason?: string;
+}
+
+export interface UpdateIncidentCategoryOptions {
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+/**
+ * Changes or removes the category of an incident.
+ * Invokes PATCH /api/incidents/<id>/category?organizationId=<UUID> with body
+ * { categoryId, reason? }. When the reason is required is decided by the server.
+ */
+export async function updateIncidentCategory(
+	organizationId: string,
+	incidentId: string,
+	input: UpdateIncidentCategoryInput,
+	options?: UpdateIncidentCategoryOptions
+): Promise<IncidentListItem> {
+	if (
+		!CATEGORY_UUID.test(organizationId) ||
+		!CATEGORY_UUID.test(incidentId) ||
+		(input?.categoryId !== null && !CATEGORY_UUID.test(String(input?.categoryId))) ||
+		(input.reason !== undefined && typeof input.reason !== 'string')
+	) {
+		throw new IncidentApiError(
+			0,
+			'INVALID_INPUT',
+			'Los datos del cambio de categoría no son válidos.'
+		);
+	}
+	const fetchFn = options?.customFetch ?? fetch;
+	const url = `/api/incidents/${encodeURIComponent(incidentId)}/category?${new URLSearchParams({ organizationId }).toString()}`;
+	const payload: Record<string, unknown> = { categoryId: input.categoryId };
+	if (input.reason !== undefined) payload.reason = input.reason;
+
+	let res: Response;
+	try {
+		res = await fetchFn(url, {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload),
+			signal: options?.signal
+		});
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) {
+			throw err;
+		}
+		if ((err as Error)?.name === 'AbortError' || options?.signal?.aborted) {
+			throw err;
+		}
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+
+	if (!res.ok) {
+		let backendCode: unknown;
+		try {
+			backendCode = ((await res.json()) as { error?: { code?: unknown } })?.error?.code;
+		} catch {
+			backendCode = undefined;
+		}
+		let message = 'No se pudo cambiar la categoría. Inténtalo de nuevo.';
+		let code = 'INTERNAL_ERROR';
+		if (res.status === 400) {
+			message = 'Revisa la categoría seleccionada y el motivo del cambio.';
+			code = 'INVALID_INPUT';
+		} else if (res.status === 401) {
+			message = 'Tu sesión ya no es válida.';
+			code = 'UNAUTHORIZED';
+		} else if (res.status === 403) {
+			message = 'No tienes permisos para modificar la categoría de esta incidencia.';
+			code = 'FORBIDDEN';
+		} else if (res.status === 404) {
+			if (backendCode === 'CATEGORY_NOT_FOUND') {
+				message = 'La categoría seleccionada no está disponible.';
+				code = 'CATEGORY_NOT_FOUND';
+			} else {
+				message = 'La incidencia no está disponible.';
+				code = 'NOT_FOUND';
+			}
+		} else if (res.status === 409) {
+			if (backendCode === 'CATEGORY_INACTIVE') {
+				message = 'La categoría seleccionada está inactiva.';
+				code = 'CATEGORY_INACTIVE';
+			} else if (backendCode === 'INCIDENT_CLOSED') {
+				message = 'La incidencia está cerrada y no admite cambios.';
+				code = 'INCIDENT_CLOSED';
+			} else {
+				code = 'CONFLICT';
+			}
+		} else if (res.status >= 500) {
+			code = 'SERVER_ERROR';
+		}
+		throw new IncidentApiError(res.status, code, message);
+	}
+
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	const parsed = parseAndValidateIncident(
+		(data as { incident?: unknown }).incident,
+		organizationId,
+		incidentId,
+		res.status
+	);
+	if (parsed.categoryId !== input.categoryId) {
 		throw new IncidentApiError(
 			res.status,
 			'INVALID_PAYLOAD',
