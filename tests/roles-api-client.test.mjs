@@ -2,7 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { listPermissions, listRoles, getRole, RoleApiError } from '../src/lib/api/roles.ts';
+import {
+	listPermissions,
+	listRoles,
+	getRole,
+	createRole,
+	updateRole,
+	RoleApiError
+} from '../src/lib/api/roles.ts';
 import { fixture, createCredentialUser, createSession } from './helpers/auth-fixture.mjs';
 
 const ORG = randomUUID();
@@ -318,6 +325,358 @@ test('SoporteFlow — Etapa 5.4R-A: cliente API de roles', async (t) => {
 		await rejectsWith(
 			getRole({ organizationId: org.id, roleId: randomUUID(), customFetch: bridge }),
 			{ status: 404, code: 'ROLE_NOT_FOUND' }
+		);
+	});
+});
+
+test('SoporteFlow — Etapa 5.4R-B: cliente API de mutaciones de roles', async (t) => {
+	const custom = (overrides = {}) =>
+		role({
+			code: 'supervisor',
+			name: 'Supervisor',
+			templateId: null,
+			isCustom: true,
+			permissions: ['sites:view'],
+			...overrides
+		});
+	const draft = { name: 'Supervisor', code: 'supervisor', permissions: ['sites:view'] };
+
+	await t.test('42. createRole: POST, URL, JSON, signal, customFetch, sin identidad', async () => {
+		const controller = new AbortController();
+		const { fetchFn, calls } = mockFetch(json({ role: custom() }, 201));
+		const created = await createRole({
+			organizationId: ORG,
+			role: { ...draft, description: 'Supervisa' },
+			customFetch: fetchFn,
+			signal: controller.signal
+		});
+		assert.deepEqual(created, custom());
+		assert.equal(calls.length, 1);
+		assert.equal(calls[0].url, `/api/roles?organizationId=${ORG}`);
+		assert.equal(calls[0].init.method, 'POST');
+		assert.equal(calls[0].init.signal, controller.signal);
+		assert.deepEqual(calls[0].init.headers, { 'Content-Type': 'application/json' });
+		assert.deepEqual(JSON.parse(calls[0].init.body), { ...draft, description: 'Supervisa' });
+		assert.ok(!('credentials' in calls[0].init));
+	});
+
+	await t.test('43. createRole: sin description no se envía; null se envía', async () => {
+		const { fetchFn, calls } = mockFetch(() => json({ role: custom() }, 201));
+		await createRole({ organizationId: ORG, role: draft, customFetch: fetchFn });
+		assert.ok(!('description' in JSON.parse(calls[0].init.body)));
+		await createRole({
+			organizationId: ORG,
+			role: { ...draft, description: null },
+			customFetch: fetchFn
+		});
+		assert.equal(JSON.parse(calls[1].init.body).description, null);
+	});
+
+	await t.test('44. createRole: entrada inválida no llama a fetch', async () => {
+		const { fetchFn, calls } = mockFetch(json({ role: custom() }, 201));
+		for (const input of [
+			{ organizationId: 'nope', role: draft },
+			{ organizationId: ORG },
+			{ organizationId: ORG, role: { ...draft, code: 'Bad Code' } },
+			{ organizationId: ORG, role: { ...draft, name: ' ' } },
+			{ organizationId: ORG, role: { ...draft, permissions: ['sites:view', 'sites:view'] } },
+			{ organizationId: ORG, role: { ...draft, permissions: 'sites:view' } },
+			{ organizationId: ORG, role: { ...draft, description: 3 } }
+		])
+			await rejectsWith(createRole({ ...input, customFetch: fetchFn }), {
+				status: 0,
+				code: 'INVALID_INPUT'
+			});
+		assert.equal(calls.length, 0);
+	});
+
+	await t.test(
+		'45. createRole: no 201, payload inválido o code distinto -> INVALID_PAYLOAD',
+		async () => {
+			for (const response of [
+				json({ role: custom() }, 200),
+				json({ role: { ...custom(), permissions: 'x' } }, 201),
+				json({ role: custom({ code: 'otro' }) }, 201),
+				json({}, 201),
+				new Response('not json', { status: 201 })
+			])
+				await rejectsWith(
+					createRole({ organizationId: ORG, role: draft, customFetch: async () => response }),
+					{ code: 'INVALID_PAYLOAD' }
+				);
+		}
+	);
+
+	await t.test('46. createRole: campos extra del backend se descartan', async () => {
+		const created = await createRole({
+			organizationId: ORG,
+			role: draft,
+			customFetch: async () =>
+				json({ role: { ...custom(), organizationId: ORG, assignments: [], secret: 'x' } }, 201)
+		});
+		assert.deepEqual(Object.keys(created).sort(), Object.keys(custom()).sort());
+	});
+
+	await t.test('47. updateRole: PATCH, URL, cuerpo sólo con campos definidos', async () => {
+		const { fetchFn, calls } = mockFetch(json({ role: custom({ name: 'Nuevo' }) }));
+		const updated = await updateRole({
+			organizationId: ORG,
+			roleId: ROLE,
+			patch: { name: 'Nuevo', description: undefined, active: false },
+			customFetch: fetchFn
+		});
+		assert.equal(updated.name, 'Nuevo');
+		assert.equal(calls[0].url, `/api/roles/${ROLE}?organizationId=${ORG}`);
+		assert.equal(calls[0].init.method, 'PATCH');
+		assert.deepEqual(calls[0].init.headers, { 'Content-Type': 'application/json' });
+		assert.deepEqual(JSON.parse(calls[0].init.body), { name: 'Nuevo', active: false });
+	});
+
+	await t.test('48. updateRole: permissions [] y description null viajan tal cual', async () => {
+		const { fetchFn, calls } = mockFetch(json({ role: custom() }));
+		await updateRole({
+			organizationId: ORG,
+			roleId: ROLE,
+			patch: { permissions: [], description: null },
+			customFetch: fetchFn
+		});
+		assert.deepEqual(JSON.parse(calls[0].init.body), { permissions: [], description: null });
+	});
+
+	await t.test(
+		'49. updateRole: patch vacío, code, desconocidos o inválidos no llaman a fetch',
+		async () => {
+			const { fetchFn, calls } = mockFetch(json({ role: custom() }));
+			for (const input of [
+				{ organizationId: ORG, roleId: ROLE, patch: {} },
+				{ organizationId: ORG, roleId: ROLE, patch: { name: undefined } },
+				{ organizationId: ORG, roleId: ROLE },
+				{ organizationId: ORG, roleId: ROLE, patch: [] },
+				{ organizationId: ORG, roleId: ROLE, patch: { code: 'otro' } },
+				{ organizationId: ORG, roleId: ROLE, patch: { extra: 1 } },
+				{ organizationId: ORG, roleId: ROLE, patch: { active: 'false' } },
+				{ organizationId: ORG, roleId: ROLE, patch: { name: '' } },
+				{ organizationId: ORG, roleId: ROLE, patch: { permissions: ['bad'] } },
+				{ organizationId: ORG, roleId: 'nope', patch: { name: 'X' } },
+				{ organizationId: 'nope', roleId: ROLE, patch: { name: 'X' } }
+			])
+				await rejectsWith(updateRole({ ...input, customFetch: fetchFn }), {
+					status: 0,
+					code: 'INVALID_INPUT'
+				});
+			assert.equal(calls.length, 0);
+		}
+	);
+
+	await t.test('50. updateRole: id devuelto distinto -> INVALID_PAYLOAD', async () => {
+		await rejectsWith(
+			updateRole({
+				organizationId: ORG,
+				roleId: ROLE,
+				patch: { name: 'X' },
+				customFetch: async () => json({ role: custom({ id: randomUUID() }) })
+			}),
+			{ code: 'INVALID_PAYLOAD' }
+		);
+	});
+
+	await t.test('51. 409 tipados y genérico, sin eco del mensaje backend', async () => {
+		const backend = (code) => async () =>
+			json({ error: { code, message: 'SQL: duplicate key roles_org_code_unique' } }, 409);
+		const cases = [
+			['ROLE_CODE_CONFLICT', 'ROLE_CODE_CONFLICT'],
+			['SYSTEM_ROLE_IMMUTABLE', 'SYSTEM_ROLE_IMMUTABLE'],
+			['ROLE_HAS_UNKNOWN_PERMISSIONS', 'ROLE_HAS_UNKNOWN_PERMISSIONS'],
+			['WHATEVER', 'CONFLICT']
+		];
+		for (const [backendCode, expected] of cases) {
+			await assert.rejects(
+				updateRole({
+					organizationId: ORG,
+					roleId: ROLE,
+					patch: { name: 'X' },
+					customFetch: backend(backendCode)
+				}),
+				(error) => {
+					assert.equal(error.status, 409);
+					assert.equal(error.code, expected);
+					assert.ok(!error.message.includes('SQL'));
+					return true;
+				}
+			);
+		}
+		await rejectsWith(
+			createRole({ organizationId: ORG, role: draft, customFetch: backend('ROLE_CODE_CONFLICT') }),
+			{ status: 409, code: 'ROLE_CODE_CONFLICT' }
+		);
+	});
+
+	await t.test('52. 403: PERMISSION_NOT_DELEGABLE vs FORBIDDEN de gestión', async () => {
+		const res = (code) => async () => json({ error: { code, message: 'x' } }, 403);
+		await rejectsWith(
+			createRole({
+				organizationId: ORG,
+				role: draft,
+				customFetch: res('PERMISSION_NOT_DELEGABLE')
+			}),
+			{ status: 403, code: 'PERMISSION_NOT_DELEGABLE' }
+		);
+		await assert.rejects(
+			updateRole({
+				organizationId: ORG,
+				roleId: ROLE,
+				patch: { active: true },
+				customFetch: res('FORBIDDEN')
+			}),
+			(error) => error.code === 'FORBIDDEN' && error.message.includes('gestionar')
+		);
+	});
+
+	await t.test('53. 400, 401, 404 ROLE_NOT_FOUND y 5xx con mensajes fijos', async () => {
+		const res = (status, code) => async () => json({ error: { code, message: 'leak' } }, status);
+		const update = (customFetch) =>
+			updateRole({ organizationId: ORG, roleId: ROLE, patch: { name: 'X' }, customFetch });
+		await rejectsWith(update(res(400, 'INVALID_INPUT')), { status: 400, code: 'INVALID_INPUT' });
+		await rejectsWith(update(res(401, 'UNAUTHORIZED')), { status: 401, code: 'UNAUTHORIZED' });
+		await rejectsWith(update(res(404, 'ROLE_NOT_FOUND')), {
+			status: 404,
+			code: 'ROLE_NOT_FOUND'
+		});
+		await assert.rejects(update(res(500, 'INTERNAL_ERROR')), (error) => {
+			assert.equal(error.code, 'SERVER_ERROR');
+			assert.equal(error.message, 'No se pudo actualizar el rol. Inténtalo de nuevo.');
+			return true;
+		});
+		await assert.rejects(
+			createRole({ organizationId: ORG, role: draft, customFetch: res(503, 'X') }),
+			(error) => error.message === 'No se pudo crear el rol. Inténtalo de nuevo.'
+		);
+	});
+
+	await t.test('54. AbortError se propaga; fallo de red -> NETWORK_ERROR', async () => {
+		const controller = new AbortController();
+		controller.abort();
+		const abort = async () => {
+			throw new DOMException('aborted', 'AbortError');
+		};
+		await assert.rejects(
+			createRole({
+				organizationId: ORG,
+				role: draft,
+				customFetch: abort,
+				signal: controller.signal
+			}),
+			(error) => error.name === 'AbortError'
+		);
+		await rejectsWith(
+			updateRole({
+				organizationId: ORG,
+				roleId: ROLE,
+				patch: { name: 'X' },
+				customFetch: async () => {
+					throw new TypeError('fetch failed');
+				}
+			}),
+			{ status: 0, code: 'NETWORK_ERROR' }
+		);
+	});
+
+	await t.test('55. la entrada del llamador no se muta', async () => {
+		const permissions = ['sites:view'];
+		const input = { ...draft, permissions };
+		const { fetchFn } = mockFetch(json({ role: custom() }, 201));
+		await createRole({ organizationId: ORG, role: input, customFetch: fetchFn });
+		assert.deepEqual(permissions, ['sites:view']);
+		assert.deepEqual(input, { ...draft, permissions });
+	});
+
+	await t.test('56. E2E cliente: crear y actualizar rol real vía handlers', async (st) => {
+		const f = await fixture(st);
+		const { db, schema: s, server } = f;
+		const { ensureOrganizationRoles } = await server.ssrLoadModule(
+			'/src/lib/server/services/roles.ts'
+		);
+		const routes = {
+			roles: await server.ssrLoadModule('/src/routes/api/roles/+server.ts'),
+			role: await server.ssrLoadModule('/src/routes/api/roles/[id]/+server.ts')
+		};
+		const [org] = await db
+			.insert(s.organizations)
+			.values({ name: 'E2E R-B', slug: 'e2e-rb-' + randomUUID(), status: 'active' })
+			.returning();
+		const { roles } = await ensureOrganizationRoles(db, org.id);
+		const admin = roles.find((r) => r.code === 'organization_admin');
+		const tech = roles.find((r) => r.code === 'technician');
+		const user = await createCredentialUser(f);
+		const [membership] = await db
+			.insert(s.memberships)
+			.values({ organizationId: org.id, userId: user.id })
+			.returning();
+		await db.insert(s.roleAssignments).values({
+			organizationId: org.id,
+			membershipId: membership.id,
+			roleId: admin.id,
+			scopeType: 'organization'
+		});
+		const session = await createSession(f, user.id, { expiresAt: new Date(Date.now() + 3600000) });
+		const bridge = async (url, init) => {
+			const parsed = new URL(url, 'http://localhost');
+			const parts = parsed.pathname.split('/').filter(Boolean);
+			const request = new Request(parsed, {
+				method: init.method,
+				headers: { ...init.headers, cookie: session.cookieHeader },
+				body: init.body
+			});
+			const route = parts.length === 2 ? routes.roles : routes.role;
+			const params = parts.length === 2 ? {} : { id: parts[2] };
+			return route[init.method]({ url: parsed, params, request });
+		};
+		const created = await createRole({
+			organizationId: org.id,
+			role: { name: 'Consultor', code: 'consultor', permissions: ['sites:view'] },
+			customFetch: bridge
+		});
+		assert.equal(created.isCustom, true);
+		assert.equal(created.templateId, null);
+		const fetched = await getRole({
+			organizationId: org.id,
+			roleId: created.id,
+			customFetch: bridge
+		});
+		assert.deepEqual(fetched, created);
+		const updated = await updateRole({
+			organizationId: org.id,
+			roleId: created.id,
+			patch: { permissions: ['sites:view', 'categories:view'], active: false },
+			customFetch: bridge
+		});
+		assert.deepEqual(updated.permissions, ['sites:view', 'categories:view']);
+		assert.equal(updated.active, false);
+		await rejectsWith(
+			createRole({
+				organizationId: org.id,
+				role: { name: 'Otro', code: 'consultor', permissions: [] },
+				customFetch: bridge
+			}),
+			{ status: 409, code: 'ROLE_CODE_CONFLICT' }
+		);
+		await rejectsWith(
+			updateRole({
+				organizationId: org.id,
+				roleId: tech.id,
+				patch: { active: false },
+				customFetch: bridge
+			}),
+			{ status: 409, code: 'SYSTEM_ROLE_IMMUTABLE' }
+		);
+		await rejectsWith(
+			updateRole({
+				organizationId: org.id,
+				roleId: created.id,
+				patch: { permissions: ['platform:manage'] },
+				customFetch: bridge
+			}),
+			{ status: 400, code: 'INVALID_INPUT' }
 		);
 	});
 });

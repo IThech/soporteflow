@@ -512,8 +512,9 @@ test('SoporteFlow — Etapa 5.4R-A: read model de administración de roles', asy
 			assert.equal((await detail('x')).status, 400);
 			assert.equal((await detail(A.admin.id, tech.cookie)).status, 403);
 			assert.equal((await detail(A.admin.id, '')).status, 401);
-			assert.deepEqual(Object.keys(roleRoute).sort(), ['GET']);
-			assert.deepEqual(Object.keys(rolesRoute).sort(), ['GET']);
+			// 5.4R-B añade POST (lista) y PATCH (detalle); nunca DELETE
+			assert.deepEqual(Object.keys(roleRoute).sort(), ['GET', 'PATCH']);
+			assert.deepEqual(Object.keys(rolesRoute).sort(), ['GET', 'POST']);
 		}
 	);
 

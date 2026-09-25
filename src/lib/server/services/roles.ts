@@ -270,3 +270,300 @@ export async function getOrganizationRole(
 	const permissions = await permissionsByRole(db, [row.id]);
 	return { ...row, permissions: permissions.get(row.id) ?? [] };
 }
+
+// =============================================================================
+// Custom role mutations (5.4R-B)
+// =============================================================================
+
+export interface CreateCustomRoleInput {
+	name: unknown;
+	code: unknown;
+	description?: unknown;
+	permissions: unknown;
+}
+
+export interface UpdateCustomRoleInput {
+	name?: unknown;
+	description?: unknown;
+	permissions?: unknown;
+	active?: unknown;
+}
+
+export const ROLE_CODE_PATTERN = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
+export const ROLE_CODE_MIN_LENGTH = 3;
+export const ROLE_CODE_MAX_LENGTH = 50;
+export const ROLE_NAME_MAX_LENGTH = 100;
+export const ROLE_DESCRIPTION_MAX_LENGTH = 1000;
+/** Codes reserved for canonical system roles (current and future templates). */
+export const RESERVED_ROLE_CODES: readonly string[] = ROLE_TEMPLATES.map(
+	(template) => template.code
+);
+
+function invalid(message: string): IncidentServiceError {
+	return new IncidentServiceError('INVALID_INPUT', message);
+}
+
+function validateRoleName(name: unknown): string {
+	if (typeof name !== 'string') throw invalid('name must be a string');
+	const trimmed = name.trim();
+	if (trimmed.length === 0) throw invalid('name must not be empty');
+	if (trimmed.length > ROLE_NAME_MAX_LENGTH)
+		throw invalid(`name must not exceed ${ROLE_NAME_MAX_LENGTH} characters`);
+	if (trimmed.includes('\u0000')) throw invalid('name contains invalid characters');
+	return trimmed;
+}
+
+/** Plain text (never trusted markup). Empty or whitespace-only becomes null. */
+function validateRoleDescription(description: unknown): string | null {
+	if (description === null) return null;
+	if (typeof description !== 'string') throw invalid('description must be a string or null');
+	const trimmed = description.trim();
+	if (trimmed.length > ROLE_DESCRIPTION_MAX_LENGTH)
+		throw invalid(`description must not exceed ${ROLE_DESCRIPTION_MAX_LENGTH} characters`);
+	if (trimmed.includes('\u0000')) throw invalid('description contains invalid characters');
+	return trimmed.length === 0 ? null : trimmed;
+}
+
+/** Closed snake_case code; validated and rejected, never silently normalized. */
+function validateRoleCode(code: unknown): string {
+	if (
+		typeof code !== 'string' ||
+		code.length < ROLE_CODE_MIN_LENGTH ||
+		code.length > ROLE_CODE_MAX_LENGTH ||
+		!ROLE_CODE_PATTERN.test(code)
+	) {
+		throw invalid('code must be lowercase snake_case (3-50 characters)');
+	}
+	if (RESERVED_ROLE_CODES.includes(code)) {
+		throw new IncidentServiceError('ROLE_CODE_CONFLICT', 'This role code is reserved');
+	}
+	return code;
+}
+
+/**
+ * Canonical, organization-scoped permission ids only (no platform:*, unknown or
+ * granular-only ids), without duplicates. Returned in catalog order.
+ */
+function validateRolePermissions(permissions: unknown): PermissionId[] {
+	if (!Array.isArray(permissions)) throw invalid('permissions must be an array');
+	if (new Set(permissions).size !== permissions.length) throw invalid('duplicate permissions');
+	const requested = new Set<string>();
+	for (const permission of permissions) {
+		const definition = PERMISSION_CATALOG.find((entry) => entry.id === permission);
+		if (
+			!definition ||
+			!(definition.allowedScopeTypes as readonly string[]).includes('organization')
+		)
+			throw invalid('permissions must be canonical organization-scoped permission ids');
+		requested.add(definition.id);
+	}
+	return PERMISSION_IDS.filter((id) => requested.has(id));
+}
+
+/**
+ * Monotonic delegation: the actor can only grant permissions it effectively holds right now in
+ * this organization (resolved before the mutation, so editing one's own role cannot escalate).
+ */
+function assertDelegable(
+	actorPermissions: readonly PermissionId[],
+	permissions: readonly string[]
+) {
+	const held = new Set<string>(actorPermissions);
+	if (permissions.some((permission) => !held.has(permission))) {
+		throw new IncidentServiceError(
+			'PERMISSION_NOT_DELEGABLE',
+			'Cannot grant permissions the actor does not hold'
+		);
+	}
+}
+
+function isRoleCodeViolation(error: unknown): boolean {
+	const candidates = [error, (error as { cause?: unknown })?.cause];
+	return candidates.some((candidate) => {
+		const { code, constraint, constraint_name } = (candidate ?? {}) as Record<string, unknown>;
+		const name = constraint ?? constraint_name;
+		return code === '23505' && (name === undefined || name === 'roles_org_code_unique');
+	});
+}
+
+async function assertOperationalOrganization(tx: IncidentDatabase, organizationId: string) {
+	const [org] = await tx
+		.select({ status: organizations.status })
+		.from(organizations)
+		.where(eq(organizations.id, organizationId))
+		.limit(1)
+		.for('share');
+	if (!org) throw new IncidentServiceError('ORGANIZATION_NOT_FOUND', 'Organization does not exist');
+	if (org.status !== 'active')
+		throw new IncidentServiceError(
+			'ORGANIZATION_NOT_OPERATIONAL',
+			`Organization is not operational (status: '${org.status}')`
+		);
+}
+
+async function mapRoleCodeConflict<T>(operation: () => Promise<T>): Promise<T> {
+	try {
+		return await operation();
+	} catch (error) {
+		if (!(error instanceof IncidentServiceError) && isRoleCodeViolation(error)) {
+			throw new IncidentServiceError(
+				'ROLE_CODE_CONFLICT',
+				'A role with this code already exists in the organization'
+			);
+		}
+		throw error;
+	}
+}
+
+/**
+ * Creates an active custom role (is_custom = true, template_id = null) and its permissions in one
+ * transaction. The caller must authorize roles:manage and pass the actor's effective permissions;
+ * every requested permission must be delegable. Codes are unique per organization and canonical
+ * system codes are reserved.
+ */
+export async function createCustomRole(
+	dbOrTx: IncidentDatabase,
+	organizationId: string,
+	actorPermissions: readonly PermissionId[],
+	input: CreateCustomRoleInput
+): Promise<AdminRoleRecord> {
+	assertUuid(organizationId, 'organizationId');
+	if (!input || typeof input !== 'object') throw invalid('invalid role input');
+	const name = validateRoleName(input.name);
+	const code = validateRoleCode(input.code);
+	const description =
+		input.description === undefined ? null : validateRoleDescription(input.description);
+	const permissions = validateRolePermissions(input.permissions);
+	assertDelegable(actorPermissions, permissions);
+	return mapRoleCodeConflict(() =>
+		inTransaction(dbOrTx, async (tx) => {
+			await assertOperationalOrganization(tx, organizationId);
+			const [role] = await tx
+				.insert(roles)
+				.values({
+					organizationId,
+					name,
+					code,
+					description,
+					templateId: null,
+					isCustom: true,
+					active: true
+				})
+				.returning({ id: roles.id });
+			if (permissions.length > 0) {
+				await tx
+					.insert(rolePermissions)
+					.values(permissions.map((permissionId) => ({ roleId: role.id, permissionId })));
+			}
+			return getOrganizationRole(tx, organizationId, role.id);
+		})
+	);
+}
+
+/**
+ * Partially updates a custom role (name, description, permissions, active) in one transaction.
+ * - System roles (is_custom = false or template_id set) are immutable: SYSTEM_ROLE_IMMUTABLE.
+ * - code, template_id and is_custom are never changed.
+ * - permissions replaces the role's canonical permission set atomically; if the role holds any
+ *   non-canonical (legacy/unknown) permission, a permissions change is refused
+ *   (ROLE_HAS_UNKNOWN_PERMISSIONS) so those grants are never silently lost.
+ * - Delegation: the actor must hold every permission the role currently grants (cannot manage a
+ *   role above its own level, including reactivating or trimming it) and every new permission.
+ * - The role row is locked FOR UPDATE; assignments are never touched, so changes apply to every
+ *   member immediately.
+ */
+export async function updateCustomRole(
+	dbOrTx: IncidentDatabase,
+	organizationId: string,
+	roleId: string,
+	actorPermissions: readonly PermissionId[],
+	input: UpdateCustomRoleInput
+): Promise<AdminRoleRecord> {
+	assertUuid(organizationId, 'organizationId');
+	assertUuid(roleId, 'roleId');
+	if (
+		!input ||
+		typeof input !== 'object' ||
+		(input.name === undefined &&
+			input.description === undefined &&
+			input.permissions === undefined &&
+			input.active === undefined)
+	) {
+		throw invalid('at least one of name, description, permissions or active is required');
+	}
+	const name = input.name === undefined ? undefined : validateRoleName(input.name);
+	const description =
+		input.description === undefined ? undefined : validateRoleDescription(input.description);
+	const permissions =
+		input.permissions === undefined ? undefined : validateRolePermissions(input.permissions);
+	if (input.active !== undefined && typeof input.active !== 'boolean')
+		throw invalid('active must be a boolean');
+	const active = input.active as boolean | undefined;
+
+	return inTransaction(dbOrTx, async (tx) => {
+		await assertOperationalOrganization(tx, organizationId);
+		const [role] = await tx
+			.select({ id: roles.id, isCustom: roles.isCustom, templateId: roles.templateId })
+			.from(roles)
+			.where(and(eq(roles.id, roleId), eq(roles.organizationId, organizationId)))
+			.limit(1)
+			.for('update');
+		if (!role) throw new IncidentServiceError('ROLE_NOT_FOUND', 'Role not found');
+		if (!role.isCustom || role.templateId !== null) {
+			throw new IncidentServiceError('SYSTEM_ROLE_IMMUTABLE', 'System roles cannot be modified');
+		}
+		const current = (
+			await tx
+				.select({ permissionId: rolePermissions.permissionId })
+				.from(rolePermissions)
+				.where(eq(rolePermissions.roleId, roleId))
+		).map((row) => row.permissionId);
+		const canonicalIds = new Set<string>(PERMISSION_IDS);
+		if (permissions !== undefined && current.some((id) => !canonicalIds.has(id))) {
+			throw new IncidentServiceError(
+				'ROLE_HAS_UNKNOWN_PERMISSIONS',
+				'Role holds non-canonical permissions; its permission set cannot be replaced'
+			);
+		}
+		assertDelegable(
+			actorPermissions,
+			current.filter((id) => canonicalIds.has(id))
+		);
+		if (permissions !== undefined) assertDelegable(actorPermissions, permissions);
+
+		const changes: { name?: string; description?: string | null; active?: boolean } = {};
+		if (name !== undefined) changes.name = name;
+		if (description !== undefined) changes.description = description;
+		if (active !== undefined) changes.active = active;
+		if (Object.keys(changes).length > 0) {
+			await tx
+				.update(roles)
+				.set({ ...changes, updatedAt: new Date() })
+				.where(and(eq(roles.id, roleId), eq(roles.organizationId, organizationId)));
+		}
+		if (permissions !== undefined) {
+			const target = new Set<string>(permissions);
+			const removed = current.filter((id) => canonicalIds.has(id) && !target.has(id));
+			if (removed.length > 0) {
+				await tx
+					.delete(rolePermissions)
+					.where(
+						and(eq(rolePermissions.roleId, roleId), inArray(rolePermissions.permissionId, removed))
+					);
+			}
+			if (permissions.length > 0) {
+				await tx
+					.insert(rolePermissions)
+					.values(permissions.map((permissionId) => ({ roleId, permissionId })))
+					.onConflictDoNothing({ target: [rolePermissions.roleId, rolePermissions.permissionId] });
+			}
+			if (Object.keys(changes).length === 0) {
+				await tx
+					.update(roles)
+					.set({ updatedAt: new Date() })
+					.where(and(eq(roles.id, roleId), eq(roles.organizationId, organizationId)));
+			}
+		}
+		return getOrganizationRole(tx, organizationId, roleId);
+	});
+}

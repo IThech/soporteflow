@@ -1,5 +1,5 @@
 /**
- * Typed read client for role administration (/api/permissions, /api/roles).
+ * Typed client for role administration (/api/permissions, /api/roles).
  * fetch + runtime validation + typed errors only: no session handling, navigation or storage.
  * Tenant travels only in the query string; identity comes from the session cookie.
  * Role data is administrative configuration; UI actions must be gated by /api/me capabilities.
@@ -58,8 +58,34 @@ export interface GetRoleInput extends RoleRequestOptions {
 	roleId: string;
 }
 
+export interface CreateRoleInput extends RoleRequestOptions {
+	organizationId: string;
+	role: {
+		name: string;
+		code: string;
+		description?: string | null;
+		permissions: string[];
+	};
+}
+
+/** Partial update; code is immutable. permissions replaces the whole canonical set. */
+export interface UpdateRolePatch {
+	name?: string;
+	description?: string | null;
+	permissions?: string[];
+	active?: boolean;
+}
+
+export interface UpdateRoleInput extends RoleRequestOptions {
+	organizationId: string;
+	roleId: string;
+	patch: UpdateRolePatch;
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PERMISSION_ID = /^[a-z][a-z_]*:[a-z][a-z_]*$/;
+const ROLE_CODE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
+const PATCH_KEYS = ['name', 'description', 'permissions', 'active'] as const;
 const SCOPES: readonly PermissionScopeType[] = [
 	'organization',
 	'department',
@@ -68,12 +94,14 @@ const SCOPES: readonly PermissionScopeType[] = [
 	'personal'
 ];
 
-type Action = 'permissions' | 'roles' | 'role';
+type Action = 'permissions' | 'roles' | 'role' | 'create' | 'update';
 
 const FAILURE_TEXT: Record<Action, string> = {
 	permissions: 'No se pudo cargar el catálogo de permisos. Inténtalo de nuevo.',
 	roles: 'No se pudieron cargar los roles. Inténtalo de nuevo.',
-	role: 'No se pudo cargar el rol. Inténtalo de nuevo.'
+	role: 'No se pudo cargar el rol. Inténtalo de nuevo.',
+	create: 'No se pudo crear el rol. Inténtalo de nuevo.',
+	update: 'No se pudo actualizar el rol. Inténtalo de nuevo.'
 };
 
 function invalidInput(message: string): RoleApiError {
@@ -94,10 +122,20 @@ function assertUuid(value: unknown, label: string): asserts value is string {
 	}
 }
 
-async function send(url: string, options: RoleRequestOptions): Promise<Response> {
+async function send(
+	url: string,
+	options: RoleRequestOptions,
+	method: 'GET' | 'POST' | 'PATCH' = 'GET',
+	body?: unknown
+): Promise<Response> {
 	const fetchFn = options.customFetch ?? fetch;
+	const init: RequestInit = { method, signal: options.signal };
+	if (body !== undefined) {
+		init.headers = { 'Content-Type': 'application/json' };
+		init.body = JSON.stringify(body);
+	}
 	try {
-		return await fetchFn(url, { method: 'GET', signal: options.signal });
+		return await fetchFn(url, init);
 	} catch (err: unknown) {
 		if (err instanceof RoleApiError) throw err;
 		if ((err as Error)?.name === 'AbortError' || options.signal?.aborted) throw err;
@@ -117,7 +155,32 @@ async function failure(res: Response, action: Action): Promise<RoleApiError> {
 	if (res.status === 401)
 		return new RoleApiError(401, 'UNAUTHORIZED', 'Tu sesión ya no es válida.');
 	if (res.status === 403) {
-		return new RoleApiError(403, 'FORBIDDEN', 'No tienes permisos para consultar los roles.');
+		if (backendCode === 'PERMISSION_NOT_DELEGABLE')
+			return new RoleApiError(
+				403,
+				'PERMISSION_NOT_DELEGABLE',
+				'No puedes conceder permisos que no tienes.'
+			);
+		return action === 'create' || action === 'update'
+			? new RoleApiError(403, 'FORBIDDEN', 'No tienes permisos para gestionar los roles.')
+			: new RoleApiError(403, 'FORBIDDEN', 'No tienes permisos para consultar los roles.');
+	}
+	if (res.status === 409) {
+		if (backendCode === 'ROLE_CODE_CONFLICT')
+			return new RoleApiError(409, 'ROLE_CODE_CONFLICT', 'Ya existe un rol con ese código.');
+		if (backendCode === 'SYSTEM_ROLE_IMMUTABLE')
+			return new RoleApiError(
+				409,
+				'SYSTEM_ROLE_IMMUTABLE',
+				'Los roles del sistema no se pueden modificar.'
+			);
+		if (backendCode === 'ROLE_HAS_UNKNOWN_PERMISSIONS')
+			return new RoleApiError(
+				409,
+				'ROLE_HAS_UNKNOWN_PERMISSIONS',
+				'Los permisos de este rol no se pueden reemplazar.'
+			);
+		return new RoleApiError(409, 'CONFLICT', FAILURE_TEXT[action]);
 	}
 	if (res.status === 404) {
 		return backendCode === 'ROLE_NOT_FOUND'
@@ -247,6 +310,82 @@ export async function getRole(input: GetRoleInput): Promise<Role> {
 	const url = `/api/roles/${encodeURIComponent(input.roleId)}?${new URLSearchParams({ organizationId: input.organizationId }).toString()}`;
 	const res = await send(url, input);
 	if (!res.ok) throw await failure(res, 'role');
+	const role = parseRole((await readObject(res)).role, res.status);
+	if (role.id !== input.roleId) throw invalidPayload(res.status);
+	return role;
+}
+
+function isDescriptionInput(value: unknown): boolean {
+	return value === null || typeof value === 'string';
+}
+
+function roleUrl(organizationId: string, roleId?: string): string {
+	const path = roleId ? `/api/roles/${encodeURIComponent(roleId)}` : '/api/roles';
+	return `${path}?${new URLSearchParams({ organizationId }).toString()}`;
+}
+
+/**
+ * POST /api/roles?organizationId=<UUID> (requires roles:manage). Creates an active custom role.
+ * Only well-formed fields are sent; the server remains the authority (delegation, reserved codes).
+ */
+export async function createRole(input: CreateRoleInput): Promise<Role> {
+	assertUuid(input?.organizationId, 'organización');
+	const role = input.role;
+	if (
+		!role ||
+		typeof role !== 'object' ||
+		!isNonEmptyString(role.name) ||
+		typeof role.code !== 'string' ||
+		!ROLE_CODE.test(role.code) ||
+		(role.description !== undefined && !isDescriptionInput(role.description)) ||
+		!isPermissionIdList(role.permissions)
+	) {
+		throw invalidInput('Datos del rol no válidos.');
+	}
+	const body: Record<string, unknown> = {
+		name: role.name,
+		code: role.code,
+		permissions: [...role.permissions]
+	};
+	if (role.description !== undefined) body.description = role.description;
+	const res = await send(roleUrl(input.organizationId), input, 'POST', body);
+	if (!res.ok) throw await failure(res, 'create');
+	if (res.status !== 201) throw invalidPayload(res.status);
+	const created = parseRole((await readObject(res)).role, res.status);
+	if (created.code !== role.code) throw invalidPayload(res.status);
+	return created;
+}
+
+/**
+ * PATCH /api/roles/<id>?organizationId=<UUID> (requires roles:manage). Partial update of a custom
+ * role; the patch must contain at least one known field and never code.
+ */
+export async function updateRole(input: UpdateRoleInput): Promise<Role> {
+	assertUuid(input?.organizationId, 'organización');
+	assertUuid(input.roleId, 'rol');
+	const patch = input.patch;
+	if (!patch || typeof patch !== 'object' || Array.isArray(patch))
+		throw invalidInput('Cambios del rol no válidos.');
+	const keys = Object.keys(patch).filter(
+		(key) => (patch as Record<string, unknown>)[key] !== undefined
+	);
+	if (
+		keys.length === 0 ||
+		keys.some((key) => !(PATCH_KEYS as readonly string[]).includes(key)) ||
+		(patch.name !== undefined && !isNonEmptyString(patch.name)) ||
+		(patch.description !== undefined && !isDescriptionInput(patch.description)) ||
+		(patch.permissions !== undefined && !isPermissionIdList(patch.permissions)) ||
+		(patch.active !== undefined && typeof patch.active !== 'boolean')
+	) {
+		throw invalidInput('Cambios del rol no válidos.');
+	}
+	const body: Record<string, unknown> = {};
+	for (const key of keys) {
+		const value = (patch as Record<string, unknown>)[key];
+		body[key] = Array.isArray(value) ? [...value] : value;
+	}
+	const res = await send(roleUrl(input.organizationId, input.roleId), input, 'PATCH', body);
+	if (!res.ok) throw await failure(res, 'update');
 	const role = parseRole((await readObject(res)).role, res.status);
 	if (role.id !== input.roleId) throw invalidPayload(res.status);
 	return role;
