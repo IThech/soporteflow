@@ -65,6 +65,35 @@ export class IncidentServiceError extends Error {
 	}
 }
 
+/**
+ * Validates a site for a new association inside the caller's transaction.
+ * The lookup is always scoped by id AND organization (cross-tenant and missing sites are
+ * indistinguishable). FOR SHARE conflicts with the row lock of a concurrent
+ * UPDATE sites SET active = false, so the site cannot be deactivated between this check
+ * and the commit that associates it; a deactivation committed first is observed here.
+ */
+async function lockActiveSite(
+	tx: IncidentDatabase,
+	organizationId: string,
+	siteId: string
+): Promise<void> {
+	const [site] = await tx
+		.select({ active: sites.active })
+		.from(sites)
+		.where(and(eq(sites.id, siteId), eq(sites.organizationId, organizationId)))
+		.limit(1)
+		.for('share');
+	if (!site) {
+		throw new IncidentServiceError(
+			'SITE_NOT_FOUND',
+			'Site does not exist or belongs to another organization'
+		);
+	}
+	if (!site.active) {
+		throw new IncidentServiceError('SITE_INACTIVE', 'Site is inactive');
+	}
+}
+
 export interface IncidentServiceContext {
 	readonly organizationId: string;
 	readonly creatorUserId: string;
@@ -247,28 +276,9 @@ export async function createIncidentRecord(
 			}
 		}
 
-		// D. Validate optional siteId (must belong to tenant and be active)
+		// D. Validate optional siteId (must belong to tenant and be active), locked until commit
 		if (input.siteId) {
-			const [siteRecord] = await tx
-				.select({
-					id: sites.id,
-					organizationId: sites.organizationId,
-					active: sites.active
-				})
-				.from(sites)
-				.where(eq(sites.id, input.siteId))
-				.limit(1);
-
-			if (!siteRecord || siteRecord.organizationId !== context.organizationId) {
-				throw new IncidentServiceError(
-					'SITE_NOT_FOUND',
-					'Site does not exist or belongs to another organization'
-				);
-			}
-
-			if (!siteRecord.active) {
-				throw new IncidentServiceError('SITE_INACTIVE', 'Site is inactive');
-			}
+			await lockActiveSite(tx, context.organizationId, input.siteId);
 		}
 
 		// E. Atomic counter increment via PostgreSQL UPSERT
@@ -1321,3 +1331,177 @@ export async function updateIncidentSupportLevel(
 }
 
 export { updateIncidentSupportLevel as updateIncidentSupportLevelRecord };
+
+export const INCIDENT_REASON_MAX_LENGTH = 1000;
+
+export interface ChangeIncidentSiteContext {
+	readonly organizationId: string;
+	readonly actorUserId: string;
+}
+
+export interface ChangeIncidentSiteInput {
+	/** Target site UUID, or null to remove the site. */
+	siteId: string | null;
+	reason?: string;
+}
+
+export interface ChangeIncidentSiteResult {
+	incident: IncidentRecord;
+	history?: IncidentHistoryRecord;
+}
+
+/**
+ * Changes (or removes) the site of an incident in a single transaction.
+ * - The incident is locked FOR UPDATE within the tenant; the target site is validated with
+ *   lockActiveSite (scoped by id + organization, FOR SHARE against concurrent deactivation).
+ * - No-op when the target equals the current site (including null -> null): no update, no history.
+ * - Reason: optional when setting a site on an incident without one; required when replacing
+ *   or removing an existing site (same rule as assignment vs. reassignment).
+ * - Records 'site_changed' with payload { fromSiteId, toSiteId } only; never names or tenant data.
+ * - Does not alter status, priority, team, assignee, support level or SLA.
+ */
+export async function changeIncidentSite(
+	dbOrTx: IncidentDatabase,
+	context: ChangeIncidentSiteContext,
+	incidentId: string,
+	input: ChangeIncidentSiteInput
+): Promise<ChangeIncidentSiteResult> {
+	// 1. Context and input validation
+	if (!isValidUuid(context?.organizationId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
+	}
+	if (!isValidUuid(context?.actorUserId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
+	}
+	if (!isValidUuid(incidentId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'incidentId must be a valid UUID');
+	}
+	if (!input || (input.siteId !== null && !isValidUuid(input.siteId))) {
+		throw new IncidentServiceError('INVALID_INPUT', 'siteId must be a valid UUID or null');
+	}
+	if (input.reason !== undefined) {
+		if (typeof input.reason !== 'string') {
+			throw new IncidentServiceError('INVALID_INPUT', 'reason must be a string');
+		}
+		if (input.reason.trim().length > INCIDENT_REASON_MAX_LENGTH) {
+			throw new IncidentServiceError(
+				'INVALID_INPUT',
+				`reason must not exceed ${INCIDENT_REASON_MAX_LENGTH} characters`
+			);
+		}
+		if (input.reason.includes('\u0000')) {
+			throw new IncidentServiceError('INVALID_INPUT', 'reason contains invalid characters');
+		}
+	}
+	const targetSiteId = input.siteId;
+
+	const execute = async (tx: IncidentDatabase): Promise<ChangeIncidentSiteResult> => {
+		// A. Validate Organization existence & operational status
+		const [org] = await tx
+			.select({ status: organizations.status })
+			.from(organizations)
+			.where(eq(organizations.id, context.organizationId))
+			.limit(1);
+		if (!org) {
+			throw new IncidentServiceError('ORGANIZATION_NOT_FOUND', 'Organization does not exist');
+		}
+		if (org.status !== 'active') {
+			throw new IncidentServiceError(
+				'ORGANIZATION_NOT_OPERATIONAL',
+				`Organization is '${org.status}', operations require 'active'`
+			);
+		}
+
+		// B. Validate Actor Membership and User Activity
+		const [actorRecord] = await tx
+			.select({ membershipActive: memberships.active, userActive: users.active })
+			.from(memberships)
+			.innerJoin(users, eq(users.id, memberships.userId))
+			.where(
+				and(
+					eq(memberships.organizationId, context.organizationId),
+					eq(memberships.userId, context.actorUserId)
+				)
+			)
+			.limit(1);
+		if (!actorRecord) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_NOT_FOUND',
+				'Actor user is not a member of this organization'
+			);
+		}
+		if (!actorRecord.membershipActive) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_INACTIVE',
+				'Actor user membership is inactive'
+			);
+		}
+		if (!actorRecord.userActive) {
+			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+		}
+
+		// C. Lock the incident strictly within the tenant
+		const [currentIncident] = await tx
+			.select()
+			.from(incidents)
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.limit(1)
+			.for('update');
+		if (!currentIncident) {
+			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
+		}
+
+		// D. No-op: same site (or null -> null)
+		const fromSiteId = currentIncident.siteId ?? null;
+		if (fromSiteId === targetSiteId) {
+			return { incident: currentIncident };
+		}
+
+		// E. Reason rule
+		const cleanReason = input.reason?.trim() || null;
+		if (fromSiteId !== null && cleanReason === null) {
+			throw new IncidentServiceError(
+				'INVALID_INPUT',
+				'Reason is required when changing or removing the site of an incident'
+			);
+		}
+
+		// F. Validate and lock the target site
+		if (targetSiteId !== null) {
+			await lockActiveSite(tx, context.organizationId, targetSiteId);
+		}
+
+		// G. Update incident
+		const [updatedIncident] = await tx
+			.update(incidents)
+			.set({ siteId: targetSiteId, updatedAt: new Date() })
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.returning();
+
+		// H. Append-only audit event
+		const [historyRecord] = await tx
+			.insert(incidentHistory)
+			.values({
+				incidentId,
+				organizationId: context.organizationId,
+				eventType: 'site_changed',
+				actorType: 'user',
+				actorUserId: context.actorUserId,
+				reason: cleanReason,
+				comment: null,
+				payload: { fromSiteId, toSiteId: targetSiteId }
+			})
+			.returning();
+
+		return { incident: updatedIncident, history: historyRecord };
+	};
+
+	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+		return await dbOrTx.transaction(async (tx) => execute(tx));
+	}
+	return await execute(dbOrTx);
+}

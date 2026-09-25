@@ -959,6 +959,132 @@ export async function updateIncidentSupportLevel(
 	return parsed;
 }
 
+export interface UpdateIncidentSiteInput {
+	/** Target site UUID, or null to remove the site. */
+	siteId: string | null;
+	/** Required by the server when replacing or removing an existing site. */
+	reason?: string;
+}
+
+export interface UpdateIncidentSiteOptions {
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+const SITE_CHANGE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Changes or removes the site of an incident.
+ * Invokes PATCH /api/incidents/<id>/site?organizationId=<UUID> with body { siteId, reason? }.
+ */
+export async function updateIncidentSite(
+	organizationId: string,
+	incidentId: string,
+	input: UpdateIncidentSiteInput,
+	options?: UpdateIncidentSiteOptions
+): Promise<IncidentListItem> {
+	if (
+		!SITE_CHANGE_UUID.test(organizationId) ||
+		!SITE_CHANGE_UUID.test(incidentId) ||
+		(input?.siteId !== null && !SITE_CHANGE_UUID.test(String(input?.siteId))) ||
+		(input.reason !== undefined && typeof input.reason !== 'string')
+	) {
+		throw new IncidentApiError(0, 'INVALID_INPUT', 'Los datos del cambio de sede no son válidos.');
+	}
+	const fetchFn = options?.customFetch ?? fetch;
+	const url = `/api/incidents/${encodeURIComponent(incidentId)}/site?${new URLSearchParams({ organizationId }).toString()}`;
+	const payload: Record<string, unknown> = { siteId: input.siteId };
+	if (input.reason !== undefined) payload.reason = input.reason;
+
+	let res: Response;
+	try {
+		res = await fetchFn(url, {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload),
+			signal: options?.signal
+		});
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) {
+			throw err;
+		}
+		if ((err as Error)?.name === 'AbortError' || options?.signal?.aborted) {
+			throw err;
+		}
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+
+	if (!res.ok) {
+		let backendCode: unknown;
+		try {
+			backendCode = ((await res.json()) as { error?: { code?: unknown } })?.error?.code;
+		} catch {
+			backendCode = undefined;
+		}
+		let message = 'No se pudo cambiar la sede. Inténtalo de nuevo.';
+		let code = 'INTERNAL_ERROR';
+		if (res.status === 400) {
+			message = 'Revisa la sede seleccionada y el motivo del cambio.';
+			code = 'INVALID_INPUT';
+		} else if (res.status === 401) {
+			message = 'Tu sesión ya no es válida.';
+			code = 'UNAUTHORIZED';
+		} else if (res.status === 403) {
+			message = 'No tienes permisos para modificar la sede de esta incidencia.';
+			code = 'FORBIDDEN';
+		} else if (res.status === 404) {
+			if (backendCode === 'SITE_NOT_FOUND') {
+				message = 'La sede seleccionada no está disponible.';
+				code = 'SITE_NOT_FOUND';
+			} else {
+				message = 'La incidencia no está disponible.';
+				code = 'NOT_FOUND';
+			}
+		} else if (res.status === 409) {
+			message =
+				backendCode === 'SITE_INACTIVE'
+					? 'La sede seleccionada está inactiva.'
+					: 'No se pudo cambiar la sede. Inténtalo de nuevo.';
+			code = backendCode === 'SITE_INACTIVE' ? 'SITE_INACTIVE' : 'CONFLICT';
+		} else if (res.status >= 500) {
+			code = 'SERVER_ERROR';
+		}
+		throw new IncidentApiError(res.status, code, message);
+	}
+
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	const parsed = parseAndValidateIncident(
+		(data as { incident?: unknown }).incident,
+		organizationId,
+		incidentId,
+		res.status
+	);
+	if ((parsed.siteId ?? null) !== input.siteId) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	return parsed;
+}
+
 // =============================================================================
 // Incident messages: public comments and internal notes (5.4N)
 // =============================================================================
