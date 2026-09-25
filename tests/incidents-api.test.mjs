@@ -3315,3 +3315,188 @@ test('SoporteFlow — Etapa 5.4J-A: Endpoint HTTP GET /api/incidents — Colas (
 		}
 	);
 });
+
+test('SoporteFlow — Etapa 5.4N-0: GET /api/incidents/[id] con incidents:view_own', async (t) => {
+	const f = await fixture(t);
+	const { db, schema: s, server } = f;
+
+	const { GET: getDetail } = await server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/+server.ts'
+	);
+	const { GET: getList } = await server.ssrLoadModule('/src/routes/api/incidents/+server.ts');
+	const { createIncidentRecord } = await server.ssrLoadModule(
+		'/src/lib/server/services/incidents.ts'
+	);
+
+	const [orgN] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org N0', slug: 'org-n0-' + randomUUID(), status: 'active' })
+		.returning();
+	const [orgM] = await db
+		.insert(s.organizations)
+		.values({ name: 'Org M0', slug: 'org-m0-' + randomUUID(), status: 'active' })
+		.returning();
+
+	async function member(organization, permissionIds) {
+		const user = await identity(f);
+		const [membership] = await db
+			.insert(s.memberships)
+			.values({ organizationId: organization.id, userId: user.id, active: true })
+			.returning();
+		for (const permissionId of permissionIds)
+			await grantPermission(f, {
+				organizationId: organization.id,
+				membershipId: membership.id,
+				permissionId
+			});
+		const session = await createSession(f, user.id);
+		return { user, membership, session };
+	}
+
+	const viewAll = await member(orgN, ['incidents:view_all']);
+	const viewOwn = await member(orgN, ['incidents:view_own']);
+	const otherTech = await member(orgN, ['incidents:view_own']);
+	const noPerm = await member(orgN, []);
+	const viewOwnOtherOrg = await member(orgM, ['incidents:view_own']);
+	const viewAllOtherOrg = await member(orgM, ['incidents:view_all']);
+
+	async function incident(organization, creator, values = {}, input = {}) {
+		const { incident: created } = await createIncidentRecord(
+			db,
+			{ organizationId: organization.id, creatorUserId: creator.user.id },
+			{ title: 'Detail view_own', description: 'Synthetic', client: 'Synthetic', ...input }
+		);
+		if (Object.keys(values).length)
+			await db.update(s.incidents).set(values).where(eq(s.incidents.id, created.id));
+		return created;
+	}
+
+	const assignedToViewOwn = await incident(orgN, viewAll, { assignedToUserId: viewOwn.user.id });
+	const assignedToOther = await incident(orgN, viewAll, { assignedToUserId: otherTech.user.id });
+	const unassigned = await incident(orgN, viewAll);
+	const requestedByViewOwn = await incident(orgN, viewAll, {}, { clientUserId: viewOwn.user.id });
+	const otherOrgAssignedToOwnOtherOrg = await incident(orgM, viewAllOtherOrg, {
+		assignedToUserId: viewOwnOtherOrg.user.id
+	});
+
+	function detail(target, session, organizationId = orgN.id) {
+		return callGetDetail(getDetail, {
+			url: `http://localhost/api/incidents/${target}?organizationId=${organizationId}`,
+			params: { id: target },
+			headers: { cookie: session.cookieHeader }
+		});
+	}
+
+	await t.test('1. view_all + incidencia del tenant -> 200', async () => {
+		for (const target of [assignedToViewOwn, assignedToOther, unassigned, requestedByViewOwn]) {
+			const res = await detail(target.id, viewAll.session);
+			assert.equal(res.status, 200);
+			assert.equal(res.json.incident.id, target.id);
+		}
+	});
+
+	await t.test('2. view_own + incidencia asignada al principal -> 200', async () => {
+		const res = await detail(assignedToViewOwn.id, viewOwn.session);
+		assert.equal(res.status, 200);
+		assert.equal(res.json.incident.id, assignedToViewOwn.id);
+		assert.equal(res.json.incident.assignedToUserId, viewOwn.user.id);
+	});
+
+	await t.test('3. view_own + incidencia asignada a otro técnico -> 403', async () => {
+		const res = await detail(assignedToOther.id, viewOwn.session);
+		assert.equal(res.status, 403);
+		assert.equal(res.json.error.code, 'FORBIDDEN');
+		assert.equal(res.json.incident, undefined);
+	});
+
+	await t.test('4. view_own + incidencia sin asignar -> 403', async () => {
+		const res = await detail(unassigned.id, viewOwn.session);
+		assert.equal(res.status, 403);
+		assert.equal(res.json.incident, undefined);
+	});
+
+	await t.test('5. view_own + clientUserId === principal sin asignación -> 403', async () => {
+		const [row] = await db
+			.select()
+			.from(s.incidents)
+			.where(eq(s.incidents.id, requestedByViewOwn.id));
+		assert.equal(row.clientUserId, viewOwn.user.id);
+		assert.equal(row.assignedToUserId, null);
+		const res = await detail(requestedByViewOwn.id, viewOwn.session);
+		assert.equal(res.status, 403);
+		assert.equal(res.json.incident, undefined);
+	});
+
+	await t.test('6. sin view_all ni view_own -> 403', async () => {
+		for (const target of [assignedToViewOwn, unassigned]) {
+			const res = await detail(target.id, noPerm.session);
+			assert.equal(res.status, 403);
+			assert.equal(res.json.incident, undefined);
+		}
+	});
+
+	await t.test('7. view_own de otra organización -> 403', async () => {
+		const res = await detail(assignedToViewOwn.id, viewOwnOtherOrg.session);
+		assert.equal(res.status, 403);
+		assert.equal(res.json.incident, undefined);
+	});
+
+	await t.test('8. incidencia cross-tenant -> 404 sin fuga', async () => {
+		// Autorizado en orgN, incidencia de orgM (aunque exista) -> 404 indistinguible de inexistente
+		for (const session of [viewAll.session, viewOwn.session]) {
+			const res = await detail(otherOrgAssignedToOwnOtherOrg.id, session);
+			assert.equal(res.status, 404);
+			assert.equal(res.json.error.code, 'INCIDENT_NOT_FOUND');
+			assert.equal(res.json.incident, undefined);
+			assert.ok(!JSON.stringify(res.json).includes(orgM.id));
+		}
+		// Pidiendo la organización ajena sin membresía -> 403 antes de consultar
+		const foreign = await detail(otherOrgAssignedToOwnOtherOrg.id, viewOwn.session, orgM.id);
+		assert.equal(foreign.status, 403);
+		assert.equal(foreign.json.incident, undefined);
+	});
+
+	await t.test('9. incidencia inexistente -> 404', async () => {
+		for (const session of [viewAll.session, viewOwn.session]) {
+			const res = await detail(randomUUID(), session);
+			assert.equal(res.status, 404);
+			assert.equal(res.json.error.code, 'INCIDENT_NOT_FOUND');
+		}
+	});
+
+	await t.test('10. el detalle sigue sin history (view_all y view_own)', async () => {
+		for (const [target, session] of [
+			[assignedToViewOwn, viewAll.session],
+			[assignedToViewOwn, viewOwn.session]
+		]) {
+			const res = await detail(target.id, session);
+			assert.equal(res.status, 200);
+			assert.deepEqual(Object.keys(res.json), ['incident']);
+			assert.equal('permissions' in res.json.incident, false);
+			assert.equal('membership' in res.json.incident, false);
+		}
+	});
+
+	await t.test('11. queue=mine con view_own sigue devolviendo solo las asignadas', async () => {
+		const res = await callGet(getList, {
+			url: `http://localhost/api/incidents?organizationId=${orgN.id}&queue=mine`,
+			headers: { cookie: viewOwn.session.cookieHeader }
+		});
+		assert.equal(res.status, 200);
+		assert.deepEqual(
+			res.json.incidents.map((i) => i.id),
+			[assignedToViewOwn.id]
+		);
+		const all = await callGet(getList, {
+			url: `http://localhost/api/incidents?organizationId=${orgN.id}&queue=all`,
+			headers: { cookie: viewOwn.session.cookieHeader }
+		});
+		assert.equal(all.status, 403);
+	});
+
+	await t.test('12. view_all de otra organización no accede a este tenant', async () => {
+		const res = await detail(assignedToViewOwn.id, viewAllOtherOrg.session);
+		assert.equal(res.status, 403);
+		assert.equal(res.json.incident, undefined);
+	});
+});

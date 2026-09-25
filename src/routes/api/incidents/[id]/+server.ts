@@ -60,12 +60,19 @@ export const GET: RequestHandler = async (event) => {
 		);
 	}
 
-	// 4. Authorize with incidents:view_all
-	const authorized = await authorizeAction(event.request.headers, {
+	// 4. Authorize: incidents:view_all (any incident of the tenant) or
+	// incidents:view_own (only incidents assigned to the authenticated principal)
+	const canViewAll = await authorizeAction(event.request.headers, {
 		organizationId,
 		permissionId: 'incidents:view_all'
 	});
-	if (!authorized) {
+	const canViewOwn =
+		!canViewAll &&
+		(await authorizeAction(event.request.headers, {
+			organizationId,
+			permissionId: 'incidents:view_own'
+		}));
+	if (!canViewAll && !canViewOwn) {
 		return json(
 			{
 				error: {
@@ -94,7 +101,20 @@ export const GET: RequestHandler = async (event) => {
 			);
 		}
 
-		// 7. Success response
+		// 7. view_own only grants access to incidents assigned to the principal
+		if (!canViewAll && result.incident.assignedToUserId !== principal.userId) {
+			return json(
+				{
+					error: {
+						code: 'FORBIDDEN',
+						message: 'Permission denied.'
+					}
+				},
+				{ status: 403 }
+			);
+		}
+
+		// 8. Success response
 		return json(
 			{
 				incident: result.incident
