@@ -12,6 +12,8 @@ export interface IncidentListItem {
 	siteId: string | null;
 	assignedToUserId: string | null;
 	assignedToUserName?: string | null;
+	teamId?: string | null;
+	teamName?: string | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -281,6 +283,10 @@ function parseAndValidateIncident(
 		item.assignedToUserName === undefined ||
 		item.assignedToUserName === null ||
 		typeof item.assignedToUserName === 'string';
+	const isValidTeamId =
+		item.teamId === undefined || item.teamId === null || typeof item.teamId === 'string';
+	const isValidTeamName =
+		item.teamName === undefined || item.teamName === null || typeof item.teamName === 'string';
 
 	if (
 		typeof item.id !== 'string' ||
@@ -296,6 +302,8 @@ function parseAndValidateIncident(
 		!isValidSiteId ||
 		!isValidAssignedToUserId ||
 		!isValidAssignedToUserName ||
+		!isValidTeamId ||
+		!isValidTeamName ||
 		typeof item.createdAt !== 'string' ||
 		typeof item.updatedAt !== 'string'
 	) {
@@ -308,6 +316,12 @@ function parseAndValidateIncident(
 
 	if (item.assignedToUserId === undefined) {
 		item.assignedToUserId = null;
+	}
+	if (item.teamId === undefined) {
+		item.teamId = null;
+	}
+	if (item.teamName === undefined) {
+		item.teamName = null;
 	}
 
 	if (item.organizationId !== expectedOrgId) {
@@ -516,17 +530,129 @@ export async function updateIncident(
 	return parseAndValidateIncident(incident, organizationId, incidentId, res.status);
 }
 
+export interface IncidentTeam {
+	id: string;
+	name: string;
+	description: string | null;
+}
+
+export interface ListTeamsOptions {
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+/**
+ * Fetches real active teams for the active organization.
+ * Read-only client query against GET /api/teams?organizationId=<UUID>.
+ */
+export async function listTeams(
+	organizationId: string,
+	options?: ListTeamsOptions
+): Promise<IncidentTeam[]> {
+	const fetchFn = options?.customFetch ?? fetch;
+	const url = `/api/teams?organizationId=${encodeURIComponent(organizationId)}`;
+
+	let res: Response;
+	try {
+		res = await fetchFn(url, {
+			method: 'GET',
+			signal: options?.signal
+		});
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) {
+			throw err;
+		}
+		if ((err as Error)?.name === 'AbortError' || options?.signal?.aborted) {
+			throw err;
+		}
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+
+	if (!res.ok) {
+		let message = 'No se pudieron cargar los equipos. Inténtalo de nuevo.';
+		let code = 'INTERNAL_ERROR';
+		if (res.status === 400) {
+			message = 'No se pudo consultar la organización seleccionada.';
+			code = 'INVALID_INPUT';
+		} else if (res.status === 401) {
+			message = 'Tu sesión ya no es válida.';
+			code = 'UNAUTHORIZED';
+		} else if (res.status === 403) {
+			message = 'No tienes permisos para consultar los equipos de esta organización.';
+			code = 'FORBIDDEN';
+		} else if (res.status === 404) {
+			message = 'No se encontró el recurso solicitado.';
+			code = 'NOT_FOUND';
+		} else if (res.status >= 500) {
+			message = 'No se pudieron cargar los equipos. Inténtalo de nuevo.';
+			code = 'SERVER_ERROR';
+		}
+		throw new IncidentApiError(res.status, code, message);
+	}
+
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	const teams = (data as { teams?: unknown }).teams;
+	if (!Array.isArray(teams)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	for (const t of teams) {
+		if (!t || typeof t !== 'object') {
+			throw new IncidentApiError(
+				res.status,
+				'INVALID_PAYLOAD',
+				'No se pudo interpretar la respuesta del servidor.'
+			);
+		}
+		const item = t as Record<string, unknown>;
+		const isValidDesc = item.description === null || typeof item.description === 'string';
+		if (typeof item.id !== 'string' || typeof item.name !== 'string' || !isValidDesc) {
+			throw new IncidentApiError(
+				res.status,
+				'INVALID_PAYLOAD',
+				'No se pudo interpretar la respuesta del servidor.'
+			);
+		}
+	}
+
+	return teams as IncidentTeam[];
+}
+
 export interface IncidentAssignee {
 	id: string;
 	name: string;
 }
 
 export interface AssignIncidentInput {
-	assignedToUserId: string;
+	teamId?: string | null;
+	assignedToUserId?: string | null;
 	reason?: string;
 }
 
 export interface ListAssigneesOptions {
+	teamId?: string;
 	signal?: AbortSignal;
 	customFetch?: typeof fetch;
 }
@@ -540,7 +666,10 @@ export async function listAssignees(
 	options?: ListAssigneesOptions
 ): Promise<IncidentAssignee[]> {
 	const fetchFn = options?.customFetch ?? fetch;
-	const url = `/api/incidents/assignees?organizationId=${encodeURIComponent(organizationId)}`;
+	let url = `/api/incidents/assignees?organizationId=${encodeURIComponent(organizationId)}`;
+	if (options?.teamId) {
+		url += `&teamId=${encodeURIComponent(options.teamId)}`;
+	}
 
 	let res: Response;
 	try {
@@ -647,9 +776,13 @@ export async function assignIncident(
 	const fetchFn = options?.customFetch ?? fetch;
 	const url = `/api/incidents/${encodeURIComponent(incidentId)}/assign?organizationId=${encodeURIComponent(organizationId)}`;
 
-	const payload: Record<string, unknown> = {
-		assignedToUserId: input.assignedToUserId
-	};
+	const payload: Record<string, unknown> = {};
+	if (input.teamId !== undefined) {
+		payload.teamId = input.teamId;
+	}
+	if (input.assignedToUserId !== undefined) {
+		payload.assignedToUserId = input.assignedToUserId;
+	}
 	if (input.reason !== undefined) {
 		payload.reason = input.reason;
 	}

@@ -7,11 +7,13 @@
 	import {
 		getIncident,
 		updateIncident,
+		listTeams,
 		listAssignees,
 		assignIncident,
 		IncidentApiError,
 		type IncidentListItem,
-		type IncidentAssignee
+		type IncidentAssignee,
+		type IncidentTeam
 	} from '$lib/api/incidents';
 	import { session } from '$lib/stores/session';
 	import RealIncidentDetail from '$lib/components/incidents/RealIncidentDetail.svelte';
@@ -29,11 +31,19 @@
 	let editAbortController: AbortController | null = null;
 
 	let isAssigning = $state(false);
+	let teams = $state<IncidentTeam[]>([]);
+	let teamsLoading = $state(false);
 	let assignees = $state<IncidentAssignee[]>([]);
 	let assigneesLoading = $state(false);
 	let assignmentSubmitting = $state(false);
 	let assignmentError = $state<string | null>(null);
 	let assignAbortController: AbortController | null = null;
+	let assigneesAbortController: AbortController | null = null;
+	let assigneesRequestId = 0;
+
+	// In-memory cache while staying on page
+	let cachedTeams: IncidentTeam[] = [];
+	let cachedAssigneesByTeam: Record<string, IncidentAssignee[]> = {};
 
 	let detailRequestId = 0;
 	let detailAbortController: AbortController | null = null;
@@ -180,6 +190,9 @@
 		if (assignAbortController) {
 			assignAbortController.abort();
 		}
+		if (assigneesAbortController) {
+			assigneesAbortController.abort();
+		}
 	});
 
 	async function handleSaveEdit(changes: {
@@ -233,6 +246,63 @@
 		updateError = null;
 	}
 
+	async function loadAssigneesForTeam(targetOrgId: string, teamId: string | null) {
+		const cacheKey = teamId ?? '__ALL__';
+		if (cachedAssigneesByTeam[cacheKey]) {
+			assignees = cachedAssigneesByTeam[cacheKey];
+			return;
+		}
+
+		assigneesRequestId += 1;
+		const thisRequestId = assigneesRequestId;
+
+		if (assigneesAbortController) {
+			assigneesAbortController.abort();
+		}
+		const controller = new AbortController();
+		assigneesAbortController = controller;
+
+		assigneesLoading = true;
+		try {
+			const fetched = await listAssignees(targetOrgId, {
+				...(teamId ? { teamId } : {}),
+				signal: controller.signal
+			});
+
+			if (thisRequestId !== assigneesRequestId) {
+				return;
+			}
+
+			cachedAssigneesByTeam[cacheKey] = fetched;
+			assignees = fetched;
+		} catch (err: unknown) {
+			if (thisRequestId !== assigneesRequestId) {
+				return;
+			}
+			if ((err as Error)?.name === 'AbortError' || controller.signal.aborted) {
+				return;
+			}
+			if (err instanceof IncidentApiError && err.status === 401) {
+				session.clearSession();
+				await goto(resolve('/login?expired=true'));
+				return;
+			}
+			if (err instanceof IncidentApiError) {
+				if (err.status === 403) {
+					assignmentError = 'No tienes permisos para asignar incidencias.';
+				} else {
+					assignmentError = err.message;
+				}
+			} else {
+				assignmentError = 'No se pudieron cargar los técnicos disponibles.';
+			}
+		} finally {
+			if (thisRequestId === assigneesRequestId) {
+				assigneesLoading = false;
+			}
+		}
+	}
+
 	async function handleOpenAssign() {
 		if (assignmentSubmitting) return;
 		isEditing = false;
@@ -240,14 +310,15 @@
 		assignmentError = null;
 
 		const targetOrgId = $session.activeOrganization?.id;
-		if (!targetOrgId) return;
+		if (!targetOrgId || !incident) return;
 
-		// Load assignees on demand if not cached yet
-		if (assignees.length === 0) {
-			assigneesLoading = true;
+		// Load teams on demand if not cached
+		if (cachedTeams.length === 0) {
+			teamsLoading = true;
 			try {
-				const list = await listAssignees(targetOrgId);
-				assignees = list;
+				const fetchedTeams = await listTeams(targetOrgId);
+				cachedTeams = fetchedTeams;
+				teams = fetchedTeams;
 			} catch (err: unknown) {
 				if (err instanceof IncidentApiError && err.status === 401) {
 					session.clearSession();
@@ -256,23 +327,53 @@
 				}
 				if (err instanceof IncidentApiError) {
 					if (err.status === 403) {
-						assignmentError = 'No tienes permisos para asignar incidencias.';
+						assignmentError = 'No tienes permisos para consultar los equipos de esta organización.';
 					} else {
 						assignmentError = err.message;
 					}
 				} else {
-					assignmentError = 'No se pudieron cargar los técnicos disponibles.';
+					assignmentError = 'No se pudieron cargar los equipos disponibles.';
 				}
+				teamsLoading = false;
+				return;
 			} finally {
-				assigneesLoading = false;
+				teamsLoading = false;
 			}
+		} else {
+			teams = cachedTeams;
 		}
+
+		// Load assignees for the incident's initial team
+		await loadAssigneesForTeam(targetOrgId, incident.teamId ?? null);
 	}
 
-	async function handleSaveAssign(data: { assignedToUserId: string; reason?: string }) {
+	async function handleTeamChange(newTeamId: string | null) {
+		const targetOrgId = $session.activeOrganization?.id;
+		if (!targetOrgId) return;
+		assignmentError = null;
+		await loadAssigneesForTeam(targetOrgId, newTeamId);
+	}
+
+	async function handleSaveAssign(data: {
+		teamId?: string | null;
+		assignedToUserId?: string | null;
+		reason?: string;
+	}) {
 		if (assignmentSubmitting || !incident) return;
 		const targetOrgId = $session.activeOrganization?.id;
 		if (!targetOrgId) return;
+
+		// No-op check: both team and technician remain identical to current values
+		const initialTeamId = incident.teamId ?? null;
+		const initialUserId = incident.assignedToUserId ?? null;
+		const finalTeamId = data.teamId ?? null;
+		const finalUserId = data.assignedToUserId ?? null;
+
+		if (finalTeamId === initialTeamId && finalUserId === initialUserId) {
+			isAssigning = false;
+			assignmentError = null;
+			return;
+		}
 
 		assignmentSubmitting = true;
 		assignmentError = null;
@@ -288,15 +389,20 @@
 				signal: controller.signal
 			});
 
-			// Resolve readable technician name from assignees catalog if not returned in response
-			const techName =
+			// Resolve readable team name and technician name from local catalogs if not in response
+			const resolvedTeamName =
+				updated.teamName ??
+				(updated.teamId ? (cachedTeams.find((t) => t.id === updated.teamId)?.name ?? null) : null);
+			const resolvedTechName =
 				updated.assignedToUserName ??
-				assignees.find((a) => a.id === updated.assignedToUserId)?.name ??
-				null;
+				(updated.assignedToUserId
+					? (assignees.find((a) => a.id === updated.assignedToUserId)?.name ?? null)
+					: null);
 
 			incident = {
 				...updated,
-				assignedToUserName: techName
+				teamName: resolvedTeamName,
+				assignedToUserName: resolvedTechName
 			};
 			isAssigning = false;
 			assignmentError = null;
@@ -385,12 +491,17 @@
 			/>
 		{:else if isAssigning && incident}
 			<RealIncidentAssignForm
+				currentTeamId={incident.teamId}
+				currentTeamName={incident.teamName}
 				currentAssigneeUserId={incident.assignedToUserId}
 				currentAssigneeUserName={incident.assignedToUserName}
+				{teams}
 				{assignees}
-				loading={assigneesLoading}
+				{teamsLoading}
+				{assigneesLoading}
 				submitting={assignmentSubmitting}
 				error={assignmentError}
+				onTeamChange={handleTeamChange}
 				onSave={handleSaveAssign}
 				onCancel={handleCancelAssign}
 			/>

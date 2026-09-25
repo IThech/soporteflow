@@ -77,7 +77,7 @@
 								onclick={onAssign}
 								class="inline-flex items-center rounded-lg border border-slate-700 bg-slate-800/80 px-3.5 py-1.5 text-xs font-medium text-slate-200 transition hover:border-slate-600 hover:bg-slate-700 hover:text-white focus:ring-2 focus:ring-cyan-500 focus:outline-none"
 							>
-								{incident.assignedToUserId ? 'Reasignar' : 'Asignar técnico'}
+								{incident.teamId || incident.assignedToUserId ? 'Reasignar' : 'Asignar técnico'}
 							</button>
 						{/if}
 						{#if onEdit}
@@ -108,11 +108,17 @@
 
 			<!-- Metadata Grid -->
 			<div
-				class="grid grid-cols-1 gap-4 border-t border-slate-800 pt-6 text-sm sm:grid-cols-2 lg:grid-cols-4"
+				class="grid grid-cols-1 gap-4 border-t border-slate-800 pt-6 text-sm sm:grid-cols-2 lg:grid-cols-5"
 			>
 				<div>
 					<span class="block text-xs font-medium text-slate-400">Cliente</span>
 					<span class="mt-1 font-medium text-slate-200">{incident.client}</span>
+				</div>
+				<div>
+					<span class="block text-xs font-medium text-slate-400">Equipo</span>
+					<span class="mt-1 font-medium text-slate-200">
+						{incident.teamName ?? (incident.teamId ? 'Equipo asignado' : 'Sin equipo')}
+					</span>
 				</div>
 				<div>
 					<span class="block text-xs font-medium text-slate-400">Asignado a</span>
