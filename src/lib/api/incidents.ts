@@ -958,3 +958,299 @@ export async function updateIncidentSupportLevel(
 	const parsed = parseAndValidateIncident(rawIncident, organizationId, incidentId, res.status);
 	return parsed;
 }
+
+// =============================================================================
+// Incident messages: public comments and internal notes (5.4N)
+// =============================================================================
+
+export interface IncidentMessageAuthor {
+	name: string;
+}
+
+interface IncidentMessageBase {
+	id: string;
+	body: string;
+	/** Backend ISO string with microseconds; kept as string to preserve precision. */
+	createdAt: string;
+	author: IncidentMessageAuthor;
+}
+
+export type IncidentPublicComment = IncidentMessageBase;
+export type IncidentInternalNote = IncidentMessageBase;
+
+export interface IncidentCommentPage {
+	items: IncidentPublicComment[];
+	nextCursor: string | null;
+}
+
+export interface IncidentInternalNotePage {
+	items: IncidentInternalNote[];
+	nextCursor: string | null;
+}
+
+export interface ListIncidentMessagesInput {
+	organizationId: string;
+	incidentId: string;
+	limit?: number;
+	cursor?: string;
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+export interface CreateIncidentMessageInput {
+	organizationId: string;
+	incidentId: string;
+	body: string;
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+const MESSAGE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MESSAGE_CREATED_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+const MESSAGE_CURSOR = /^[A-Za-z0-9_-]{1,256}$/;
+const MESSAGE_MAX_LENGTH = 4000;
+
+/** Fixed per exported function; never derived from caller input. */
+type MessageEndpoint = 'comments' | 'internal-notes';
+
+const MESSAGE_TEXT: Record<
+	MessageEndpoint,
+	{ list: string; create: string; forbidden: string; closed: string; invalid: string }
+> = {
+	comments: {
+		list: 'No se pudieron cargar los comentarios. Inténtalo de nuevo.',
+		create: 'No se pudo publicar el comentario. Inténtalo de nuevo.',
+		forbidden: 'No tienes permisos para acceder a los comentarios de esta incidencia.',
+		closed: 'La incidencia está cerrada y no admite nuevos comentarios.',
+		invalid: 'Revisa el texto del comentario.'
+	},
+	'internal-notes': {
+		list: 'No se pudieron cargar las notas internas. Inténtalo de nuevo.',
+		create: 'No se pudo guardar la nota interna. Inténtalo de nuevo.',
+		forbidden: 'No tienes permisos para acceder a las notas internas de esta incidencia.',
+		closed: 'La incidencia está cerrada y no admite nuevas notas internas.',
+		invalid: 'Revisa el texto de la nota interna.'
+	}
+};
+
+function invalidPayload(status: number): IncidentApiError {
+	return new IncidentApiError(
+		status,
+		'INVALID_PAYLOAD',
+		'No se pudo interpretar la respuesta del servidor.'
+	);
+}
+
+function messageUrl(
+	endpoint: MessageEndpoint,
+	organizationId: string,
+	incidentId: string,
+	query: Record<string, string> = {}
+): string {
+	if (
+		typeof organizationId !== 'string' ||
+		typeof incidentId !== 'string' ||
+		!MESSAGE_UUID.test(organizationId) ||
+		!MESSAGE_UUID.test(incidentId)
+	) {
+		throw new IncidentApiError(0, 'INVALID_INPUT', 'Identificador de incidencia no válido.');
+	}
+	const params = new URLSearchParams({ organizationId, ...query });
+	return `/api/incidents/${encodeURIComponent(incidentId)}/${endpoint}?${params.toString()}`;
+}
+
+async function sendMessageRequest(
+	fetchFn: typeof fetch,
+	url: string,
+	init: RequestInit,
+	signal: AbortSignal | undefined
+): Promise<Response> {
+	try {
+		return await fetchFn(url, { ...init, signal });
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) {
+			throw err;
+		}
+		if ((err as Error)?.name === 'AbortError' || signal?.aborted) {
+			throw err;
+		}
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+}
+
+/** Maps HTTP failures to safe, fixed messages. Only the backend error code is read, never its message. */
+async function messageFailure(
+	res: Response,
+	endpoint: MessageEndpoint,
+	action: 'list' | 'create'
+): Promise<IncidentApiError> {
+	const text = MESSAGE_TEXT[endpoint];
+	if (res.status === 400) {
+		return new IncidentApiError(
+			400,
+			'INVALID_INPUT',
+			action === 'create' ? text.invalid : text.list
+		);
+	}
+	if (res.status === 401) {
+		return new IncidentApiError(401, 'UNAUTHORIZED', 'Tu sesión ya no es válida.');
+	}
+	if (res.status === 403) {
+		return new IncidentApiError(403, 'FORBIDDEN', text.forbidden);
+	}
+	if (res.status === 404) {
+		return new IncidentApiError(404, 'NOT_FOUND', 'La incidencia no está disponible.');
+	}
+	if (res.status === 409) {
+		let backendCode: unknown;
+		try {
+			backendCode = ((await res.json()) as { error?: { code?: unknown } })?.error?.code;
+		} catch {
+			backendCode = undefined;
+		}
+		return backendCode === 'INCIDENT_CLOSED'
+			? new IncidentApiError(409, 'INCIDENT_CLOSED', text.closed)
+			: new IncidentApiError(409, 'CONFLICT', text[action]);
+	}
+	if (res.status >= 500) {
+		return new IncidentApiError(res.status, 'SERVER_ERROR', text[action]);
+	}
+	return new IncidentApiError(res.status, 'INTERNAL_ERROR', text[action]);
+}
+
+async function readJsonObject(res: Response): Promise<Record<string, unknown>> {
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw invalidPayload(res.status);
+	}
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw invalidPayload(res.status);
+	}
+	return data as Record<string, unknown>;
+}
+
+/** Strict allowlist: rebuilds the item so no extra backend field reaches the UI. */
+function parseIncidentMessage(raw: unknown, status: number): IncidentMessageBase {
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw invalidPayload(status);
+	const item = raw as Record<string, unknown>;
+	const author = item.author as Record<string, unknown> | null | undefined;
+	if (
+		typeof item.id !== 'string' ||
+		!MESSAGE_UUID.test(item.id) ||
+		typeof item.body !== 'string' ||
+		item.body.length === 0 ||
+		item.body.length > MESSAGE_MAX_LENGTH ||
+		typeof item.createdAt !== 'string' ||
+		!MESSAGE_CREATED_AT.test(item.createdAt) ||
+		Number.isNaN(Date.parse(item.createdAt)) ||
+		!author ||
+		typeof author !== 'object' ||
+		Array.isArray(author) ||
+		typeof author.name !== 'string' ||
+		author.name.trim().length === 0
+	) {
+		throw invalidPayload(status);
+	}
+	return {
+		id: item.id,
+		body: item.body,
+		createdAt: item.createdAt,
+		author: { name: author.name }
+	};
+}
+
+function parseIncidentMessagePage(
+	data: Record<string, unknown>,
+	status: number
+): { items: IncidentMessageBase[]; nextCursor: string | null } {
+	const { items, nextCursor } = data;
+	if (!Array.isArray(items)) throw invalidPayload(status);
+	if (nextCursor !== null && (typeof nextCursor !== 'string' || !MESSAGE_CURSOR.test(nextCursor))) {
+		throw invalidPayload(status);
+	}
+	const parsed = items.map((item) => parseIncidentMessage(item, status));
+	if (new Set(parsed.map((item) => item.id)).size !== parsed.length) throw invalidPayload(status);
+	return { items: parsed, nextCursor };
+}
+
+async function listIncidentMessages(
+	endpoint: MessageEndpoint,
+	input: ListIncidentMessagesInput
+): Promise<{ items: IncidentMessageBase[]; nextCursor: string | null }> {
+	const query: Record<string, string> = {};
+	if (input.limit !== undefined) {
+		if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+			throw new IncidentApiError(0, 'INVALID_INPUT', 'El tamaño de página no es válido.');
+		}
+		query.limit = String(input.limit);
+	}
+	if (input.cursor !== undefined) {
+		if (typeof input.cursor !== 'string' || !MESSAGE_CURSOR.test(input.cursor)) {
+			throw new IncidentApiError(0, 'INVALID_INPUT', 'El cursor de paginación no es válido.');
+		}
+		query.cursor = input.cursor;
+	}
+	const url = messageUrl(endpoint, input.organizationId, input.incidentId, query);
+	const res = await sendMessageRequest(
+		input.customFetch ?? fetch,
+		url,
+		{ method: 'GET' },
+		input.signal
+	);
+	if (!res.ok) throw await messageFailure(res, endpoint, 'list');
+	return parseIncidentMessagePage(await readJsonObject(res), res.status);
+}
+
+async function createIncidentMessage(
+	endpoint: MessageEndpoint,
+	input: CreateIncidentMessageInput
+): Promise<IncidentMessageBase> {
+	if (typeof input.body !== 'string') {
+		throw new IncidentApiError(0, 'INVALID_INPUT', MESSAGE_TEXT[endpoint].invalid);
+	}
+	const url = messageUrl(endpoint, input.organizationId, input.incidentId);
+	const res = await sendMessageRequest(
+		input.customFetch ?? fetch,
+		url,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			// Exact contract: only { body }; identity, tenant and message type are server-derived.
+			body: JSON.stringify({ body: input.body })
+		},
+		input.signal
+	);
+	if (!res.ok) throw await messageFailure(res, endpoint, 'create');
+	const data = await readJsonObject(res);
+	return parseIncidentMessage(data.item, res.status);
+}
+
+/** GET /api/incidents/<id>/comments?organizationId=<UUID>[&limit][&cursor]. Public comments only. */
+export async function listIncidentComments(
+	input: ListIncidentMessagesInput
+): Promise<IncidentCommentPage> {
+	return listIncidentMessages('comments', input);
+}
+
+/** POST /api/incidents/<id>/comments?organizationId=<UUID> with body { body }. */
+export async function createIncidentComment(
+	input: CreateIncidentMessageInput
+): Promise<IncidentPublicComment> {
+	return createIncidentMessage('comments', input);
+}
+
+/** GET /api/incidents/<id>/internal-notes?organizationId=<UUID>[&limit][&cursor]. Internal notes only. */
+export async function listIncidentInternalNotes(
+	input: ListIncidentMessagesInput
+): Promise<IncidentInternalNotePage> {
+	return listIncidentMessages('internal-notes', input);
+}
+
+/** POST /api/incidents/<id>/internal-notes?organizationId=<UUID> with body { body }. */
+export async function createIncidentInternalNote(
+	input: CreateIncidentMessageInput
+): Promise<IncidentInternalNote> {
+	return createIncidentMessage('internal-notes', input);
+}
