@@ -183,8 +183,14 @@
 
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/stores';
 	import { getMe, signOut, AuthApiError } from '$lib/api/auth';
-	import { listIncidents, IncidentApiError, type IncidentListItem } from '$lib/api/./incidents';
+	import {
+		listIncidents,
+		IncidentApiError,
+		type IncidentListItem,
+		type IncidentQueue as RealIncidentQueue
+	} from '$lib/api/./incidents';
 	import { session } from '$lib/stores/session';
 	import OrganizationSelector from '$lib/components/OrganizationSelector.svelte';
 	import RealIncidentList from '$lib/components/incidents/RealIncidentList.svelte';
@@ -203,10 +209,32 @@
 	let incidentRequestId = 0;
 	let incidentAbortController: AbortController | null = null;
 
+	const VALID_QUEUES: ReadonlySet<string> = new Set(['mine', 'unassigned', 'all']);
+
+	function normalizeQueue(param: string | null): RealIncidentQueue {
+		if (param && VALID_QUEUES.has(param)) {
+			return param as RealIncidentQueue;
+		}
+		return 'all';
+	}
+
+	let activeQueue = $derived<RealIncidentQueue>(
+		normalizeQueue($page.url.searchParams.get('queue'))
+	);
+
+	async function selectQueue(queue: RealIncidentQueue) {
+		if (activeQueue === queue) return;
+		const url = new URL($page.url);
+		url.searchParams.set('queue', queue);
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		await goto(url.pathname + url.search, { keepFocus: true, noScroll: true });
+	}
+
 	$effect(() => {
 		const isAuth = $session.isAuthenticated;
 		const currentOrg = $session.activeOrganization;
 		const currentUserId = $session.user?.id;
+		const currentQueue = activeQueue;
 
 		incidentRequestId += 1;
 		const thisRequestId = incidentRequestId;
@@ -231,15 +259,20 @@
 		incidentAbortController = controller;
 		const targetOrgId = currentOrg.id;
 		const targetUserId = currentUserId;
+		const targetQueue = currentQueue;
 
 		(async () => {
 			try {
-				const data = await listIncidents(targetOrgId, { signal: controller.signal });
+				const data = await listIncidents(targetOrgId, {
+					queue: targetQueue,
+					signal: controller.signal
+				});
 
 				if (
 					thisRequestId !== incidentRequestId ||
 					$session.activeOrganization?.id !== targetOrgId ||
-					$session.user?.id !== targetUserId
+					$session.user?.id !== targetUserId ||
+					activeQueue !== targetQueue
 				) {
 					return;
 				}
@@ -250,7 +283,8 @@
 				if (
 					thisRequestId !== incidentRequestId ||
 					$session.activeOrganization?.id !== targetOrgId ||
-					$session.user?.id !== targetUserId
+					$session.user?.id !== targetUserId ||
+					activeQueue !== targetQueue
 				) {
 					return;
 				}
@@ -270,7 +304,11 @@
 				}
 
 				if (err instanceof IncidentApiError) {
-					realError = err.message;
+					if (err.status === 403) {
+						realError = 'No tienes permisos para consultar esta cola.';
+					} else {
+						realError = err.message;
+					}
 				} else {
 					realError = 'No se pudieron cargar las incidencias. Inténtalo de nuevo.';
 				}
@@ -278,7 +316,8 @@
 				if (
 					thisRequestId === incidentRequestId &&
 					$session.activeOrganization?.id === targetOrgId &&
-					$session.user?.id === targetUserId
+					$session.user?.id === targetUserId &&
+					activeQueue === targetQueue
 				) {
 					realLoading = false;
 				}
@@ -2438,6 +2477,57 @@
 			</div>
 
 			<div class="mt-4">
+				<div class="mb-4">
+					<div
+						class="flex w-fit items-center gap-1 rounded-lg border border-slate-800 bg-slate-950/60 p-1"
+						role="tablist"
+						aria-label="Colas de incidencias"
+					>
+						<button
+							type="button"
+							role="tab"
+							aria-selected={activeQueue === 'mine'}
+							onclick={() => selectQueue('mine')}
+							class={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
+								activeQueue === 'mine'
+									? 'bg-cyan-500 text-slate-950 shadow-xs'
+									: 'text-slate-300 hover:bg-slate-800 hover:text-white'
+							}`}
+							data-testid="queue-tab-mine"
+						>
+							Mis incidencias
+						</button>
+						<button
+							type="button"
+							role="tab"
+							aria-selected={activeQueue === 'unassigned'}
+							onclick={() => selectQueue('unassigned')}
+							class={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
+								activeQueue === 'unassigned'
+									? 'bg-cyan-500 text-slate-950 shadow-xs'
+									: 'text-slate-300 hover:bg-slate-800 hover:text-white'
+							}`}
+							data-testid="queue-tab-unassigned"
+						>
+							Sin asignar
+						</button>
+						<button
+							type="button"
+							role="tab"
+							aria-selected={activeQueue === 'all'}
+							onclick={() => selectQueue('all')}
+							class={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 ${
+								activeQueue === 'all'
+									? 'bg-cyan-500 text-slate-950 shadow-xs'
+									: 'text-slate-300 hover:bg-slate-800 hover:text-white'
+							}`}
+							data-testid="queue-tab-all"
+						>
+							Todas
+						</button>
+					</div>
+				</div>
+
 				{#if !$session.activeOrganization}
 					<div class="rounded-lg border border-slate-800 bg-slate-950/40 p-6 text-center">
 						<p class="text-sm text-slate-400">
@@ -2445,7 +2535,12 @@
 						</p>
 					</div>
 				{:else}
-					<RealIncidentList incidents={realIncidents} loading={realLoading} error={realError} />
+					<RealIncidentList
+						incidents={realIncidents}
+						loading={realLoading}
+						error={realError}
+						queue={activeQueue}
+					/>
 				{/if}
 			</div>
 		</section>

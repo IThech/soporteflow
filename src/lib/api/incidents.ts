@@ -28,7 +28,13 @@ export class IncidentApiError extends Error {
 	}
 }
 
+export type IncidentQueue = 'mine' | 'unassigned' | 'all';
+
 export interface ListIncidentsOptions {
+	queue?: IncidentQueue;
+	status?: 'open' | 'pending' | 'resolved' | 'closed';
+	priority?: 'low' | 'medium' | 'high' | 'urgent';
+	siteId?: string;
 	signal?: AbortSignal;
 	customFetch?: typeof fetch;
 }
@@ -42,7 +48,19 @@ export async function listIncidents(
 	options?: ListIncidentsOptions
 ): Promise<IncidentListItem[]> {
 	const fetchFn = options?.customFetch ?? fetch;
-	const url = `/api/incidents?organizationId=${encodeURIComponent(organizationId)}`;
+	let url = `/api/incidents?organizationId=${encodeURIComponent(organizationId)}`;
+	if (options?.queue) {
+		url += `&queue=${encodeURIComponent(options.queue)}`;
+	}
+	if (options?.status) {
+		url += `&status=${encodeURIComponent(options.status)}`;
+	}
+	if (options?.priority) {
+		url += `&priority=${encodeURIComponent(options.priority)}`;
+	}
+	if (options?.siteId) {
+		url += `&siteId=${encodeURIComponent(options.siteId)}`;
+	}
 
 	let res: Response;
 	try {
@@ -70,7 +88,9 @@ export async function listIncidents(
 			message = 'Tu sesión ya no es válida.';
 			code = 'UNAUTHORIZED';
 		} else if (res.status === 403) {
-			message = 'No tienes permisos para consultar las incidencias de esta organización.';
+			message = options?.queue
+				? 'No tienes permisos para consultar esta cola.'
+				: 'No tienes permisos para consultar las incidencias de esta organización.';
 			code = 'FORBIDDEN';
 		} else if (res.status === 404) {
 			message = 'No se pudo cargar el listado de incidencias.';

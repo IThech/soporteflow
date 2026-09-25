@@ -12,9 +12,26 @@
 		incidents: IncidentListItem[];
 		loading?: boolean;
 		error?: string | null;
+		queue?: 'mine' | 'unassigned' | 'all';
+		emptyMessage?: string;
 	}
 
-	let { incidents = [], loading = false, error = null }: Props = $props();
+	let {
+		incidents = [],
+		loading = false,
+		error = null,
+		queue = 'all',
+		emptyMessage
+	}: Props = $props();
+
+	const computedEmptyMessage = $derived(
+		emptyMessage ??
+			(queue === 'mine'
+				? 'No tienes incidencias asignadas actualmente.'
+				: queue === 'unassigned'
+					? 'No hay incidencias sin asignar en esta organización.'
+					: 'No hay incidencias en esta organización.')
+	);
 </script>
 
 <!-- eslint-disable svelte/no-navigation-without-resolve -->
@@ -48,7 +65,7 @@
 		</div>
 	{:else if incidents.length === 0}
 		<div class="rounded-lg border border-slate-800 bg-slate-950/40 p-8 text-center">
-			<p class="text-sm text-slate-400">No hay incidencias en esta organización.</p>
+			<p class="text-sm text-slate-400">{computedEmptyMessage}</p>
 		</div>
 	{:else}
 		<div class="overflow-x-auto rounded-lg border border-slate-800 bg-slate-900/50">
