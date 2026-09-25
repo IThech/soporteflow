@@ -43,6 +43,13 @@
 			"when": 1790324873632,
 			"tag": "0005_flippant_abomination",
 			"breakpoints": true
+		},
+		{
+			"idx": 6,
+			"version": "7",
+			"when": 1790331615277,
+			"tag": "0006_gifted_princess_powerful",
+			"breakpoints": true
 		}
 	]
 }

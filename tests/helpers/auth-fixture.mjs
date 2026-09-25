@@ -15,7 +15,8 @@ export const expectedMigrations = [
 	'0002_incidents.sql',
 	'0003_keen_namora.sql',
 	'0004_curious_morlocks.sql',
-	'0005_flippant_abomination.sql'
+	'0005_flippant_abomination.sql',
+	'0006_gifted_princess_powerful.sql'
 ];
 
 export const TEST_SECRET = 'synthetic-phase-b-only-secret-123456789';

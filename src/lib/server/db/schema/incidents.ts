@@ -154,3 +154,46 @@ export const incidentHistory = pgTable(
 		index('incident_history_incident_created_idx').on(table.incidentId, table.createdAt)
 	]
 );
+
+/**
+ * Incident messages: public comments and internal notes.
+ * Append-only in v1: no edit/delete columns. Composite foreign keys keep the incident
+ * and the author inside the same organization. The body is stored as literal text;
+ * rendering safety is the responsibility of the UI layer.
+ */
+export const incidentMessages = pgTable(
+	'incident_messages',
+	{
+		id: uuid('id').defaultRandom().primaryKey(),
+		organizationId: uuid('organization_id')
+			.notNull()
+			.references(() => organizations.id, { onDelete: 'restrict' }),
+		incidentId: uuid('incident_id').notNull(),
+		authorUserId: uuid('author_user_id').notNull(),
+		visibility: varchar('visibility', { length: 20 }).notNull(),
+		body: text('body').notNull(),
+		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull()
+	},
+	(table) => [
+		foreignKey({
+			name: 'incident_messages_incident_org_fk',
+			columns: [table.incidentId, table.organizationId],
+			foreignColumns: [incidents.id, incidents.organizationId]
+		}).onDelete('restrict'),
+		foreignKey({
+			name: 'incident_messages_author_org_fk',
+			columns: [table.organizationId, table.authorUserId],
+			foreignColumns: [memberships.organizationId, memberships.userId]
+		}).onDelete('restrict'),
+		check('incident_messages_visibility_check', sql`${table.visibility} IN ('public', 'internal')`),
+		check('incident_messages_body_check', sql`btrim(${table.body}) <> ''`),
+		check('incident_messages_body_length_check', sql`char_length(${table.body}) <= 4000`),
+		index('incident_messages_org_incident_visibility_created_idx').on(
+			table.organizationId,
+			table.incidentId,
+			table.visibility,
+			table.createdAt.desc(),
+			table.id.desc()
+		)
+	]
+);
