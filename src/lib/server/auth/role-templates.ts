@@ -41,7 +41,9 @@ export const ROLE_TEMPLATES = [
 			'teams:view',
 			'identities:create',
 			'memberships:create',
-			'roles:assign'
+			'roles:assign',
+			'roles:view',
+			'roles:manage'
 		]
 	},
 	{

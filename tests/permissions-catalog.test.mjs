@@ -15,7 +15,8 @@ import {
 } from './helpers/auth-fixture.mjs';
 import { applyMigrations } from './helpers/persistence-migrations.mjs';
 
-const EXPECTED_IDS = [
+/** Ids seeded by migration 0011 (5.4Q-B). */
+const IDS_0011 = [
 	'incidents:create',
 	'incidents:view_all',
 	'incidents:view_own',
@@ -33,6 +34,8 @@ const EXPECTED_IDS = [
 	'memberships:create',
 	'roles:assign'
 ];
+/** Current canonical catalog: 0011 + role administration permissions (0013, 5.4R-A). */
+const EXPECTED_IDS = [...IDS_0011, 'roles:view', 'roles:manage'];
 const ID_PATTERN = /^[a-z][a-z_]*:[a-z][a-z_]*$/;
 const SCOPES = ['organization', 'department', 'team', 'site', 'personal'];
 
@@ -99,9 +102,7 @@ test('SoporteFlow — Etapa 5.4Q-B: catálogo canónico de permisos', async (t) 
 			'sla:manage',
 			'organization:manage',
 			'users:manage',
-			'users:view',
-			'roles:view',
-			'roles:manage'
+			'users:view'
 		])
 			assert.ok(!PERMISSION_IDS.includes(id), id);
 		assert.ok(!PERMISSION_IDS.some((id) => id.startsWith('platform:')));
@@ -198,7 +199,7 @@ test('SoporteFlow — Etapa 5.4Q-B: catálogo canónico de permisos', async (t) 
 				assert.deepEqual(await permissionRows(upgrade), once);
 
 				const byId = Object.fromEntries(once.map((r) => [r.id, r]));
-				for (const id of EXPECTED_IDS) assert.ok(byId[id], `canónico ${id} presente`);
+				for (const id of IDS_0011) assert.ok(byId[id], `canónico ${id} presente (0011)`);
 				assert.deepEqual(
 					byId['custom:thing'],
 					{
@@ -233,7 +234,7 @@ test('SoporteFlow — Etapa 5.4Q-B: catálogo canónico de permisos', async (t) 
 					links.map((l) => l.permission_id),
 					['custom:thing', 'incidents:edit', 'incidents:view_all', 'sites:view']
 				);
-				assert.equal(once.length, EXPECTED_IDS.length + 1);
+				assert.equal(once.length, IDS_0011.length + 1);
 			} finally {
 				await upgrade.close();
 			}

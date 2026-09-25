@@ -7,7 +7,8 @@ import { PGlite } from '@electric-sql/pglite';
 import { fixture, directory, expectedMigrations } from './helpers/auth-fixture.mjs';
 import { applyMigrations } from './helpers/persistence-migrations.mjs';
 
-const ADMIN = [
+/** organization_admin permissions as seeded by migration 0012 (5.4Q-C). */
+const ADMIN_0012 = [
 	'incidents:view_all',
 	'incidents:create',
 	'incidents:edit',
@@ -24,6 +25,8 @@ const ADMIN = [
 	'memberships:create',
 	'roles:assign'
 ].sort();
+/** Current organization_admin template: 0012 + roles:view / roles:manage (0013, 5.4R-A). */
+const ADMIN = [...ADMIN_0012, 'roles:view', 'roles:manage'].sort();
 const TECHNICIAN = [
 	'incidents:view_all',
 	'incidents:create',
@@ -207,7 +210,7 @@ test('SoporteFlow — Etapa 5.4Q-C: plantillas de rol canónicas', async (t) => 
 				assert.equal(adminA.template_id, 'tpl_organization_admin');
 				assert.equal(adminA.active, true);
 				assert.equal(adminA.name, 'Administrador de organización');
-				assert.deepEqual(await rolePermissionsOf(up, adminA.id), ADMIN);
+				assert.deepEqual(await rolePermissionsOf(up, adminA.id), ADMIN_0012);
 				// rol canónico preexistente reutilizado: mismo id, conserva su permiso extra y recibe los que faltan
 				const techB = first.find((r) => r.organization_id === orgB && r.code === 'technician');
 				assert.equal(techB.id, existing);

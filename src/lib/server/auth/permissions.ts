@@ -143,6 +143,21 @@ export const PERMISSION_CATALOG = [
 		description: 'Asignar roles de la organización a membresías.',
 		category: 'provisioning',
 		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	// Role administration (5.4R)
+	{
+		id: 'roles:view',
+		name: 'Ver roles',
+		description: 'Consultar los roles de la organización y el catálogo de permisos.',
+		category: 'roles',
+		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	{
+		id: 'roles:manage',
+		name: 'Gestionar roles',
+		description: 'Crear y modificar roles personalizados de la organización (5.4R-B/C).',
+		category: 'roles',
+		allowedScopeTypes: ORGANIZATION_ONLY
 	}
 ] as const satisfies readonly PermissionDefinition[];
 
