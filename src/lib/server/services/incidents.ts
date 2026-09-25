@@ -50,6 +50,7 @@ export type IncidentServiceErrorCode =
 	| 'SITE_INACTIVE'
 	| 'INVALID_INPUT'
 	| 'INCIDENT_NOT_FOUND'
+	| 'INCIDENT_CLOSED'
 	| 'ASSIGNEE_NOT_FOUND';
 
 export class IncidentServiceError extends Error {
