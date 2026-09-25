@@ -9,17 +9,22 @@ import {
 } from '../db/schema';
 import { IncidentServiceError, type IncidentDatabase } from './incidents';
 
-/** Internal note DTO: explicit allowlist, never exposes tenant, incident or author UUIDs. */
-export interface InternalNoteItem {
+/** Message DTO: explicit allowlist, never exposes tenant, incident or author UUIDs. */
+export interface IncidentMessageItem {
 	id: string;
 	body: string;
 	createdAt: string;
 	author: { name: string };
 }
-export interface InternalNotePage {
-	items: InternalNoteItem[];
+export interface IncidentMessagePage {
+	items: IncidentMessageItem[];
 	nextCursor: string | null;
 }
+export type InternalNoteItem = IncidentMessageItem;
+export type InternalNotePage = IncidentMessagePage;
+export type PublicCommentItem = IncidentMessageItem;
+export type PublicCommentPage = IncidentMessagePage;
+
 export interface InternalNoteContext {
 	readonly organizationId: string;
 	readonly incidentId: string;
@@ -27,14 +32,31 @@ export interface InternalNoteContext {
 export interface CreateInternalNoteContext extends InternalNoteContext {
 	readonly actorUserId: string;
 }
+export interface PublicCommentContext {
+	readonly organizationId: string;
+	readonly incidentId: string;
+	/**
+	 * Set by callers that only hold incidents:view_own: access is limited to incidents
+	 * assigned to this user. Omit it only when the caller holds incidents:view_all.
+	 */
+	readonly assignedToUserId?: string;
+}
+export interface CreatePublicCommentContext extends PublicCommentContext {
+	readonly actorUserId: string;
+}
 
-export const INTERNAL_NOTE_MAX_LENGTH = 4000;
+type Visibility = 'internal' | 'public';
+
+export const MESSAGE_MAX_LENGTH = 4000;
+export const INTERNAL_NOTE_MAX_LENGTH = MESSAGE_MAX_LENGTH;
 export const UNAVAILABLE_AUTHOR_NAME = 'Usuario no disponible';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const timestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
-const invalidQuery = () =>
-	new IncidentServiceError('INVALID_INPUT', 'Invalid internal notes query.');
+const QUERY_ERROR: Record<Visibility, string> = {
+	internal: 'Invalid internal notes query.',
+	public: 'Invalid comments query.'
+};
 // Keep PostgreSQL microseconds: JS Date would lose precision at the page boundary.
 const createdAtIso = sql<string>`to_char(${incidentMessages.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`;
 
@@ -44,6 +66,10 @@ function isValidUuid(value: unknown): value is string {
 
 function authorName(displayName: string | null, name: string | null): string {
 	return displayName?.trim() || name?.trim() || UNAVAILABLE_AUTHOR_NAME;
+}
+
+function accessDenied() {
+	return new IncidentServiceError('INCIDENT_ACCESS_DENIED', 'Incident access denied');
 }
 
 // Cursor helpers intentionally mirror incident-history.ts (5.4M) instead of sharing code with it.
@@ -57,20 +83,21 @@ function validTimestamp(at: string): boolean {
 function encodeCursor(cursor: Cursor): string {
 	return Buffer.from(JSON.stringify([cursor.at, cursor.id])).toString('base64url');
 }
-export function parseInternalNotesQuery(params: URLSearchParams): {
-	limit: number;
-	cursor: Cursor | null;
-} {
+function parseMessageQuery(
+	params: URLSearchParams,
+	visibility: Visibility
+): { limit: number; cursor: Cursor | null } {
+	const invalid = () => new IncidentServiceError('INVALID_INPUT', QUERY_ERROR[visibility]);
 	for (const key of params.keys()) {
 		if (!['organizationId', 'limit', 'cursor'].includes(key) || params.getAll(key).length !== 1)
-			throw invalidQuery();
+			throw invalid();
 	}
 	const rawLimit = params.get('limit');
-	if (rawLimit !== null && !/^(?:[1-9]\d?|100)$/.test(rawLimit)) throw invalidQuery();
+	if (rawLimit !== null && !/^(?:[1-9]\d?|100)$/.test(rawLimit)) throw invalid();
 	const limit = rawLimit === null ? 50 : Number(rawLimit);
 	const raw = params.get('cursor');
 	if (raw === null) return { limit, cursor: null };
-	if (raw.length > 256 || !/^[A-Za-z0-9_-]+$/.test(raw)) throw invalidQuery();
+	if (raw.length > 256 || !/^[A-Za-z0-9_-]+$/.test(raw)) throw invalid();
 	try {
 		const value: unknown = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
 		if (
@@ -81,26 +108,52 @@ export function parseInternalNotesQuery(params: URLSearchParams): {
 			typeof value[1] !== 'string' ||
 			!uuid.test(value[1])
 		)
-			throw invalidQuery();
+			throw invalid();
 		const cursor = { at: value[0], id: value[1] };
-		if (encodeCursor(cursor) !== raw) throw invalidQuery();
+		if (encodeCursor(cursor) !== raw) throw invalid();
 		return { limit, cursor };
 	} catch {
-		throw invalidQuery();
+		throw invalid();
 	}
 }
+export function parseInternalNotesQuery(params: URLSearchParams) {
+	return parseMessageQuery(params, 'internal');
+}
+export function parsePublicCommentsQuery(params: URLSearchParams) {
+	return parseMessageQuery(params, 'public');
+}
+
+function validateBody(body: unknown): string {
+	if (typeof body !== 'string') {
+		throw new IncidentServiceError('INVALID_INPUT', 'body must be a string');
+	}
+	const text = body.trim();
+	if (!text) {
+		throw new IncidentServiceError('INVALID_INPUT', 'body must be a non-empty string');
+	}
+	if (text.length > MESSAGE_MAX_LENGTH) {
+		throw new IncidentServiceError(
+			'INVALID_INPUT',
+			`body must not exceed ${MESSAGE_MAX_LENGTH} characters`
+		);
+	}
+	return text;
+}
+
+type AppendContext = CreateInternalNoteContext & { readonly assignedToUserId?: string };
 
 /**
- * Appends an internal note and its internal_note_added audit event in one transaction.
- * Caller must authorize the actor; organizationId, incidentId and actorUserId must come
- * from trusted server context. Visibility is fixed to 'internal'. The body is stored as
- * literal text (trimmed, never sanitized) and is never copied into incident_history.
+ * Shared append path. Organization, actor and incident checks run inside one transaction;
+ * the incident is read FOR SHARE, which conflicts with the row lock of a concurrent UPDATE
+ * (closing, reassignment), so status and assignment stay valid until commit.
+ * Only internal notes write an audit event; public comments never touch incident_history.
  */
-export async function createInternalNote(
+async function appendMessage(
 	dbOrTx: IncidentDatabase,
-	context: CreateInternalNoteContext,
-	body: unknown
-): Promise<InternalNoteItem> {
+	context: AppendContext,
+	body: unknown,
+	visibility: Visibility
+): Promise<IncidentMessageItem> {
 	// 1. Context and input validation
 	if (!isValidUuid(context?.organizationId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
@@ -111,21 +164,12 @@ export async function createInternalNote(
 	if (!isValidUuid(context?.actorUserId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
 	}
-	if (typeof body !== 'string') {
-		throw new IncidentServiceError('INVALID_INPUT', 'body must be a string');
+	if (context.assignedToUserId !== undefined && !isValidUuid(context.assignedToUserId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'assignedToUserId must be a valid UUID');
 	}
-	const text = body.trim();
-	if (!text) {
-		throw new IncidentServiceError('INVALID_INPUT', 'body must be a non-empty string');
-	}
-	if (text.length > INTERNAL_NOTE_MAX_LENGTH) {
-		throw new IncidentServiceError(
-			'INVALID_INPUT',
-			`body must not exceed ${INTERNAL_NOTE_MAX_LENGTH} characters`
-		);
-	}
+	const text = validateBody(body);
 
-	const execute = async (tx: IncidentDatabase): Promise<InternalNoteItem> => {
+	const execute = async (tx: IncidentDatabase): Promise<IncidentMessageItem> => {
 		// A. Validate Organization existence & operational status
 		const [org] = await tx
 			.select({ id: organizations.id, status: organizations.status })
@@ -175,10 +219,13 @@ export async function createInternalNote(
 			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
 		}
 
-		// C. Lock the incident within the tenant. FOR SHARE conflicts with the row lock taken by
-		// a concurrent UPDATE (e.g. closing), so the status read here stays valid until commit.
+		// C. Lock the incident within the tenant and check access and status
 		const [incident] = await tx
-			.select({ id: incidents.id, status: incidents.status })
+			.select({
+				id: incidents.id,
+				status: incidents.status,
+				assignedToUserId: incidents.assignedToUserId
+			})
 			.from(incidents)
 			.where(
 				and(
@@ -191,6 +238,12 @@ export async function createInternalNote(
 		if (!incident) {
 			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
 		}
+		if (
+			context.assignedToUserId !== undefined &&
+			incident.assignedToUserId !== context.assignedToUserId
+		) {
+			throw accessDenied();
+		}
 		if (incident.status === 'closed') {
 			throw new IncidentServiceError('INCIDENT_CLOSED', 'Incident is closed');
 		}
@@ -202,22 +255,24 @@ export async function createInternalNote(
 				organizationId: context.organizationId,
 				incidentId: context.incidentId,
 				authorUserId: context.actorUserId,
-				visibility: 'internal',
+				visibility,
 				body: text
 			})
 			.returning({ id: incidentMessages.id, body: incidentMessages.body, createdAt: createdAtIso });
 
-		// E. Audit event: only the message id, never the note body
-		await tx.insert(incidentHistory).values({
-			incidentId: context.incidentId,
-			organizationId: context.organizationId,
-			eventType: 'internal_note_added',
-			actorType: 'user',
-			actorUserId: context.actorUserId,
-			reason: null,
-			comment: null,
-			payload: { messageId: message.id }
-		});
+		// E. Audit event for internal notes only: the message id, never the note body
+		if (visibility === 'internal') {
+			await tx.insert(incidentHistory).values({
+				incidentId: context.incidentId,
+				organizationId: context.organizationId,
+				eventType: 'internal_note_added',
+				actorType: 'user',
+				actorUserId: context.actorUserId,
+				reason: null,
+				comment: null,
+				payload: { messageId: message.id }
+			});
+		}
 
 		return {
 			id: message.id,
@@ -233,18 +288,22 @@ export async function createInternalNote(
 	return await execute(dbOrTx);
 }
 
-/** Caller must authorize reading internal notes. Tenant membership of the incident is checked here too. */
-export async function listInternalNotes(
+async function listMessages(
 	db: IncidentDatabase,
-	context: InternalNoteContext,
-	params: URLSearchParams = new URLSearchParams()
-): Promise<InternalNotePage> {
-	if (!isValidUuid(context?.organizationId) || !isValidUuid(context?.incidentId)) {
-		throw invalidQuery();
+	context: PublicCommentContext,
+	params: URLSearchParams,
+	visibility: Visibility
+): Promise<IncidentMessagePage> {
+	if (
+		!isValidUuid(context?.organizationId) ||
+		!isValidUuid(context?.incidentId) ||
+		(context.assignedToUserId !== undefined && !isValidUuid(context.assignedToUserId))
+	) {
+		throw new IncidentServiceError('INVALID_INPUT', QUERY_ERROR[visibility]);
 	}
-	const { limit, cursor } = parseInternalNotesQuery(params);
+	const { limit, cursor } = parseMessageQuery(params, visibility);
 	const [incident] = await db
-		.select({ id: incidents.id })
+		.select({ id: incidents.id, assignedToUserId: incidents.assignedToUserId })
 		.from(incidents)
 		.where(
 			and(
@@ -254,11 +313,16 @@ export async function listInternalNotes(
 		)
 		.limit(1);
 	if (!incident) throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found.');
+	if (
+		context.assignedToUserId !== undefined &&
+		incident.assignedToUserId !== context.assignedToUserId
+	)
+		throw accessDenied();
 
 	const conditions = [
 		eq(incidentMessages.organizationId, context.organizationId),
 		eq(incidentMessages.incidentId, context.incidentId),
-		eq(incidentMessages.visibility, 'internal')
+		eq(incidentMessages.visibility, visibility)
 	];
 	if (cursor)
 		conditions.push(
@@ -289,4 +353,85 @@ export async function listInternalNotes(
 		nextCursor:
 			rows.length > limit && last ? encodeCursor({ at: last.createdAt, id: last.id }) : null
 	};
+}
+
+/**
+ * Appends an internal note and its internal_note_added audit event in one transaction.
+ * Caller must authorize the actor; organizationId, incidentId and actorUserId must come
+ * from trusted server context. Visibility is fixed to 'internal'. The body is stored as
+ * literal text (trimmed, never sanitized) and is never copied into incident_history.
+ */
+export async function createInternalNote(
+	dbOrTx: IncidentDatabase,
+	context: CreateInternalNoteContext,
+	body: unknown
+): Promise<InternalNoteItem> {
+	return appendMessage(
+		dbOrTx,
+		{
+			organizationId: context?.organizationId,
+			incidentId: context?.incidentId,
+			actorUserId: context?.actorUserId
+		},
+		body,
+		'internal'
+	);
+}
+
+/** Caller must authorize reading internal notes. Tenant membership of the incident is checked here too. */
+export async function listInternalNotes(
+	db: IncidentDatabase,
+	context: InternalNoteContext,
+	params: URLSearchParams = new URLSearchParams()
+): Promise<InternalNotePage> {
+	return listMessages(
+		db,
+		{ organizationId: context?.organizationId, incidentId: context?.incidentId },
+		params,
+		'internal'
+	);
+}
+
+/**
+ * Appends a public comment. Visibility is fixed to 'public' and no incident_history event
+ * is written. Caller must authorize incidents:add_comment plus incident access: pass
+ * assignedToUserId = actor when the caller only holds incidents:view_own.
+ */
+export async function createPublicComment(
+	dbOrTx: IncidentDatabase,
+	context: CreatePublicCommentContext,
+	body: unknown
+): Promise<PublicCommentItem> {
+	return appendMessage(
+		dbOrTx,
+		{
+			organizationId: context?.organizationId,
+			incidentId: context?.incidentId,
+			actorUserId: context?.actorUserId,
+			assignedToUserId: context?.assignedToUserId
+		},
+		body,
+		'public'
+	);
+}
+
+/**
+ * Lists public comments only. Caller must authorize incidents:view_all, or incidents:view_own
+ * and pass assignedToUserId = principal so that only assigned incidents are readable.
+ */
+export async function listPublicComments(
+	db: IncidentDatabase,
+	context: PublicCommentContext,
+	params: URLSearchParams = new URLSearchParams()
+): Promise<PublicCommentPage> {
+	return listMessages(
+		db,
+		{
+			organizationId: context?.organizationId,
+			incidentId: context?.incidentId,
+			assignedToUserId: context?.assignedToUserId
+		},
+		params,
+		'public'
+	);
 }

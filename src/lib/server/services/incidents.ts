@@ -51,6 +51,7 @@ export type IncidentServiceErrorCode =
 	| 'INVALID_INPUT'
 	| 'INCIDENT_NOT_FOUND'
 	| 'INCIDENT_CLOSED'
+	| 'INCIDENT_ACCESS_DENIED'
 	| 'ASSIGNEE_NOT_FOUND';
 
 export class IncidentServiceError extends Error {
