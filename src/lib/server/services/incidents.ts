@@ -8,6 +8,7 @@ import {
 	memberships,
 	users,
 	sites,
+	categories,
 	teams,
 	teamMemberships,
 	roles,
@@ -51,6 +52,7 @@ export type IncidentServiceErrorCode =
 	| 'SITE_NAME_DUPLICATE'
 	| 'CATEGORY_NOT_FOUND'
 	| 'CATEGORY_NAME_DUPLICATE'
+	| 'CATEGORY_INACTIVE'
 	| 'MEMBERSHIP_NOT_FOUND'
 	| 'MEMBERSHIP_INACTIVE'
 	| 'MEMBERSHIP_SITE_NOT_FOUND'
@@ -143,6 +145,31 @@ function validateReasonInput(reason: unknown): void {
  * UPDATE sites SET active = false, so the site cannot be deactivated between this check
  * and the commit that associates it; a deactivation committed first is observed here.
  */
+/**
+ * Validates a category for a new association inside the caller's transaction (same pattern
+ * as lockActiveSite): scoped by id AND organization, FOR SHARE against a concurrent
+ * UPDATE categories SET active = false. Missing and cross-tenant categories are
+ * indistinguishable (CATEGORY_NOT_FOUND); inactive ones raise CATEGORY_INACTIVE.
+ */
+export async function lockActiveCategory(
+	tx: IncidentDatabase,
+	organizationId: string,
+	categoryId: string
+): Promise<void> {
+	const [category] = await tx
+		.select({ active: categories.active })
+		.from(categories)
+		.where(and(eq(categories.id, categoryId), eq(categories.organizationId, organizationId)))
+		.limit(1)
+		.for('share');
+	if (!category) {
+		throw new IncidentServiceError('CATEGORY_NOT_FOUND', 'Category not found');
+	}
+	if (!category.active) {
+		throw new IncidentServiceError('CATEGORY_INACTIVE', 'Category is inactive');
+	}
+}
+
 export async function lockActiveSite(
 	tx: IncidentDatabase,
 	organizationId: string,
@@ -177,6 +204,7 @@ export interface CreateIncidentInput {
 	priority?: IncidentPriority;
 	clientUserId?: string | null;
 	siteId?: string | null;
+	categoryId?: string | null;
 }
 
 export interface CreateIncidentResult {
@@ -191,6 +219,8 @@ export interface ListIncidentsFilters {
 	queue?: IncidentQueue;
 	teamId?: string | null;
 	supportLevel?: SupportLevel;
+	/** Filters by incidents.category_id within the tenant; the category may be inactive. */
+	categoryId?: string;
 }
 
 export type IncidentDetailRecord = IncidentRecord & {
@@ -256,6 +286,14 @@ export async function createIncidentRecord(
 
 	if (input.siteId !== undefined && input.siteId !== null && !isValidUuid(input.siteId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'siteId must be a valid UUID');
+	}
+
+	if (
+		input.categoryId !== undefined &&
+		input.categoryId !== null &&
+		!isValidUuid(input.categoryId)
+	) {
+		throw new IncidentServiceError('INVALID_INPUT', 'categoryId must be a valid UUID');
 	}
 
 	// 3. Single atomic transaction execution
@@ -352,6 +390,11 @@ export async function createIncidentRecord(
 			await lockActiveSite(tx, context.organizationId, input.siteId);
 		}
 
+		// D.2 Validate optional categoryId (tenant-scoped, active), locked until commit
+		if (input.categoryId) {
+			await lockActiveCategory(tx, context.organizationId, input.categoryId);
+		}
+
 		// E. Atomic counter increment via PostgreSQL UPSERT
 		const [counter] = await tx
 			.insert(organizationCounters)
@@ -384,7 +427,8 @@ export async function createIncidentRecord(
 				supportLevel: 'N1',
 				clientUserId: input.clientUserId ?? null,
 				createdByUserId: context.creatorUserId,
-				siteId: input.siteId ?? null
+				siteId: input.siteId ?? null,
+				categoryId: input.categoryId ?? null
 			})
 			.returning();
 
@@ -470,6 +514,15 @@ export async function listIncidents(
 		}
 	}
 
+	// Category filter: plain FK column within the tenant (no category lookup, so a foreign
+	// category id simply yields no rows and reveals nothing).
+	if (filters?.categoryId !== undefined) {
+		if (!isValidUuid(filters.categoryId)) {
+			throw new IncidentServiceError('INVALID_INPUT', 'categoryId filter must be a valid UUID');
+		}
+		conditions.push(eq(incidents.categoryId, filters.categoryId));
+	}
+
 	if (filters?.queue !== undefined) {
 		if (!VALID_QUEUES.has(filters.queue)) {
 			throw new IncidentServiceError(
@@ -550,6 +603,7 @@ export async function getIncidentById(
 			clientUserId: incidents.clientUserId,
 			createdByUserId: incidents.createdByUserId,
 			siteId: incidents.siteId,
+			categoryId: incidents.categoryId,
 			assignedToUserId: incidents.assignedToUserId,
 			teamId: incidents.teamId,
 			supportLevel: incidents.supportLevel,
@@ -1544,6 +1598,164 @@ export async function changeIncidentSite(
 				reason: cleanReason,
 				comment: null,
 				payload: { fromSiteId, toSiteId: targetSiteId }
+			})
+			.returning();
+
+		return { incident: updatedIncident, history: historyRecord };
+	};
+
+	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+		return await dbOrTx.transaction(async (tx) => execute(tx));
+	}
+	return await execute(dbOrTx);
+}
+
+export interface ChangeIncidentCategoryContext {
+	readonly organizationId: string;
+	readonly actorUserId: string;
+	readonly access?: IncidentAccess;
+}
+
+export interface ChangeIncidentCategoryInput {
+	/** Target category UUID, or null to remove the category. */
+	categoryId: string | null;
+	reason?: string;
+}
+
+export interface ChangeIncidentCategoryResult {
+	incident: IncidentRecord;
+	history?: IncidentHistoryRecord;
+}
+
+/**
+ * Changes (or removes) the category of an incident in a single transaction.
+ * Lock order: incident FOR UPDATE (lockIncidentForMutation: 404 -> access 403 -> closed 409,
+ * before any no-op) -> target category FOR SHARE (lockActiveCategory). setCategoryActive only
+ * locks the category row, so the order cannot form a cycle.
+ * - No-op when the target equals the current category (including null -> null).
+ * - Reason: optional when setting a category on an incident without one; required when
+ *   replacing or removing an existing category.
+ * - Records 'category_changed' with payload { fromCategoryId, toCategoryId } only.
+ * - Does not alter status, priority, team, assignee, support level, site or SLA
+ *   ('reclassified' stays reserved for Classification V2).
+ */
+export async function changeIncidentCategory(
+	dbOrTx: IncidentDatabase,
+	context: ChangeIncidentCategoryContext,
+	incidentId: string,
+	input: ChangeIncidentCategoryInput
+): Promise<ChangeIncidentCategoryResult> {
+	// 1. Context and input validation
+	if (!isValidUuid(context?.organizationId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
+	}
+	if (!isValidUuid(context?.actorUserId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
+	}
+	if (!isValidUuid(incidentId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'incidentId must be a valid UUID');
+	}
+	if (!input || (input.categoryId !== null && !isValidUuid(input.categoryId))) {
+		throw new IncidentServiceError('INVALID_INPUT', 'categoryId must be a valid UUID or null');
+	}
+	validateReasonInput(input.reason);
+	const targetCategoryId = input.categoryId;
+
+	const execute = async (tx: IncidentDatabase): Promise<ChangeIncidentCategoryResult> => {
+		// A. Validate Organization existence & operational status
+		const [org] = await tx
+			.select({ status: organizations.status })
+			.from(organizations)
+			.where(eq(organizations.id, context.organizationId))
+			.limit(1);
+		if (!org) {
+			throw new IncidentServiceError('ORGANIZATION_NOT_FOUND', 'Organization does not exist');
+		}
+		if (org.status !== 'active') {
+			throw new IncidentServiceError(
+				'ORGANIZATION_NOT_OPERATIONAL',
+				`Organization is '${org.status}', operations require 'active'`
+			);
+		}
+
+		// B. Validate Actor Membership and User Activity
+		const [actorRecord] = await tx
+			.select({ membershipActive: memberships.active, userActive: users.active })
+			.from(memberships)
+			.innerJoin(users, eq(users.id, memberships.userId))
+			.where(
+				and(
+					eq(memberships.organizationId, context.organizationId),
+					eq(memberships.userId, context.actorUserId)
+				)
+			)
+			.limit(1);
+		if (!actorRecord) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_NOT_FOUND',
+				'Actor user is not a member of this organization'
+			);
+		}
+		if (!actorRecord.membershipActive) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_INACTIVE',
+				'Actor user membership is inactive'
+			);
+		}
+		if (!actorRecord.userActive) {
+			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+		}
+
+		// C. Lock the incident within the tenant; check access and reject closed incidents
+		// (before the no-op so a closed incident is strictly read-only)
+		const currentIncident = await lockIncidentForMutation(
+			tx,
+			context.organizationId,
+			incidentId,
+			context.access
+		);
+
+		// D. No-op: same category (or null -> null)
+		const fromCategoryId = currentIncident.categoryId ?? null;
+		if (fromCategoryId === targetCategoryId) {
+			return { incident: currentIncident };
+		}
+
+		// E. Reason rule
+		const cleanReason = input.reason?.trim() || null;
+		if (fromCategoryId !== null && cleanReason === null) {
+			throw new IncidentServiceError(
+				'INVALID_INPUT',
+				'Reason is required when changing or removing the category of an incident'
+			);
+		}
+
+		// F. Validate and lock the target category
+		if (targetCategoryId !== null) {
+			await lockActiveCategory(tx, context.organizationId, targetCategoryId);
+		}
+
+		// G. Update incident
+		const [updatedIncident] = await tx
+			.update(incidents)
+			.set({ categoryId: targetCategoryId, updatedAt: new Date() })
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.returning();
+
+		// H. Append-only audit event
+		const [historyRecord] = await tx
+			.insert(incidentHistory)
+			.values({
+				incidentId,
+				organizationId: context.organizationId,
+				eventType: 'category_changed',
+				actorType: 'user',
+				actorUserId: context.actorUserId,
+				reason: cleanReason,
+				comment: null,
+				payload: { fromCategoryId, toCategoryId: targetCategoryId }
 			})
 			.returning();
 

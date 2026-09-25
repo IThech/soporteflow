@@ -461,9 +461,16 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 	});
 
 	await t.test('11. Devuelve incident con status = "open"', async () => {
-		// Incluso si el cliente intenta enviar status = 'resolved' en el body
-		const res = await callPost(POST, {
+		// 5.4P-C: shape estricto. Enviar status en el body ya no se ignora: se rechaza (400).
+		const rejected = await callPost(POST, {
 			body: { ...basePayloadA, status: 'resolved' },
+			headers: { cookie: sessionA.cookieHeader }
+		});
+		assert.equal(rejected.status, 400);
+		assert.equal(rejected.json.error.code, 'INVALID_INPUT');
+		// El estado inicial lo fija siempre el servidor
+		const res = await callPost(POST, {
+			body: basePayloadA,
 			headers: { cookie: sessionA.cookieHeader }
 		});
 		assert.equal(res.status, 201);
@@ -518,15 +525,19 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 	);
 
 	await t.test('14. creatorUserId proviene exclusivamente de la sesión (no del body)', async () => {
-		// Intentar suplantar creador pasando IDs ajenos en el body
+		// Intentar suplantar creador pasando IDs ajenos en el body.
+		// 5.4P-C: shape estricto, cada campo de identidad se rechaza (400) sin crear nada.
 		const spoofedUserId = userB.id;
+		for (const field of ['creatorUserId', 'createdByUserId', 'userId']) {
+			const spoofed = await callPost(POST, {
+				body: { ...basePayloadA, [field]: spoofedUserId },
+				headers: { cookie: sessionA.cookieHeader }
+			});
+			assert.equal(spoofed.status, 400, field);
+			assert.equal(spoofed.json.error.code, 'INVALID_INPUT');
+		}
 		const res = await callPost(POST, {
-			body: {
-				...basePayloadA,
-				creatorUserId: spoofedUserId,
-				createdByUserId: spoofedUserId,
-				userId: spoofedUserId
-			},
+			body: basePayloadA,
 			headers: { cookie: sessionA.cookieHeader }
 		});
 		assert.equal(res.status, 201);
@@ -1516,6 +1527,7 @@ test('SoporteFlow — Etapa 5.2B: Endpoint HTTP GET /api/incidents', async (t) =
 				'assignedToUserId',
 				'teamId',
 				'supportLevel',
+				'categoryId',
 				'createdAt',
 				'updatedAt'
 			]);
@@ -1969,6 +1981,7 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 			'teamId',
 			'teamName',
 			'supportLevel',
+			'categoryId',
 			'createdAt',
 			'updatedAt'
 		]);
@@ -3522,5 +3535,105 @@ test('SoporteFlow — Etapa 5.4N-0: GET /api/incidents/[id] con incidents:view_o
 		const res = await detail(assignedToViewOwn.id, viewAllOtherOrg.session);
 		assert.equal(res.status, 403);
 		assert.equal(res.json.incident, undefined);
+	});
+});
+
+test('SoporteFlow — 5.4P-C: POST /api/incidents no expone err.message de errores de dominio', async (t) => {
+	const f = await fixture(t);
+	const { db, schema: s, server } = f;
+	const { POST } = await server.ssrLoadModule('/src/routes/api/incidents/+server.ts');
+	const { IncidentServiceError } = await server.ssrLoadModule(
+		'/src/lib/server/services/incidents.ts'
+	);
+
+	const [org] = await db
+		.insert(s.organizations)
+		.values({ name: 'Leak', slug: 'leak-' + randomUUID(), status: 'active' })
+		.returning();
+	const user = await identity(f);
+	const [membership] = await db
+		.insert(s.memberships)
+		.values({ organizationId: org.id, userId: user.id, active: true })
+		.returning();
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: membership.id,
+		permissionId: 'incidents:create'
+	});
+	const session = await createSession(f, user.id);
+	const body = { organizationId: org.id, title: 'T', description: 'D', client: 'C' };
+	const SECRET = 'SECRET-DETAIL SELECT * FROM incidents at /srv/app/incidents.ts:42';
+
+	await t.test('código de dominio no reconocido -> 500 genérico sin err.message', async () => {
+		// La transacción del servicio lanza un IncidentServiceError con un código que el POST no
+		// mapea (ASSIGNEE_NOT_FOUND); autenticación y autorización usan la base real.
+		const realDb = globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__;
+		globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__ = new Proxy(realDb, {
+			get(target, prop) {
+				if (prop === 'transaction')
+					return async () => {
+						throw new IncidentServiceError('ASSIGNEE_NOT_FOUND', SECRET);
+					};
+				const value = target[prop];
+				return typeof value === 'function' ? value.bind(target) : value;
+			}
+		});
+		let res;
+		try {
+			res = await callPost(POST, { body, headers: { cookie: session.cookieHeader } });
+		} finally {
+			globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__ = realDb;
+		}
+		assert.equal(res.status, 500);
+		assert.deepEqual(res.json, {
+			error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' }
+		});
+		const text = JSON.stringify(res.json);
+		for (const leak of ['SECRET', 'SELECT', '/srv/', 'incidents.ts', 'ASSIGNEE_NOT_FOUND'])
+			assert.ok(!text.includes(leak), leak);
+	});
+
+	await t.test('errores conocidos de organización/creador: 403 con mensaje genérico', async () => {
+		await db
+			.update(s.organizations)
+			.set({ status: 'active' })
+			.where(eq(s.organizations.id, org.id));
+		const realDb = globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__;
+		for (const code of [
+			'ORGANIZATION_NOT_FOUND',
+			'ORGANIZATION_NOT_OPERATIONAL',
+			'CREATOR_MEMBERSHIP_NOT_FOUND',
+			'CREATOR_MEMBERSHIP_INACTIVE',
+			'CREATOR_USER_INACTIVE'
+		]) {
+			globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__ = new Proxy(realDb, {
+				get(target, prop) {
+					if (prop === 'transaction')
+						return async () => {
+							throw new IncidentServiceError(code, `Organization is 'suspended' ${SECRET}`);
+						};
+					const value = target[prop];
+					return typeof value === 'function' ? value.bind(target) : value;
+				}
+			});
+			let res;
+			try {
+				res = await callPost(POST, { body, headers: { cookie: session.cookieHeader } });
+			} finally {
+				globalThis.__SOPORTEFLOW_ACTIVE_TEST_DB__ = realDb;
+			}
+			assert.equal(res.status, 403, code);
+			assert.deepEqual(res.json, { error: { code: 'FORBIDDEN', message: 'Permission denied.' } });
+			assert.ok(!JSON.stringify(res.json).includes('suspended'));
+		}
+		// y los mappings explícitos siguen intactos
+		const ok = await callPost(POST, { body, headers: { cookie: session.cookieHeader } });
+		assert.equal(ok.status, 201);
+		const missing = await callPost(POST, {
+			body: { ...body, categoryId: randomUUID() },
+			headers: { cookie: session.cookieHeader }
+		});
+		assert.equal(missing.status, 404);
+		assert.equal(missing.json.error.code, 'CATEGORY_NOT_FOUND');
 	});
 });

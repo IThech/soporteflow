@@ -128,7 +128,8 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 		support_level_changed: { previousSupportLevel: 'N1', newSupportLevel: 'N3' },
 		assigned: { newTeamId: privateId, newAssigneeUserId: privateId },
 		reassigned: { previousTeamId: privateId, newAssigneeUserId: privateId },
-		site_changed: { fromSiteId: privateId, toSiteId: privateId }
+		site_changed: { fromSiteId: privateId, toSiteId: privateId },
+		category_changed: { fromCategoryId: privateId, toCategoryId: privateId }
 	};
 	for (const type of SAFE_HISTORY_TYPES)
 		await event(type, { ...payloads[type], malicious: secret, siteId: privateId });
@@ -224,11 +225,13 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 				'reopened',
 				'resolved',
 				'site_changed',
+				'category_changed',
 				'status_changed',
 				'support_level_changed'
 			].sort()
 		);
 		assert.ok(!SAFE_HISTORY_TYPES.includes('internal_note_added'));
+		assert.ok(!SAFE_HISTORY_TYPES.includes('reclassified'));
 	});
 	for (const type of SAFE_HISTORY_TYPES)
 		await t.test('visible ' + type, async () => {
@@ -274,7 +277,9 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 				'clientUserId',
 				'siteId',
 				'fromSiteId',
-				'toSiteId'
+				'toSiteId',
+				'fromCategoryId',
+				'toCategoryId'
 			];
 			function check(value) {
 				if (!value || typeof value !== 'object') return;
@@ -299,6 +304,16 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 			// 5.4O-D: site_changed solo señala el cambio; ni ids de sede, ni reason, ni payload
 			const siteChanged = body.items.find((i) => i.type === 'site_changed');
 			assert.deepEqual(siteChanged.changes, { siteChanged: true });
+			// 5.4P-C: category_changed sigue el mismo patrón (ni ids de categoría ni reason)
+			const categoryChanged = body.items.find((i) => i.type === 'category_changed');
+			assert.deepEqual(categoryChanged.changes, { categoryChanged: true });
+			assert.deepEqual(Object.keys(categoryChanged).sort(), [
+				'actor',
+				'changes',
+				'id',
+				'occurredAt',
+				'type'
+			]);
 			assert.deepEqual(Object.keys(siteChanged).sort(), [
 				'actor',
 				'changes',

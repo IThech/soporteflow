@@ -13,7 +13,7 @@ import {
 	varchar
 } from 'drizzle-orm/pg-core';
 import { organizations, memberships } from './identity';
-import { sites, teams } from './structure';
+import { categories, sites, teams } from './structure';
 
 /**
  * Sequential incident number counters per organization.
@@ -52,6 +52,8 @@ export const incidents = pgTable(
 		assignedToUserId: uuid('assigned_to_user_id'),
 		teamId: uuid('team_id'),
 		supportLevel: varchar('support_level', { length: 10 }).default('N1').notNull(),
+		/** Optional flat Core category (5.4P). Nullable: incidents may have no category. */
+		categoryId: uuid('category_id'),
 		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
 	},
@@ -83,6 +85,11 @@ export const incidents = pgTable(
 			columns: [table.teamId, table.organizationId],
 			foreignColumns: [teams.id, teams.organizationId]
 		}).onDelete('restrict'),
+		foreignKey({
+			name: 'incidents_category_org_fk',
+			columns: [table.categoryId, table.organizationId],
+			foreignColumns: [categories.id, categories.organizationId]
+		}).onDelete('restrict'),
 		check('incidents_title_check', sql`btrim(${table.title}) <> ''`),
 		check('incidents_client_check', sql`btrim(${table.client}) <> ''`),
 		check('incidents_description_check', sql`btrim(${table.description}) <> ''`),
@@ -98,7 +105,8 @@ export const incidents = pgTable(
 		index('incidents_org_status_idx').on(table.organizationId, table.status, table.createdAt),
 		index('incidents_org_site_idx').on(table.organizationId, table.siteId),
 		index('incidents_org_team_idx').on(table.organizationId, table.teamId),
-		index('incidents_org_support_level_idx').on(table.organizationId, table.supportLevel)
+		index('incidents_org_support_level_idx').on(table.organizationId, table.supportLevel),
+		index('incidents_org_category_idx').on(table.organizationId, table.categoryId)
 	]
 );
 
@@ -148,7 +156,7 @@ export const incidentHistory = pgTable(
 				'resolution_accepted', 'resolution_rejected', 'closed',
 				'reopened', 'reclassified', 'priority_override_applied',
 				'priority_override_modified', 'priority_override_removed',
-				'internal_note_added', 'support_level_changed'
+				'internal_note_added', 'support_level_changed', 'category_changed'
 			)`
 		),
 		index('incident_history_incident_created_idx').on(table.incidentId, table.createdAt)

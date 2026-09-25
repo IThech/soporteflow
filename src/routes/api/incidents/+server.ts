@@ -76,6 +76,32 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
+	// 2.1 Strict shape: unknown properties (categoryName, subcategoryId, classification,
+	// routing, defaultTeamId, demo fields...) are rejected instead of silently ignored.
+	const allowedKeys = new Set([
+		'organizationId',
+		'title',
+		'description',
+		'client',
+		'priority',
+		'clientUserId',
+		'siteId',
+		'categoryId'
+	]);
+	for (const key of Object.keys(body)) {
+		if (!allowedKeys.has(key)) {
+			return json(
+				{
+					error: {
+						code: 'INVALID_INPUT',
+						message: `Unknown property '${key}'.`
+					}
+				},
+				{ status: 400 }
+			);
+		}
+	}
+
 	// 3. Authenticate
 	const principal = await resolvePrincipal(event.request.headers);
 	if (!principal) {
@@ -121,7 +147,8 @@ export const POST: RequestHandler = async (event) => {
 				client: body.client as string,
 				priority: body.priority as IncidentPriority | undefined,
 				clientUserId: body.clientUserId as string | null | undefined,
-				siteId: body.siteId as string | null | undefined
+				siteId: body.siteId as string | null | undefined,
+				categoryId: body.categoryId as string | null | undefined
 			}
 		);
 
@@ -146,6 +173,7 @@ export const POST: RequestHandler = async (event) => {
 						{ status: 400 }
 					);
 				case 'SITE_NOT_FOUND':
+				case 'CATEGORY_NOT_FOUND':
 				case 'CLIENT_USER_MEMBERSHIP_NOT_FOUND':
 					return json(
 						{
@@ -157,6 +185,7 @@ export const POST: RequestHandler = async (event) => {
 						{ status: 404 }
 					);
 				case 'SITE_INACTIVE':
+				case 'CATEGORY_INACTIVE':
 				case 'CLIENT_USER_INACTIVE':
 					return json(
 						{
@@ -167,16 +196,24 @@ export const POST: RequestHandler = async (event) => {
 						},
 						{ status: 409 }
 					);
-				default:
+				// Known organization/creator state errors keep their 403 contract, with a generic
+				// message: internal details (e.g. organization status) are never exposed.
+				case 'ORGANIZATION_NOT_FOUND':
+				case 'ORGANIZATION_NOT_OPERATIONAL':
+				case 'CREATOR_MEMBERSHIP_NOT_FOUND':
+				case 'CREATOR_MEMBERSHIP_INACTIVE':
+				case 'CREATOR_USER_INACTIVE':
 					return json(
 						{
 							error: {
 								code: 'FORBIDDEN',
-								message: err.message
+								message: 'Permission denied.'
 							}
 						},
 						{ status: 403 }
 					);
+				// Unrecognized domain errors fall through to the generic 500 below; err.message
+				// is never forwarded to the client.
 			}
 		}
 
@@ -283,6 +320,23 @@ export const GET: RequestHandler = async (event) => {
 	const siteIdParam = event.url.searchParams.get('siteId');
 	if (siteIdParam !== null) {
 		filters.siteId = siteIdParam;
+	}
+
+	// Category filter: single valid UUID; filtered as a plain FK within the tenant.
+	const categoryIdParams = event.url.searchParams.getAll('categoryId');
+	if (categoryIdParams.length > 0) {
+		if (categoryIdParams.length !== 1 || !isValidUuid(categoryIdParams[0])) {
+			return json(
+				{
+					error: {
+						code: 'INVALID_INPUT',
+						message: 'categoryId filter must be a single valid UUID.'
+					}
+				},
+				{ status: 400 }
+			);
+		}
+		filters.categoryId = categoryIdParams[0];
 	}
 
 	const teamIdParam = event.url.searchParams.get('teamId');

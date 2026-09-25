@@ -83,7 +83,7 @@ test('SoporteFlow — Etapa 5.4P-A: catálogo Core de categorías', async (t) =>
 	});
 
 	await t.test(
-		'schema: constraints, índice normalizado, FK y sin category_id en incidents',
+		'schema: constraints, índice normalizado, FK; incidents.category_id integrado en 5.4P-C',
 		async () => {
 			const constraints = await pg.query(
 				`SELECT conname, contype, pg_get_constraintdef(oid) AS def FROM pg_constraint
@@ -106,7 +106,7 @@ test('SoporteFlow — Etapa 5.4P-A: catálogo Core de categorías', async (t) =>
 			const incidentColumns = await pg.query(
 				`SELECT column_name FROM information_schema.columns WHERE table_name = 'incidents'`
 			);
-			assert.ok(!incidentColumns.rows.some((r) => r.column_name === 'category_id'));
+			assert.ok(incidentColumns.rows.some((r) => r.column_name === 'category_id'));
 		}
 	);
 

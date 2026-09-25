@@ -10,6 +10,7 @@ export const SAFE_HISTORY_TYPES = [
 	'reassigned',
 	'support_level_changed',
 	'site_changed',
+	'category_changed',
 	'resolved',
 	'closed',
 	'reopened'
@@ -33,7 +34,8 @@ export type IncidentHistoryItem =
 	| (Base<'priority_changed'> & { changes?: { priority: Change<Priority> } })
 	| (Base<'support_level_changed'> & { changes?: { supportLevel: Change<Level> } })
 	| (Base<'assigned' | 'reassigned'> & { changes?: { assignmentChanged: true } })
-	| (Base<'site_changed'> & { changes?: { siteChanged: true } });
+	| (Base<'site_changed'> & { changes?: { siteChanged: true } })
+	| (Base<'category_changed'> & { changes?: { categoryChanged: true } });
 export interface IncidentHistoryPage {
 	items: IncidentHistoryItem[];
 	nextCursor: string | null;
@@ -139,6 +141,15 @@ export function projectHistoryItem(row: ProjectionRow): IncidentHistoryItem | nu
 				type: 'site_changed',
 				...(row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
 					? { changes: { siteChanged: true as const } }
+					: {})
+			};
+		case 'category_changed':
+			// Same pattern as site_changed: never fromCategoryId/toCategoryId or category names.
+			return {
+				...base,
+				type: 'category_changed',
+				...(row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+					? { changes: { categoryChanged: true as const } }
 					: {})
 			};
 		case 'status_changed':
