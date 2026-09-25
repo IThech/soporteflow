@@ -32,6 +32,7 @@ function makeSampleIncident(overrides = {}) {
 		teamName: null,
 		assignedToUserId: null,
 		assignedToUserName: null,
+		supportLevel: overrides.supportLevel ?? 'N1',
 		createdAt: '2026-09-24T10:00:00.000Z',
 		updatedAt: '2026-09-24T10:30:00.000Z',
 		...overrides

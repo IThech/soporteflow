@@ -51,6 +51,7 @@ export const incidents = pgTable(
 		siteId: uuid('site_id'),
 		assignedToUserId: uuid('assigned_to_user_id'),
 		teamId: uuid('team_id'),
+		supportLevel: varchar('support_level', { length: 10 }).default('N1').notNull(),
 		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
 	},
@@ -93,9 +94,11 @@ export const incidents = pgTable(
 			'incidents_priority_check',
 			sql`${table.priority} IN ('low', 'medium', 'high', 'urgent')`
 		),
+		check('incidents_support_level_check', sql`${table.supportLevel} IN ('N1', 'N2', 'N3')`),
 		index('incidents_org_status_idx').on(table.organizationId, table.status, table.createdAt),
 		index('incidents_org_site_idx').on(table.organizationId, table.siteId),
-		index('incidents_org_team_idx').on(table.organizationId, table.teamId)
+		index('incidents_org_team_idx').on(table.organizationId, table.teamId),
+		index('incidents_org_support_level_idx').on(table.organizationId, table.supportLevel)
 	]
 );
 
@@ -145,7 +148,7 @@ export const incidentHistory = pgTable(
 				'resolution_accepted', 'resolution_rejected', 'closed',
 				'reopened', 'reclassified', 'priority_override_applied',
 				'priority_override_modified', 'priority_override_removed',
-				'internal_note_added'
+				'internal_note_added', 'support_level_changed'
 			)`
 		),
 		index('incident_history_incident_created_idx').on(table.incidentId, table.createdAt)

@@ -9,6 +9,8 @@ import {
 	type IncidentPriority,
 	type IncidentStatus,
 	type IncidentQueue,
+	type SupportLevel,
+	VALID_SUPPORT_LEVELS,
 	type ListIncidentsFilters
 } from '$lib/server/services/incidents';
 
@@ -55,6 +57,19 @@ export const POST: RequestHandler = async (event) => {
 				error: {
 					code: 'INVALID_INPUT',
 					message: 'organizationId must be a valid UUID.'
+				}
+			},
+			{ status: 400 }
+		);
+	}
+
+	if (body.supportLevel !== undefined) {
+		return json(
+			{
+				error: {
+					code: 'INVALID_INPUT',
+					message:
+						'supportLevel cannot be specified during incident creation. Incidents are always initialized at level N1.'
 				}
 			},
 			{ status: 400 }
@@ -278,6 +293,22 @@ export const GET: RequestHandler = async (event) => {
 		} else {
 			filters.teamId = teamIdParam;
 		}
+	}
+
+	const supportLevelParam = event.url.searchParams.get('supportLevel');
+	if (supportLevelParam !== null) {
+		if (!VALID_SUPPORT_LEVELS.includes(supportLevelParam as SupportLevel)) {
+			return json(
+				{
+					error: {
+						code: 'INVALID_INPUT',
+						message: `invalid supportLevel parameter '${supportLevelParam}'. Must be one of: N1, N2, N3.`
+					}
+				},
+				{ status: 400 }
+			);
+		}
+		filters.supportLevel = supportLevelParam as SupportLevel;
 	}
 
 	// 7. Execute listIncidents

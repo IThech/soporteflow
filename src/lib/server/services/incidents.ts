@@ -24,10 +24,14 @@ export type IncidentHistoryRecord = typeof incidentHistory.$inferSelect;
 export type IncidentPriority = 'low' | 'medium' | 'high' | 'urgent';
 export type IncidentStatus = 'open' | 'pending' | 'resolved' | 'closed';
 export type IncidentQueue = 'mine' | 'unassigned' | 'all';
+export type SupportLevel = 'N1' | 'N2' | 'N3';
+
+export const VALID_SUPPORT_LEVELS = ['N1', 'N2', 'N3'] as const;
 
 const VALID_PRIORITIES = new Set<IncidentPriority>(['low', 'medium', 'high', 'urgent']);
 const VALID_STATUSES = new Set<IncidentStatus>(['open', 'pending', 'resolved', 'closed']);
 const VALID_QUEUES = new Set<IncidentQueue>(['mine', 'unassigned', 'all']);
+const VALID_SUPPORT_LEVELS_SET = new Set<SupportLevel>(VALID_SUPPORT_LEVELS);
 
 const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isValidUuid(value: unknown): value is string {
@@ -83,6 +87,7 @@ export interface ListIncidentsFilters {
 	siteId?: string | null;
 	queue?: IncidentQueue;
 	teamId?: string | null;
+	supportLevel?: SupportLevel;
 }
 
 export type IncidentDetailRecord = IncidentRecord & {
@@ -293,6 +298,7 @@ export async function createIncidentRecord(
 				client: input.client.trim(),
 				status: 'open',
 				priority,
+				supportLevel: 'N1',
 				clientUserId: input.clientUserId ?? null,
 				createdByUserId: context.creatorUserId,
 				siteId: input.siteId ?? null
@@ -412,6 +418,16 @@ export async function listIncidents(
 		}
 	}
 
+	if (filters?.supportLevel !== undefined) {
+		if (!VALID_SUPPORT_LEVELS_SET.has(filters.supportLevel)) {
+			throw new IncidentServiceError(
+				'INVALID_INPUT',
+				`invalid supportLevel filter '${String(filters.supportLevel)}'`
+			);
+		}
+		conditions.push(eq(incidents.supportLevel, filters.supportLevel));
+	}
+
 	return await db
 		.select()
 		.from(incidents)
@@ -453,6 +469,7 @@ export async function getIncidentById(
 			siteId: incidents.siteId,
 			assignedToUserId: incidents.assignedToUserId,
 			teamId: incidents.teamId,
+			supportLevel: incidents.supportLevel,
 			createdAt: incidents.createdAt,
 			updatedAt: incidents.updatedAt,
 			assignedToUserName: users.name,
@@ -1138,3 +1155,178 @@ export async function assignIncidentRecord(
 	}
 	return await execute(dbOrTx);
 }
+
+export interface UpdateIncidentSupportLevelContext {
+	readonly organizationId: string;
+	readonly actorUserId: string;
+}
+
+export interface UpdateIncidentSupportLevelInput {
+	supportLevel: SupportLevel;
+	reason?: string;
+}
+
+export interface UpdateIncidentSupportLevelResult {
+	incident: IncidentRecord;
+	history?: IncidentHistoryRecord;
+}
+
+/**
+ * Updates an incident's support level (N1, N2, N3).
+ * Operates in a single atomic transaction:
+ * - Validates operational organization and actor permissions.
+ * - Validates incident exists in the organization.
+ * - If target supportLevel matches current supportLevel:
+ *   * No DB update, no updatedAt alteration, no history record created, no reason required.
+ *   * Returns current incident (clean no-op).
+ * - If changing supportLevel:
+ *   * Validates target supportLevel is in ('N1', 'N2', 'N3').
+ *   * Requires non-empty string reason.
+ *   * Updates incident support_level and updatedAt.
+ *   * Inserts append-only incident_history event with eventType: 'support_level_changed',
+ *     reason, and payload { previousSupportLevel, newSupportLevel }.
+ */
+export async function updateIncidentSupportLevel(
+	dbOrTx: IncidentDatabase,
+	context: UpdateIncidentSupportLevelContext,
+	incidentId: string,
+	input: UpdateIncidentSupportLevelInput
+): Promise<UpdateIncidentSupportLevelResult> {
+	// 1. Context and ID validation
+	if (!isValidUuid(context?.organizationId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
+	}
+	if (!isValidUuid(context?.actorUserId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
+	}
+	if (!isValidUuid(incidentId)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'incidentId must be a valid UUID');
+	}
+
+	if (!input || !VALID_SUPPORT_LEVELS_SET.has(input.supportLevel)) {
+		throw new IncidentServiceError(
+			'INVALID_INPUT',
+			`invalid supportLevel '${String(input?.supportLevel)}'. Must be one of: N1, N2, N3`
+		);
+	}
+
+	const execute = async (tx: IncidentDatabase): Promise<UpdateIncidentSupportLevelResult> => {
+		// A. Validate Organization existence & operational status
+		const [org] = await tx
+			.select({ id: organizations.id, status: organizations.status })
+			.from(organizations)
+			.where(eq(organizations.id, context.organizationId))
+			.limit(1);
+
+		if (!org) {
+			throw new IncidentServiceError('ORGANIZATION_NOT_FOUND', 'Organization does not exist');
+		}
+
+		if (org.status !== 'active') {
+			throw new IncidentServiceError(
+				'ORGANIZATION_NOT_OPERATIONAL',
+				`Organization is '${org.status}', operations require 'active'`
+			);
+		}
+
+		// B. Validate Actor Membership and User Activity
+		const [actorRecord] = await tx
+			.select({
+				membershipActive: memberships.active,
+				userActive: users.active
+			})
+			.from(memberships)
+			.innerJoin(users, eq(users.id, memberships.userId))
+			.where(
+				and(
+					eq(memberships.organizationId, context.organizationId),
+					eq(memberships.userId, context.actorUserId)
+				)
+			)
+			.limit(1);
+
+		if (!actorRecord) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_NOT_FOUND',
+				'Actor user is not a member of this organization'
+			);
+		}
+
+		if (!actorRecord.membershipActive) {
+			throw new IncidentServiceError(
+				'CREATOR_MEMBERSHIP_INACTIVE',
+				'Actor user membership is inactive'
+			);
+		}
+
+		if (!actorRecord.userActive) {
+			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+		}
+
+		// C. Query existing incident strictly within tenant
+		const [currentIncident] = await tx
+			.select()
+			.from(incidents)
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.limit(1);
+
+		if (!currentIncident) {
+			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
+		}
+
+		// D. No-op handling: if supportLevel is unchanged, return current incident without modifying DB
+		if (input.supportLevel === currentIncident.supportLevel) {
+			return { incident: currentIncident };
+		}
+
+		// E. Validate reason: required and non-empty string when changing support level
+		if (typeof input.reason !== 'string' || input.reason.trim().length === 0) {
+			throw new IncidentServiceError(
+				'INVALID_INPUT',
+				'Reason is required when changing support level'
+			);
+		}
+		const cleanReason = input.reason.trim();
+
+		// F. Update incident support_level
+		const [updatedIncident] = await tx
+			.update(incidents)
+			.set({
+				supportLevel: input.supportLevel,
+				updatedAt: new Date()
+			})
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.returning();
+
+		// G. Insert audit history event
+		const [historyRecord] = await tx
+			.insert(incidentHistory)
+			.values({
+				incidentId,
+				organizationId: context.organizationId,
+				eventType: 'support_level_changed',
+				actorType: 'user',
+				actorUserId: context.actorUserId,
+				reason: cleanReason,
+				comment: null,
+				payload: {
+					previousSupportLevel: currentIncident.supportLevel,
+					newSupportLevel: input.supportLevel
+				}
+			})
+			.returning();
+
+		return { incident: updatedIncident, history: historyRecord };
+	};
+
+	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+		return await dbOrTx.transaction(async (tx) => execute(tx));
+	}
+	return await execute(dbOrTx);
+}
+
+export { updateIncidentSupportLevel as updateIncidentSupportLevelRecord };

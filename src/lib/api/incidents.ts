@@ -6,6 +6,7 @@ export interface IncidentListItem {
 	description: string;
 	status: 'open' | 'pending' | 'resolved' | 'closed';
 	priority: 'low' | 'medium' | 'high' | 'urgent';
+	supportLevel: 'N1' | 'N2' | 'N3';
 	client: string;
 	clientUserId: string | null;
 	createdByUserId: string;
@@ -31,12 +32,14 @@ export class IncidentApiError extends Error {
 }
 
 export type IncidentQueue = 'mine' | 'unassigned' | 'all';
+export type SupportLevel = 'N1' | 'N2' | 'N3';
 
 export interface ListIncidentsOptions {
 	queue?: IncidentQueue;
 	status?: 'open' | 'pending' | 'resolved' | 'closed';
 	priority?: 'low' | 'medium' | 'high' | 'urgent';
 	siteId?: string;
+	supportLevel?: SupportLevel;
 	signal?: AbortSignal;
 	customFetch?: typeof fetch;
 }
@@ -62,6 +65,9 @@ export async function listIncidents(
 	}
 	if (options?.siteId) {
 		url += `&siteId=${encodeURIComponent(options.siteId)}`;
+	}
+	if (options?.supportLevel) {
+		url += `&supportLevel=${encodeURIComponent(options.supportLevel)}`;
 	}
 
 	let res: Response;
@@ -287,6 +293,9 @@ function parseAndValidateIncident(
 		item.teamId === undefined || item.teamId === null || typeof item.teamId === 'string';
 	const isValidTeamName =
 		item.teamName === undefined || item.teamName === null || typeof item.teamName === 'string';
+	const isValidSupportLevel =
+		typeof item.supportLevel === 'string' &&
+		(item.supportLevel === 'N1' || item.supportLevel === 'N2' || item.supportLevel === 'N3');
 
 	if (
 		typeof item.id !== 'string' ||
@@ -297,6 +306,7 @@ function parseAndValidateIncident(
 		typeof item.client !== 'string' ||
 		!isValidStatus ||
 		!isValidPriority ||
+		!isValidSupportLevel ||
 		!isValidClientUserId ||
 		typeof item.createdByUserId !== 'string' ||
 		!isValidSiteId ||
@@ -824,6 +834,102 @@ export async function assignIncident(
 			code = 'NOT_FOUND';
 		} else if (res.status >= 500) {
 			message = 'No se pudo asignar la incidencia. Inténtalo de nuevo.';
+			code = 'SERVER_ERROR';
+		}
+		throw new IncidentApiError(res.status, code, message);
+	}
+
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	if (!data || typeof data !== 'object' || Array.isArray(data)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+
+	const rawIncident = (data as { incident?: unknown }).incident;
+	const parsed = parseAndValidateIncident(rawIncident, organizationId, incidentId, res.status);
+	return parsed;
+}
+
+export interface UpdateIncidentSupportLevelInput {
+	supportLevel: SupportLevel;
+	reason?: string;
+}
+
+export interface UpdateIncidentSupportLevelOptions {
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+/**
+ * Updates the support level (N1, N2, N3) of an incident.
+ * Invokes PATCH /api/incidents/<id>/support-level?organizationId=<UUID>.
+ */
+export async function updateIncidentSupportLevel(
+	organizationId: string,
+	incidentId: string,
+	input: UpdateIncidentSupportLevelInput,
+	options?: UpdateIncidentSupportLevelOptions
+): Promise<IncidentListItem> {
+	const fetchFn = options?.customFetch ?? fetch;
+	const url = `/api/incidents/${encodeURIComponent(incidentId)}/support-level?organizationId=${encodeURIComponent(organizationId)}`;
+
+	const payload: Record<string, unknown> = {
+		supportLevel: input.supportLevel
+	};
+	if (input.reason !== undefined) {
+		payload.reason = input.reason;
+	}
+
+	let res: Response;
+	try {
+		res = await fetchFn(url, {
+			method: 'PATCH',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify(payload),
+			signal: options?.signal
+		});
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) {
+			throw err;
+		}
+		if ((err as Error)?.name === 'AbortError' || options?.signal?.aborted) {
+			throw err;
+		}
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+
+	if (!res.ok) {
+		let message = 'No se pudo actualizar el nivel de soporte. Inténtalo de nuevo.';
+		let code = 'INTERNAL_ERROR';
+		if (res.status === 400) {
+			message = 'Los datos para actualizar el nivel son inválidos.';
+			code = 'INVALID_INPUT';
+		} else if (res.status === 401) {
+			message = 'Tu sesión ya no es válida.';
+			code = 'UNAUTHORIZED';
+		} else if (res.status === 403) {
+			message = 'No tienes permisos para modificar el nivel de esta incidencia.';
+			code = 'FORBIDDEN';
+		} else if (res.status === 404) {
+			message = 'La incidencia no está disponible.';
+			code = 'NOT_FOUND';
+		} else if (res.status >= 500) {
+			message = 'No se pudo actualizar el nivel de soporte. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
 		}
 		throw new IncidentApiError(res.status, code, message);

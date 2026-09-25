@@ -32,6 +32,7 @@ function makeSampleIncident(overrides = {}) {
 		clientUserId: null,
 		createdByUserId: randomUUID(),
 		siteId: null,
+		supportLevel: overrides.supportLevel ?? 'N1',
 		createdAt: '2026-09-23T12:00:00.000Z',
 		updatedAt: '2026-09-23T12:30:00.000Z',
 		...overrides
