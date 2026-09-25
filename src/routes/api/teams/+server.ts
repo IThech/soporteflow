@@ -42,10 +42,10 @@ export const GET: RequestHandler = async (event) => {
 		);
 	}
 
-	// 4. Authorize with incidents:assign
+	// 4. Authorize with teams:view (independent from incidents:assign; no implicit inheritance)
 	const authorized = await authorizeAction(event.request.headers, {
 		organizationId,
-		permissionId: 'incidents:assign'
+		permissionId: 'teams:view'
 	});
 	if (!authorized) {
 		return json(

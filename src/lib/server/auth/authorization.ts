@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { resolvePrincipal, resolveTransactionPrincipal } from './principal';
 import type { AuthTransaction } from './instance';
+import type { PermissionId } from './permissions';
 import { getDb } from '../db';
 import {
 	users,
@@ -31,7 +32,11 @@ export type PermissionGrant = Readonly<{
 }>;
 export type AuthorizationAction = Readonly<{
 	organizationId: string;
-	permissionId: string;
+	/**
+	 * Typed against the canonical catalog so server code cannot authorize an uncatalogued id.
+	 * Runtime stays fail-closed for any value (unknown ids simply have no grants).
+	 */
+	permissionId: PermissionId;
 	resource?: AuthorizationResource;
 }>;
 
@@ -228,7 +233,7 @@ export async function authorizeAction(
 export async function authorizeTransaction(
 	headers: Headers,
 	organizationId: string,
-	permissionId: string,
+	permissionId: PermissionId,
 	tx: AuthTransaction
 ) {
 	const context = await membership(headers, organizationId, tx);

@@ -3,6 +3,7 @@ import { hashPassword } from 'better-auth/crypto';
 import { getDb } from '../db';
 import type { AuthTransaction } from './instance';
 import { authorizeTransaction } from './authorization';
+import type { PermissionId } from './permissions';
 import { resolveTransactionPrincipal } from './principal';
 import {
 	users,
@@ -15,12 +16,12 @@ import {
 	permissions
 } from '../db/schema';
 
-/** New catalog keys. No seeds, implicit grants or production insertion. */
+/** Canonical catalog keys (seeded by migration 0011). Seeding grants nothing to anyone. */
 export const provisioningPermissions = Object.freeze({
 	identity: 'identities:create',
 	membership: 'memberships:create',
 	roles: 'roles:assign'
-});
+} as const satisfies Record<string, PermissionId>);
 type Result<T> =
 	{ ok: true; value: T } | { ok: false; error: 'DENIED' | 'INVALID_INPUT' | 'CONFLICT' | 'FAILED' };
 class ProvisioningFailure extends Error {
@@ -58,7 +59,12 @@ async function run<T>(
 		};
 	}
 }
-async function authorize(headers: Headers, org: string, permission: string, tx: AuthTransaction) {
+async function authorize(
+	headers: Headers,
+	org: string,
+	permission: PermissionId,
+	tx: AuthTransaction
+) {
 	requireInput(id(org));
 	const allowed = await authorizeTransaction(headers, org, permission, tx);
 	if (!allowed) throw new ProvisioningFailure('DENIED');

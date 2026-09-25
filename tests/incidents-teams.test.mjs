@@ -79,6 +79,12 @@ test('SoporteFlow — Etapa 5.4K-A: Backend y persistencia de equipos reales en 
 		membershipId: memTech1.id,
 		permissionId: 'incidents:view_all'
 	});
+	// 5.4Q-B: GET /api/teams requires teams:view (independent from incidents:assign)
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memTech1.id,
+		permissionId: 'teams:view'
+	});
 	const sessionTechA = await createSession(f, userTech1.id);
 
 	// Tech 2: Belongs to Team 1 and Team 2
@@ -264,7 +270,7 @@ test('SoporteFlow — Etapa 5.4K-A: Backend y persistencia de equipos reales en 
 		});
 		assert.equal(unauthRes.status, 401);
 
-		// 403 si no tiene incidents:assign
+		// 403 sin teams:view
 		const forbidRes = await getTeamsEndpoint({
 			url: new URL(`http://localhost/api/teams?organizationId=${orgA.id}`),
 			request: new Request(`http://localhost/api/teams?organizationId=${orgA.id}`, {
@@ -282,7 +288,79 @@ test('SoporteFlow — Etapa 5.4K-A: Backend y persistencia de equipos reales en 
 		});
 		assert.equal(invalidRes.status, 400);
 
-		// 200 con incidents:assign
+		// 5.4Q-B: incidents:assign ya no concede teams:view (sin herencia implícita)
+		const userAssignOnly = await createCredentialUser(f, { name: 'Solo Asignar' });
+		const [memAssignOnly] = await db
+			.insert(s.memberships)
+			.values({ organizationId: orgA.id, userId: userAssignOnly.id, active: true })
+			.returning();
+		await grantPermission(f, {
+			organizationId: orgA.id,
+			membershipId: memAssignOnly.id,
+			permissionId: 'incidents:assign'
+		});
+		const sessionAssignOnly = await createSession(f, userAssignOnly.id);
+		const assignOnlyRes = await getTeamsEndpoint({
+			url: new URL(`http://localhost/api/teams?organizationId=${orgA.id}`),
+			request: new Request(`http://localhost/api/teams?organizationId=${orgA.id}`, {
+				headers: sessionAssignOnly.headers
+			})
+		});
+		assert.equal(assignOnlyRes.status, 403);
+		assert.deepEqual(await assignOnlyRes.json(), {
+			error: { code: 'FORBIDDEN', message: 'Permission denied.' }
+		});
+
+		// solo teams:view (sin incidents:assign) -> 200
+		const userViewOnly = await createCredentialUser(f, { name: 'Solo Ver Equipos' });
+		const [memViewOnly] = await db
+			.insert(s.memberships)
+			.values({ organizationId: orgA.id, userId: userViewOnly.id, active: true })
+			.returning();
+		await grantPermission(f, {
+			organizationId: orgA.id,
+			membershipId: memViewOnly.id,
+			permissionId: 'teams:view'
+		});
+		const sessionViewOnly = await createSession(f, userViewOnly.id);
+		const viewOnlyRes = await getTeamsEndpoint({
+			url: new URL(`http://localhost/api/teams?organizationId=${orgA.id}`),
+			request: new Request(`http://localhost/api/teams?organizationId=${orgA.id}`, {
+				headers: sessionViewOnly.headers
+			})
+		});
+		assert.equal(viewOnlyRes.status, 200);
+		assert.equal((await viewOnlyRes.json()).teams.length, 2);
+
+		// teams:view en otra organización no sirve para la organización A
+		const [orgOther] = await db
+			.insert(s.organizations)
+			.values({
+				name: 'Otra org teams',
+				slug: 'otra-teams-' + crypto.randomUUID(),
+				status: 'active'
+			})
+			.returning();
+		const userOther = await createCredentialUser(f, { name: 'Ajeno Equipos' });
+		const [memOther] = await db
+			.insert(s.memberships)
+			.values({ organizationId: orgOther.id, userId: userOther.id, active: true })
+			.returning();
+		await grantPermission(f, {
+			organizationId: orgOther.id,
+			membershipId: memOther.id,
+			permissionId: 'teams:view'
+		});
+		const sessionOther = await createSession(f, userOther.id);
+		const crossRes = await getTeamsEndpoint({
+			url: new URL(`http://localhost/api/teams?organizationId=${orgA.id}`),
+			request: new Request(`http://localhost/api/teams?organizationId=${orgA.id}`, {
+				headers: sessionOther.headers
+			})
+		});
+		assert.equal(crossRes.status, 403);
+
+		// 200 con teams:view
 		const okRes = await getTeamsEndpoint({
 			url: new URL(`http://localhost/api/teams?organizationId=${orgA.id}`),
 			request: new Request(`http://localhost/api/teams?organizationId=${orgA.id}`, {

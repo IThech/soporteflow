@@ -78,6 +78,13 @@
 			"when": 1790348452204,
 			"tag": "0010_odd_angel",
 			"breakpoints": true
+		},
+		{
+			"idx": 11,
+			"version": "7",
+			"when": 1790356746305,
+			"tag": "0011_permissions_catalog",
+			"breakpoints": true
 		}
 	]
 }

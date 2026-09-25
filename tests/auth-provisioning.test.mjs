@@ -136,7 +136,9 @@ async function setup(t) {
 	for (const key of [...Object.values(api.provisioningPermissions), 'synthetic:read']) {
 		await db
 			.insert(s.permissions)
-			.values({ id: key, name: key, category: 'test', allowedScopeTypes: ['organization'] });
+			.values({ id: key, name: key, category: 'test', allowedScopeTypes: ['organization'] })
+			// 5.4Q-B: the canonical provisioning permissions are already seeded by migration 0011
+			.onConflictDoNothing();
 		await db.insert(s.rolePermissions).values({ roleId: role.id, permissionId: key });
 	}
 	await db.insert(s.roleAssignments).values({

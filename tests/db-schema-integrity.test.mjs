@@ -406,20 +406,24 @@ test('SoporteFlow Core v1 — Infraestructura Relacional e Integridad Multiempre
 		'7. Plantillas de roles (role_templates) vs Roles organizativos y permisos',
 		async () => {
 			// 7.1 Create permission
-			await db.insert(schema.permissions).values([
-				{
-					id: 'incidents:view_all',
-					name: 'Ver todas las incidencias',
-					category: 'incidents',
-					allowedScopeTypes: ['organization', 'team', 'department']
-				},
-				{
-					id: 'incidents:edit',
-					name: 'Editar incidencia',
-					category: 'incidents',
-					allowedScopeTypes: ['organization', 'team', 'personal']
-				}
-			]);
+			await db
+				.insert(schema.permissions)
+				.values([
+					{
+						id: 'incidents:view_all',
+						name: 'Ver todas las incidencias',
+						category: 'incidents',
+						allowedScopeTypes: ['organization', 'team', 'department']
+					},
+					{
+						id: 'incidents:edit',
+						name: 'Editar incidencia',
+						category: 'incidents',
+						allowedScopeTypes: ['organization', 'team', 'personal']
+					}
+				])
+				// 5.4Q-B: both ids are canonical and already seeded by migration 0011
+				.onConflictDoNothing();
 
 			// 7.2 Create role template (blueprint without organization_id)
 			const [tpl] = await db
