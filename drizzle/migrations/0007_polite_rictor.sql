@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "sites_org_normalized_name_unique_idx" ON "sites" USING btree ("organization_id",lower(regexp_replace(btrim("name"), '\s+', ' ', 'g')));

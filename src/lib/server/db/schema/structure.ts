@@ -7,6 +7,7 @@ import {
 	text,
 	timestamp,
 	unique,
+	uniqueIndex,
 	uuid,
 	varchar
 } from 'drizzle-orm/pg-core';
@@ -37,6 +38,8 @@ export const departments = pgTable(
 
 /**
  * Physical or logical sites / headquarters of an organization (e.g. Clínica Norte, Central).
+ * Names are unique per organization ignoring case and redundant whitespace, enforced by
+ * sites_org_normalized_name_unique_idx so concurrent writes cannot create duplicates.
  */
 export const sites = pgTable(
 	'sites',
@@ -53,7 +56,11 @@ export const sites = pgTable(
 	},
 	(table) => [
 		unique('sites_org_name_unique').on(table.organizationId, table.name),
-		unique('sites_id_org_unique').on(table.id, table.organizationId)
+		unique('sites_id_org_unique').on(table.id, table.organizationId),
+		uniqueIndex('sites_org_normalized_name_unique_idx').on(
+			table.organizationId,
+			sql`lower(regexp_replace(btrim(${table.name}), '\\s+', ' ', 'g'))`
+		)
 	]
 );
 

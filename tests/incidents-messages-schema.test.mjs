@@ -23,7 +23,7 @@ test('SoporteFlow — Etapa 5.4N-A: esquema relacional de incident_messages en P
 		const clean = await fixture(t, false);
 		const applied = await applyMigrations(clean.pg, directory);
 		assert.deepEqual(applied, expectedMigrations);
-		assert.equal(applied.at(-1), '0006_gifted_princess_powerful.sql');
+		assert.ok(applied.includes('0006_gifted_princess_powerful.sql'));
 	});
 
 	const f = await fixture(t, true);
