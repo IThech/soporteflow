@@ -3,6 +3,11 @@ import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import {
+	canAccessIncident,
+	incidentMutationFailure,
+	resolveIncidentAccess
+} from '$lib/server/auth/incident-access';
+import {
 	getIncidentById,
 	updateIncidentRecord,
 	IncidentServiceError,
@@ -62,17 +67,12 @@ export const GET: RequestHandler = async (event) => {
 
 	// 4. Authorize: incidents:view_all (any incident of the tenant) or
 	// incidents:view_own (only incidents assigned to the authenticated principal)
-	const canViewAll = await authorizeAction(event.request.headers, {
+	const access = await resolveIncidentAccess(
+		event.request.headers,
 		organizationId,
-		permissionId: 'incidents:view_all'
-	});
-	const canViewOwn =
-		!canViewAll &&
-		(await authorizeAction(event.request.headers, {
-			organizationId,
-			permissionId: 'incidents:view_own'
-		}));
-	if (!canViewAll && !canViewOwn) {
+		principal.userId
+	);
+	if (!access) {
 		return json(
 			{
 				error: {
@@ -102,7 +102,7 @@ export const GET: RequestHandler = async (event) => {
 		}
 
 		// 7. view_own only grants access to incidents assigned to the principal
-		if (!canViewAll && result.incident.assignedToUserId !== principal.userId) {
+		if (!canAccessIncident(access, result.incident)) {
 			return json(
 				{
 					error: {
@@ -282,12 +282,16 @@ export const PATCH: RequestHandler = async (event) => {
 		);
 	}
 
-	// 7. Authorize with incidents:edit
+	// 7. Authorize with incidents:edit plus read access to the incident (view_all / view_own);
+	// the assignee restriction is enforced by the service under the incident row lock.
 	const authorized = await authorizeAction(event.request.headers, {
 		organizationId,
 		permissionId: 'incidents:edit'
 	});
-	if (!authorized) {
+	const access = authorized
+		? await resolveIncidentAccess(event.request.headers, organizationId, principal.userId)
+		: null;
+	if (!access) {
 		return json(
 			{
 				error: {
@@ -303,7 +307,7 @@ export const PATCH: RequestHandler = async (event) => {
 	try {
 		const result = await updateIncidentRecord(
 			db,
-			{ organizationId, actorUserId: principal.userId },
+			{ organizationId, actorUserId: principal.userId, access },
 			incidentId,
 			{
 				status: body.status as IncidentStatus | undefined,
@@ -341,6 +345,8 @@ export const PATCH: RequestHandler = async (event) => {
 					{ status: 400 }
 				);
 			}
+			const mapped = incidentMutationFailure(err.code);
+			if (mapped) return mapped;
 		}
 
 		return json(

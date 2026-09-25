@@ -382,7 +382,12 @@ test('SoporteFlow — Etapa 5.4O-C: cliente API de sedes', async (t) => {
 			.insert(s.memberships)
 			.values({ organizationId: org.id, userId: user.id })
 			.returning();
-		for (const permissionId of ['sites:view', 'sites:manage', 'incidents:edit'])
+		for (const permissionId of [
+			'sites:view',
+			'sites:manage',
+			'incidents:edit',
+			'incidents:view_all'
+		])
 			await grantPermission(f, {
 				organizationId: org.id,
 				membershipId: membership.id,

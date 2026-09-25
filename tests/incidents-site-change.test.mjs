@@ -495,10 +495,11 @@ test('SoporteFlow — Etapa 5.4O-C: cambio de sede de incidencias', async (t) =>
 	});
 
 	await t.test(
-		'History API: site_changed sigue excluido del historial seguro (contrato 5.4M)',
+		'History API (5.4O-D): site_changed visible solo como changes.siteChanged',
 		async () => {
 			const target = await incident();
 			await call({ id: target.id, body: { siteId: valencia.id } });
+			await call({ id: target.id, body: { siteId: madrid.id, reason: 'MOTIVO-PRIVADO' } });
 			const url = new URL(
 				`http://localhost/api/incidents/${target.id}/history?organizationId=${orgA.id}`
 			);
@@ -509,9 +510,19 @@ test('SoporteFlow — Etapa 5.4O-C: cambio de sede de incidencias', async (t) =>
 			});
 			assert.equal(response.status, 200);
 			const text = await response.text();
-			assert.ok(!text.includes('site_changed'));
-			assert.ok(!text.includes(valencia.id));
-			assert.equal((await siteEvents(target)).length, 1);
+			const items = JSON.parse(text).items.filter((i) => i.type === 'site_changed');
+			assert.equal(items.length, 2);
+			for (const item of items) assert.deepEqual(item.changes, { siteChanged: true });
+			for (const hidden of [
+				valencia.id,
+				madrid.id,
+				'fromSiteId',
+				'toSiteId',
+				'MOTIVO-PRIVADO',
+				'Valencia'
+			])
+				assert.ok(!text.includes(hidden), hidden);
+			assert.equal((await siteEvents(target)).length, 2);
 		}
 	);
 });

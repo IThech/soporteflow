@@ -691,12 +691,13 @@ test('SoporteFlow — Etapa 4: Servicios de servidor de incidencias v1', async (
 				);
 			});
 
-			// 13. closed → pending rechazado
+			// 13. closed → pending rechazado. Desde 5.4O-D closed es de solo lectura y se rechaza
+			// con INCIDENT_CLOSED antes de evaluar la transición (la única salida es reopen -> open).
 			await t2.test('13. closed → pending rechazado', async () => {
 				const inc = await createFreshIncident('closed');
 				await assert.rejects(
 					updateIncidentRecord(db, contextA, inc.id, { status: 'pending' }),
-					(err) => err instanceof IncidentServiceError && err.code === 'INVALID_INPUT'
+					(err) => err instanceof IncidentServiceError && err.code === 'INCIDENT_CLOSED'
 				);
 			});
 

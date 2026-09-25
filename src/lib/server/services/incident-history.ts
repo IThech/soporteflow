@@ -9,6 +9,7 @@ export const SAFE_HISTORY_TYPES = [
 	'assigned',
 	'reassigned',
 	'support_level_changed',
+	'site_changed',
 	'resolved',
 	'closed',
 	'reopened'
@@ -31,7 +32,8 @@ export type IncidentHistoryItem =
 	  })
 	| (Base<'priority_changed'> & { changes?: { priority: Change<Priority> } })
 	| (Base<'support_level_changed'> & { changes?: { supportLevel: Change<Level> } })
-	| (Base<'assigned' | 'reassigned'> & { changes?: { assignmentChanged: true } });
+	| (Base<'assigned' | 'reassigned'> & { changes?: { assignmentChanged: true } })
+	| (Base<'site_changed'> & { changes?: { siteChanged: true } });
 export interface IncidentHistoryPage {
 	items: IncidentHistoryItem[];
 	nextCursor: string | null;
@@ -128,6 +130,15 @@ export function projectHistoryItem(row: ProjectionRow): IncidentHistoryItem | nu
 				type: row.eventType,
 				...(row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
 					? { changes: { assignmentChanged: true as const } }
+					: {})
+			};
+		case 'site_changed':
+			// Like assignments: signal the change only, never fromSiteId/toSiteId or site names.
+			return {
+				...base,
+				type: 'site_changed',
+				...(row.payload && typeof row.payload === 'object' && !Array.isArray(row.payload)
+					? { changes: { siteChanged: true as const } }
 					: {})
 			};
 		case 'status_changed':

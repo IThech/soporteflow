@@ -2221,6 +2221,12 @@ test('SoporteFlow — Etapa 5.4H: Endpoint HTTP PATCH /api/incidents/[id]', asyn
 		membershipId: membershipTechA.id,
 		permissionId: 'incidents:edit'
 	});
+	// 5.4O-D: toda mutación exige además acceso de lectura (view_all / view_own).
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: membershipTechA.id,
+		permissionId: 'incidents:view_all'
+	});
 	const sessionTechA = await createSession(f, userTechA.id);
 
 	// Administrador en Org A con permiso incidents:edit
@@ -2233,6 +2239,12 @@ test('SoporteFlow — Etapa 5.4H: Endpoint HTTP PATCH /api/incidents/[id]', asyn
 		organizationId: orgA.id,
 		membershipId: membershipAdminA.id,
 		permissionId: 'incidents:edit'
+	});
+	// 5.4O-D: toda mutación exige además acceso de lectura (view_all / view_own).
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: membershipAdminA.id,
+		permissionId: 'incidents:view_all'
 	});
 	const sessionAdminA = await createSession(f, userOrgAdminA.id);
 
@@ -2259,6 +2271,12 @@ test('SoporteFlow — Etapa 5.4H: Endpoint HTTP PATCH /api/incidents/[id]', asyn
 		organizationId: orgB.id,
 		membershipId: membershipB.id,
 		permissionId: 'incidents:edit'
+	});
+	// 5.4O-D: toda mutación exige además acceso de lectura (view_all / view_own).
+	await grantPermission(f, {
+		organizationId: orgB.id,
+		membershipId: membershipB.id,
+		permissionId: 'incidents:view_all'
 	});
 	const sessionB = await createSession(f, userB.id);
 
@@ -2723,6 +2741,12 @@ test('SoporteFlow — Etapa 5.4I-A: POST /api/incidents/[id]/assign — Asignaci
 		organizationId: orgA.id,
 		membershipId: memTech1.id,
 		permissionId: 'incidents:assign'
+	});
+	// 5.4O-D: toda mutación exige además acceso de lectura (view_all / view_own).
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memTech1.id,
+		permissionId: 'incidents:view_all'
 	});
 	const sessionTech1 = await createSession(f, userTech1.id);
 

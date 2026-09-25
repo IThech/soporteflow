@@ -2,6 +2,7 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
+import { incidentMutationFailure, resolveIncidentAccess } from '$lib/server/auth/incident-access';
 import {
 	updateIncidentSupportLevel,
 	IncidentServiceError,
@@ -140,7 +141,12 @@ export const PATCH: RequestHandler = async (event) => {
 		organizationId,
 		permissionId: 'incidents:edit'
 	});
-	if (!authorized) {
+	// Mutation permission plus read access to the incident (view_all / view_own);
+	// the assignee restriction is enforced by the service under the incident row lock.
+	const access = authorized
+		? await resolveIncidentAccess(event.request.headers, organizationId, principal.userId)
+		: null;
+	if (!access) {
 		return json(
 			{
 				error: {
@@ -156,7 +162,7 @@ export const PATCH: RequestHandler = async (event) => {
 	try {
 		const result = await updateIncidentSupportLevel(
 			db,
-			{ organizationId, actorUserId: principal.userId },
+			{ organizationId, actorUserId: principal.userId, access },
 			incidentId,
 			{
 				supportLevel: body.supportLevel as SupportLevel,
@@ -194,6 +200,8 @@ export const PATCH: RequestHandler = async (event) => {
 					{ status: 400 }
 				);
 			}
+			const mapped = incidentMutationFailure(err.code);
+			if (mapped) return mapped;
 		}
 
 		return json(

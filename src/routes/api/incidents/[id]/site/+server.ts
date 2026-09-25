@@ -2,6 +2,7 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
+import { incidentMutationFailure, resolveIncidentAccess } from '$lib/server/auth/incident-access';
 import { changeIncidentSite, IncidentServiceError } from '$lib/server/services/incidents';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -32,13 +33,16 @@ export const PATCH: RequestHandler = async (event) => {
 	try {
 		const principal = await resolvePrincipal(event.request.headers);
 		if (!principal) return failure(401, 'UNAUTHORIZED', 'Authentication required.');
-		if (
-			!(await authorizeAction(event.request.headers, {
-				organizationId,
-				permissionId: 'incidents:edit'
-			}))
-		)
-			return failure(403, 'FORBIDDEN', 'Permission denied.');
+		// incidents:edit plus read access to the incident (view_all / view_own);
+		// the assignee restriction is enforced by the service under the incident row lock.
+		const canEdit = await authorizeAction(event.request.headers, {
+			organizationId,
+			permissionId: 'incidents:edit'
+		});
+		const access = canEdit
+			? await resolveIncidentAccess(event.request.headers, organizationId, principal.userId)
+			: null;
+		if (!access) return failure(403, 'FORBIDDEN', 'Permission denied.');
 
 		let payload: unknown;
 		try {
@@ -63,7 +67,7 @@ export const PATCH: RequestHandler = async (event) => {
 
 		const result = await changeIncidentSite(
 			db,
-			{ organizationId, actorUserId: principal.userId },
+			{ organizationId, actorUserId: principal.userId, access },
 			incidentId,
 			{ siteId: siteId as string | null, reason: reason as string | undefined }
 		);
@@ -76,14 +80,8 @@ export const PATCH: RequestHandler = async (event) => {
 			if (error.code === 'SITE_NOT_FOUND') return failure(404, 'SITE_NOT_FOUND', 'Site not found.');
 			if (error.code === 'SITE_INACTIVE')
 				return failure(409, 'SITE_INACTIVE', 'The selected site is inactive.');
-			if (
-				error.code === 'ORGANIZATION_NOT_FOUND' ||
-				error.code === 'ORGANIZATION_NOT_OPERATIONAL' ||
-				error.code === 'CREATOR_MEMBERSHIP_NOT_FOUND' ||
-				error.code === 'CREATOR_MEMBERSHIP_INACTIVE' ||
-				error.code === 'CREATOR_USER_INACTIVE'
-			)
-				return failure(403, 'FORBIDDEN', 'Permission denied.');
+			const mapped = incidentMutationFailure(error.code);
+			if (mapped) return mapped;
 		}
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}

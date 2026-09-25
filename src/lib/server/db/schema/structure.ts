@@ -122,6 +122,40 @@ export const teamMemberships = pgTable(
 );
 
 /**
+ * Operational site membership: "this membership normally works at this site".
+ * Many-to-many, tenant-specific (membership, not global user). It NEVER grants permissions,
+ * queue visibility, routing or incident access: authorization scopes live in
+ * role_assignments (scope_type = 'site'), and "all sites" is expressed by organization-level
+ * authorization, never by one row per site. No primary site in v1.
+ * Deactivation keeps the row; RESTRICT (not CASCADE) protects the history of associations.
+ */
+export const membershipSites = pgTable(
+	'membership_sites',
+	{
+		id: uuid('id').defaultRandom().primaryKey(),
+		organizationId: uuid('organization_id').notNull(),
+		membershipId: uuid('membership_id').notNull(),
+		siteId: uuid('site_id').notNull(),
+		active: boolean('active').default(true).notNull(),
+		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
+	},
+	(table) => [
+		unique('membership_sites_membership_site_unique').on(table.membershipId, table.siteId),
+		foreignKey({
+			name: 'membership_sites_membership_org_fk',
+			columns: [table.membershipId, table.organizationId],
+			foreignColumns: [memberships.id, memberships.organizationId]
+		}).onDelete('restrict'),
+		foreignKey({
+			name: 'membership_sites_site_org_fk',
+			columns: [table.siteId, table.organizationId],
+			foreignColumns: [sites.id, sites.organizationId]
+		}).onDelete('restrict')
+	]
+);
+
+/**
  * Transversal teams associated with the departments they service.
  * Enforces that both team and department belong to the exact same organization.
  */

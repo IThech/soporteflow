@@ -87,9 +87,9 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 		});
 		return { status: response.status, body: await response.json() };
 	}
+	// 5.4O-D: site_changed pasa a ser visible (solo changes.siteChanged); el resto sigue oculto.
 	const blocked = [
 		'escalated',
-		'site_changed',
 		'resolution_accepted',
 		'resolution_rejected',
 		'reclassified',
@@ -127,7 +127,8 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 		priority_changed: { oldPriority: 'low', newPriority: 'high' },
 		support_level_changed: { previousSupportLevel: 'N1', newSupportLevel: 'N3' },
 		assigned: { newTeamId: privateId, newAssigneeUserId: privateId },
-		reassigned: { previousTeamId: privateId, newAssigneeUserId: privateId }
+		reassigned: { previousTeamId: privateId, newAssigneeUserId: privateId },
+		site_changed: { fromSiteId: privateId, toSiteId: privateId }
 	};
 	for (const type of SAFE_HISTORY_TYPES)
 		await event(type, { ...payloads[type], malicious: secret, siteId: privateId });
@@ -211,6 +212,24 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 		const value = await service.getIncidentById(guarded, { organizationId: org.id }, incident.id);
 		assert.deepEqual(Object.keys(value), ['incident']);
 	});
+	await t.test('whitelist cerrada: exactamente estos tipos seguros', () => {
+		assert.deepEqual(
+			[...SAFE_HISTORY_TYPES].sort(),
+			[
+				'assigned',
+				'closed',
+				'created',
+				'priority_changed',
+				'reassigned',
+				'reopened',
+				'resolved',
+				'site_changed',
+				'status_changed',
+				'support_level_changed'
+			].sort()
+		);
+		assert.ok(!SAFE_HISTORY_TYPES.includes('internal_note_added'));
+	});
 	for (const type of SAFE_HISTORY_TYPES)
 		await t.test('visible ' + type, async () => {
 			const result = await request();
@@ -253,7 +272,9 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 				'teamId',
 				'assignedToUserId',
 				'clientUserId',
-				'siteId'
+				'siteId',
+				'fromSiteId',
+				'toSiteId'
 			];
 			function check(value) {
 				if (!value || typeof value !== 'object') return;
@@ -275,6 +296,16 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 			assert.deepEqual(body.items.find((i) => i.type === 'assigned').changes, {
 				assignmentChanged: true
 			});
+			// 5.4O-D: site_changed solo señala el cambio; ni ids de sede, ni reason, ni payload
+			const siteChanged = body.items.find((i) => i.type === 'site_changed');
+			assert.deepEqual(siteChanged.changes, { siteChanged: true });
+			assert.deepEqual(Object.keys(siteChanged).sort(), [
+				'actor',
+				'changes',
+				'id',
+				'occurredAt',
+				'type'
+			]);
 			assert.deepEqual(body.items[0].actor, { type: 'user', label: 'Usuario' });
 			assert.equal(body.items.find((i) => i.type === 'created').changes, undefined);
 		}

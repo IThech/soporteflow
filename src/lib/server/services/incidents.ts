@@ -49,6 +49,9 @@ export type IncidentServiceErrorCode =
 	| 'SITE_NOT_FOUND'
 	| 'SITE_INACTIVE'
 	| 'SITE_NAME_DUPLICATE'
+	| 'MEMBERSHIP_NOT_FOUND'
+	| 'MEMBERSHIP_INACTIVE'
+	| 'MEMBERSHIP_SITE_NOT_FOUND'
 	| 'INVALID_INPUT'
 	| 'INCIDENT_NOT_FOUND'
 	| 'INCIDENT_CLOSED'
@@ -66,13 +69,79 @@ export class IncidentServiceError extends Error {
 }
 
 /**
+ * Incident read access resolved by the HTTP layer from the caller's permissions
+ * (same semantics as GET /api/incidents/[id]):
+ * - {}                        incidents:view_all, any incident of the tenant;
+ * - { assignedToUserId: me }  incidents:view_own, only incidents assigned to the principal.
+ * clientUserId never grants access. Omitted only by trusted internal callers.
+ */
+export interface IncidentAccess {
+	readonly assignedToUserId?: string;
+}
+
+/**
+ * Loads and locks an incident for a mutation inside the caller's transaction.
+ * Order: tenant-scoped lookup FOR UPDATE -> 404 -> access (403) -> closed (409).
+ * Access is checked before the closed state so callers without access learn nothing about it.
+ * FOR UPDATE serializes concurrent mutations and closing: a close committed first is observed
+ * here, and a close attempted later waits for this transaction.
+ * Pass rejectClosed = false only when the caller implements the reopen transition itself.
+ */
+async function lockIncidentForMutation(
+	tx: IncidentDatabase,
+	organizationId: string,
+	incidentId: string,
+	access: IncidentAccess | undefined,
+	rejectClosed = true
+): Promise<IncidentRecord> {
+	const [incident] = await tx
+		.select()
+		.from(incidents)
+		.where(and(eq(incidents.id, incidentId), eq(incidents.organizationId, organizationId)))
+		.limit(1)
+		.for('update');
+	if (!incident) {
+		throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
+	}
+	if (
+		access?.assignedToUserId !== undefined &&
+		incident.assignedToUserId !== access.assignedToUserId
+	) {
+		throw new IncidentServiceError('INCIDENT_ACCESS_DENIED', 'Incident access denied');
+	}
+	if (rejectClosed && incident.status === 'closed') {
+		throw new IncidentServiceError('INCIDENT_CLOSED', 'Incident is closed');
+	}
+	return incident;
+}
+
+export const INCIDENT_REASON_MAX_LENGTH = 1000;
+
+/** Shared reason validation: string, at most INCIDENT_REASON_MAX_LENGTH after trim, no NUL. */
+function validateReasonInput(reason: unknown): void {
+	if (reason === undefined) return;
+	if (typeof reason !== 'string') {
+		throw new IncidentServiceError('INVALID_INPUT', 'reason must be a string');
+	}
+	if (reason.trim().length > INCIDENT_REASON_MAX_LENGTH) {
+		throw new IncidentServiceError(
+			'INVALID_INPUT',
+			`reason must not exceed ${INCIDENT_REASON_MAX_LENGTH} characters`
+		);
+	}
+	if (reason.includes('\u0000')) {
+		throw new IncidentServiceError('INVALID_INPUT', 'reason contains invalid characters');
+	}
+}
+
+/**
  * Validates a site for a new association inside the caller's transaction.
  * The lookup is always scoped by id AND organization (cross-tenant and missing sites are
  * indistinguishable). FOR SHARE conflicts with the row lock of a concurrent
  * UPDATE sites SET active = false, so the site cannot be deactivated between this check
  * and the commit that associates it; a deactivation committed first is observed here.
  */
-async function lockActiveSite(
+export async function lockActiveSite(
 	tx: IncidentDatabase,
 	organizationId: string,
 	siteId: string
@@ -510,6 +579,7 @@ const ALLOWED_STATUS_TRANSITIONS: Record<IncidentStatus, ReadonlySet<IncidentSta
 export interface UpdateIncidentContext {
 	readonly organizationId: string;
 	readonly actorUserId: string;
+	readonly access?: IncidentAccess;
 }
 
 export interface UpdateIncidentInput {
@@ -606,21 +676,23 @@ export async function updateIncidentRecord(
 			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
 		}
 
-		// C. Query existing incident strictly within tenant
-		const [currentIncident] = await tx
-			.select()
-			.from(incidents)
-			.where(
-				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
-			)
-			.limit(1);
-
-		if (!currentIncident) {
-			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
-		}
+		// C. Lock the incident within the tenant and check access
+		const currentIncident = await lockIncidentForMutation(
+			tx,
+			context.organizationId,
+			incidentId,
+			context.access,
+			false
+		);
 
 		const currentStatus = currentIncident.status as IncidentStatus;
 		const currentPriority = currentIncident.priority as IncidentPriority;
+
+		// C.1 Closed is read-only: the only accepted operation is the explicit reopen
+		// (status 'open' alone, recorded as 'reopened'). Checked before any no-op handling.
+		if (currentStatus === 'closed' && (input?.status !== 'open' || input?.priority !== undefined)) {
+			throw new IncidentServiceError('INCIDENT_CLOSED', 'Incident is closed');
+		}
 
 		const isStatusSent = input?.status !== undefined;
 		const isPrioritySent = input?.priority !== undefined;
@@ -847,6 +919,7 @@ export async function getAssignableTechnicians(
 export interface AssignIncidentContext {
 	readonly organizationId: string;
 	readonly actorUserId: string;
+	readonly access?: IncidentAccess;
 }
 
 export interface AssignIncidentInput {
@@ -891,6 +964,7 @@ export async function assignIncidentRecord(
 	if (input?.teamId !== undefined && input.teamId !== null && !isValidUuid(input.teamId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'teamId must be a valid UUID');
 	}
+	validateReasonInput(input?.reason);
 	if (
 		input?.assignedToUserId !== undefined &&
 		input.assignedToUserId !== null &&
@@ -958,18 +1032,13 @@ export async function assignIncidentRecord(
 			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
 		}
 
-		// C. Query existing incident strictly within tenant
-		const [currentIncident] = await tx
-			.select()
-			.from(incidents)
-			.where(
-				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
-			)
-			.limit(1);
-
-		if (!currentIncident) {
-			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
-		}
+		// C. Lock the incident within the tenant; check access and reject closed incidents
+		const currentIncident = await lockIncidentForMutation(
+			tx,
+			context.organizationId,
+			incidentId,
+			context.access
+		);
 
 		// D. Determine target teamId and validate team if not null
 		const finalTeamId = input.teamId !== undefined ? input.teamId : currentIncident.teamId;
@@ -1160,6 +1229,7 @@ export async function assignIncidentRecord(
 export interface UpdateIncidentSupportLevelContext {
 	readonly organizationId: string;
 	readonly actorUserId: string;
+	readonly access?: IncidentAccess;
 }
 
 export interface UpdateIncidentSupportLevelInput {
@@ -1210,6 +1280,7 @@ export async function updateIncidentSupportLevel(
 			`invalid supportLevel '${String(input?.supportLevel)}'. Must be one of: N1, N2, N3`
 		);
 	}
+	validateReasonInput(input.reason);
 
 	const execute = async (tx: IncidentDatabase): Promise<UpdateIncidentSupportLevelResult> => {
 		// A. Validate Organization existence & operational status
@@ -1264,18 +1335,13 @@ export async function updateIncidentSupportLevel(
 			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
 		}
 
-		// C. Query existing incident strictly within tenant
-		const [currentIncident] = await tx
-			.select()
-			.from(incidents)
-			.where(
-				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
-			)
-			.limit(1);
-
-		if (!currentIncident) {
-			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
-		}
+		// C. Lock the incident within the tenant; check access and reject closed incidents
+		const currentIncident = await lockIncidentForMutation(
+			tx,
+			context.organizationId,
+			incidentId,
+			context.access
+		);
 
 		// D. No-op handling: if supportLevel is unchanged, return current incident without modifying DB
 		if (input.supportLevel === currentIncident.supportLevel) {
@@ -1332,11 +1398,10 @@ export async function updateIncidentSupportLevel(
 
 export { updateIncidentSupportLevel as updateIncidentSupportLevelRecord };
 
-export const INCIDENT_REASON_MAX_LENGTH = 1000;
-
 export interface ChangeIncidentSiteContext {
 	readonly organizationId: string;
 	readonly actorUserId: string;
+	readonly access?: IncidentAccess;
 }
 
 export interface ChangeIncidentSiteInput {
@@ -1379,20 +1444,7 @@ export async function changeIncidentSite(
 	if (!input || (input.siteId !== null && !isValidUuid(input.siteId))) {
 		throw new IncidentServiceError('INVALID_INPUT', 'siteId must be a valid UUID or null');
 	}
-	if (input.reason !== undefined) {
-		if (typeof input.reason !== 'string') {
-			throw new IncidentServiceError('INVALID_INPUT', 'reason must be a string');
-		}
-		if (input.reason.trim().length > INCIDENT_REASON_MAX_LENGTH) {
-			throw new IncidentServiceError(
-				'INVALID_INPUT',
-				`reason must not exceed ${INCIDENT_REASON_MAX_LENGTH} characters`
-			);
-		}
-		if (input.reason.includes('\u0000')) {
-			throw new IncidentServiceError('INVALID_INPUT', 'reason contains invalid characters');
-		}
-	}
+	validateReasonInput(input.reason);
 	const targetSiteId = input.siteId;
 
 	const execute = async (tx: IncidentDatabase): Promise<ChangeIncidentSiteResult> => {
@@ -1440,18 +1492,14 @@ export async function changeIncidentSite(
 			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
 		}
 
-		// C. Lock the incident strictly within the tenant
-		const [currentIncident] = await tx
-			.select()
-			.from(incidents)
-			.where(
-				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
-			)
-			.limit(1)
-			.for('update');
-		if (!currentIncident) {
-			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
-		}
+		// C. Lock the incident within the tenant; check access and reject closed incidents
+		// (before the no-op so a closed incident is strictly read-only)
+		const currentIncident = await lockIncidentForMutation(
+			tx,
+			context.organizationId,
+			incidentId,
+			context.access
+		);
 
 		// D. No-op: same site (or null -> null)
 		const fromSiteId = currentIncident.siteId ?? null;

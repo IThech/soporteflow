@@ -2,6 +2,7 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
+import { resolveIncidentAccess } from '$lib/server/auth/incident-access';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import {
 	createPublicComment,
@@ -25,22 +26,8 @@ const FORBIDDEN_SERVICE_CODES = new Set([
 	'CREATOR_USER_INACTIVE'
 ]);
 
-/**
- * Incident read access, same semantics as GET /api/incidents/[id] (5.4N-0):
- * view_all reads any incident of the tenant; view_own only incidents assigned to the principal.
- * Returns the assignee restriction to enforce in the service, or null when access is denied.
- */
-async function incidentAccess(
-	headers: Headers,
-	organizationId: string,
-	userId: string
-): Promise<{ assignedToUserId?: string } | null> {
-	if (await authorizeAction(headers, { organizationId, permissionId: 'incidents:view_all' }))
-		return {};
-	if (await authorizeAction(headers, { organizationId, permissionId: 'incidents:view_own' }))
-		return { assignedToUserId: userId };
-	return null;
-}
+/** Incident read access, shared with the detail and mutation endpoints. */
+const incidentAccess = resolveIncidentAccess;
 
 function serviceFailure(error: unknown, invalidMessage?: string) {
 	if (error instanceof IncidentServiceError) {

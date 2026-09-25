@@ -57,6 +57,13 @@
 			"when": 1790336052179,
 			"tag": "0007_polite_rictor",
 			"breakpoints": true
+		},
+		{
+			"idx": 8,
+			"version": "7",
+			"when": 1790339204535,
+			"tag": "0008_smooth_james_howlett",
+			"breakpoints": true
 		}
 	]
 }

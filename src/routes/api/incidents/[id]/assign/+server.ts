@@ -2,6 +2,7 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
+import { incidentMutationFailure, resolveIncidentAccess } from '$lib/server/auth/incident-access';
 import { assignIncidentRecord, IncidentServiceError } from '$lib/server/services/incidents';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -160,7 +161,12 @@ export const POST: RequestHandler = async (event) => {
 		organizationId,
 		permissionId: 'incidents:assign'
 	});
-	if (!authorized) {
+	// Mutation permission plus read access to the incident (view_all / view_own);
+	// the assignee restriction is enforced by the service under the incident row lock.
+	const access = authorized
+		? await resolveIncidentAccess(event.request.headers, organizationId, principal.userId)
+		: null;
+	if (!access) {
 		return json(
 			{
 				error: {
@@ -176,7 +182,7 @@ export const POST: RequestHandler = async (event) => {
 	try {
 		const result = await assignIncidentRecord(
 			db,
-			{ organizationId, actorUserId: principal.userId },
+			{ organizationId, actorUserId: principal.userId, access },
 			incidentId,
 			{
 				teamId: body.teamId as string | null | undefined,
@@ -226,6 +232,8 @@ export const POST: RequestHandler = async (event) => {
 					{ status: 400 }
 				);
 			}
+			const mapped = incidentMutationFailure(err.code);
+			if (mapped) return mapped;
 		}
 
 		return json(
