@@ -198,6 +198,16 @@ export const invitations = pgTable(
 		email: varchar('email', { length: 255 }).notNull(),
 		roleId: uuid('role_id').notNull(),
 		tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+		/**
+		 * 5.4S-D: canonical permission ids of the role when the invitation was issued (create /
+		 * resend, after the delegation check). Acceptance requires the role's current permissions to
+		 * be a subset, so widening a role never flows through a pending invitation. Empty default is
+		 * fail-closed (only a permission-less role could match).
+		 */
+		rolePermissionIds: varchar('role_permission_ids', { length: 100 })
+			.array()
+			.default(sql`'{}'::varchar(100)[]`)
+			.notNull(),
 		status: varchar('status', { length: 20 }).default('pending').notNull(),
 		invitedByUserId: uuid('invited_by_user_id')
 			.notNull()

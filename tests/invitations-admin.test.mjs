@@ -728,7 +728,7 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 	}
 
 	await t.test(
-		'49. S-C no crea usuarios, membresías, asignaciones ni cuentas; sin verify/accept',
+		'49. la administración (S-C) no crea usuarios, membresías, asignaciones ni cuentas',
 		async () => {
 			const counts = async () =>
 				(
@@ -743,8 +743,6 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 			await resend(admin, A.org, inv.id);
 			await revoke(admin, A.org, inv.id);
 			assert.deepEqual(await counts(), before);
-			for (const p of ['verify', 'accept'])
-				assert.ok(!fs.existsSync(`src/routes/api/invitations/${p}`), p);
 			assert.deepEqual(Object.keys(listRoute).sort(), ['GET', 'POST']);
 			assert.deepEqual(Object.keys(itemRoute).sort(), ['DELETE', 'GET']);
 			assert.deepEqual(Object.keys(resendRoute).sort(), ['POST']);

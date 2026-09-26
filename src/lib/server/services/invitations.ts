@@ -301,7 +301,8 @@ async function assertInvitableRole(
 			.for('share')
 	).map((row) => row.permissionId);
 	assertDelegable(actorPermissions, permissions);
-	return role;
+	// Snapshot of what was delegated, in canonical order (acceptance never grants more).
+	return { ...role, permissionIds: [...permissions].sort() };
 }
 
 /**
@@ -411,6 +412,7 @@ export async function createInvitation(
 					email,
 					roleId,
 					tokenHash: hashInvitationToken(token),
+					rolePermissionIds: role.permissionIds,
 					status: 'pending',
 					invitedByUserId: context.actorUserId,
 					expiresAt,
@@ -525,6 +527,7 @@ export async function resendInvitation(
 				.update(invitations)
 				.set({
 					tokenHash: hashInvitationToken(token),
+					rolePermissionIds: role.permissionIds,
 					status: 'pending',
 					expiresAt,
 					updatedAt: now

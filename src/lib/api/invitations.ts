@@ -321,3 +321,136 @@ export async function resendInvitation(input: ResendInvitationInput): Promise<In
 	if (invitation.status !== 'pending') throw invalidPayload(res.status);
 	return invitation;
 }
+
+// =============================================================================
+// Public invitation flow (5.4S-D): verify + accept. Separate DTOs from the admin ones.
+// The token only ever travels in a JSON body (never in a URL).
+// =============================================================================
+
+export interface PublicInvitation {
+	organizationName: string;
+	roleName: string;
+	expiresAt: string;
+	/** e.g. a***@example.com: the full address is never returned. */
+	maskedEmail: string;
+}
+
+export interface VerifyInvitationInput extends InvitationRequestOptions {
+	token: string;
+}
+
+/**
+ * The client never says whether the account exists: send name + password when onboarding a new
+ * account; send only the token when signed in with the invited account. The server decides.
+ */
+export interface AcceptInvitationInput extends InvitationRequestOptions {
+	token: string;
+	name?: string;
+	password?: string;
+}
+
+export interface AcceptedInvitation {
+	organizationName: string;
+	/** True when the account was just created: sign in normally next (no automatic session). */
+	requiresLogin: boolean;
+}
+
+const TOKEN = /^[A-Za-z0-9_-]{43}$/;
+const MASKED_EMAIL = /^[^\s@]?\*\*\*@[^\s@]+$/;
+
+const PUBLIC_ERRORS: Record<string, [number, string]> = {
+	INVALID_INPUT: [400, 'Revisa los datos introducidos.'],
+	INVALID_INVITATION: [404, 'La invitación no es válida o ha caducado.'],
+	AUTHENTICATION_REQUIRED: [
+		401,
+		'Inicia sesión con la cuenta invitada para aceptar la invitación.'
+	],
+	INVALID_ACCEPTOR: [403, 'Esta invitación no se puede aceptar con la sesión actual.'],
+	ACCEPTANCE_CONFLICT: [409, 'No se pudo aceptar la invitación. Inténtalo de nuevo.'],
+	RATE_LIMITED: [429, 'Demasiados intentos. Espera un momento e inténtalo de nuevo.']
+};
+
+async function publicFailure(res: Response): Promise<InvitationApiError> {
+	let backendCode: unknown;
+	try {
+		backendCode = ((await res.json()) as { error?: { code?: unknown } })?.error?.code;
+	} catch {
+		backendCode = undefined;
+	}
+	const code = typeof backendCode === 'string' ? backendCode : '';
+	const known = Object.hasOwn(PUBLIC_ERRORS, code) ? PUBLIC_ERRORS[code] : undefined;
+	if (known && known[0] === res.status) return new InvitationApiError(res.status, code, known[1]);
+	if (res.status === 429)
+		return new InvitationApiError(429, 'RATE_LIMITED', PUBLIC_ERRORS.RATE_LIMITED[1]);
+	if (res.status >= 500)
+		return new InvitationApiError(
+			res.status,
+			'SERVER_ERROR',
+			'Error del servidor. Inténtalo de nuevo.'
+		);
+	return new InvitationApiError(
+		res.status,
+		'INVALID_INVITATION',
+		PUBLIC_ERRORS.INVALID_INVITATION[1]
+	);
+}
+
+function assertToken(token: unknown): string {
+	if (typeof token !== 'string' || !TOKEN.test(token.trim()))
+		throw invalidInput('Enlace de invitación no válido.');
+	return token.trim();
+}
+
+/** POST /api/invitations/verify (public). */
+export async function verifyInvitation(input: VerifyInvitationInput): Promise<PublicInvitation> {
+	const token = assertToken(input?.token);
+	const res = await send('/api/invitations/verify', input, 'POST', { token });
+	if (!res.ok) throw await publicFailure(res);
+	const data = await readObject(res);
+	const raw = data.invitation;
+	if (
+		data.valid !== true ||
+		!isObject(raw) ||
+		!isNonEmptyString(raw.organizationName) ||
+		!isNonEmptyString(raw.roleName) ||
+		!isIso(raw.expiresAt) ||
+		typeof raw.maskedEmail !== 'string' ||
+		!MASKED_EMAIL.test(raw.maskedEmail)
+	)
+		throw invalidPayload(res.status);
+	return {
+		organizationName: raw.organizationName,
+		roleName: raw.roleName,
+		expiresAt: raw.expiresAt,
+		maskedEmail: raw.maskedEmail
+	};
+}
+
+/** POST /api/invitations/accept (public; uses the session cookie when signed in). */
+export async function acceptInvitation(input: AcceptInvitationInput): Promise<AcceptedInvitation> {
+	const token = assertToken(input?.token);
+	const body: Record<string, string> = { token };
+	if (input.name !== undefined || input.password !== undefined) {
+		if (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 255)
+			throw invalidInput('Nombre no válido.');
+		if (
+			typeof input.password !== 'string' ||
+			input.password.length < 12 ||
+			input.password.length > 128
+		)
+			throw invalidInput('La contraseña debe tener entre 12 y 128 caracteres.');
+		body.name = input.name.trim();
+		body.password = input.password;
+	}
+	const res = await send('/api/invitations/accept', input, 'POST', body);
+	if (!res.ok) throw await publicFailure(res);
+	const data = await readObject(res);
+	if (
+		data.accepted !== true ||
+		!isObject(data.organization) ||
+		!isNonEmptyString(data.organization.name) ||
+		typeof data.requiresLogin !== 'boolean'
+	)
+		throw invalidPayload(res.status);
+	return { organizationName: data.organization.name, requiresLogin: data.requiresLogin };
+}

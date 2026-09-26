@@ -8,6 +8,8 @@ import {
 	createInvitation,
 	revokeInvitation,
 	resendInvitation,
+	verifyInvitation,
+	acceptInvitation,
 	InvitationApiError
 } from '../src/lib/api/invitations.ts';
 import { fixture, createCredentialUser, createSession } from './helpers/auth-fixture.mjs';
@@ -381,4 +383,169 @@ test('SoporteFlow — Etapa 5.4S-C: cliente API de invitaciones', async (t) => {
 			);
 		}
 	);
+});
+
+test('SoporteFlow — Etapa 5.4S-D: cliente público verify/accept', async (t) => {
+	const TOKEN = 'A'.repeat(21) + '_-' + 'b'.repeat(20);
+	const publicInvitation = {
+		organizationName: 'Alfa',
+		roleName: 'Cliente',
+		expiresAt: '2026-09-28T10:00:00.000Z',
+		maskedEmail: 'a***@example.test'
+	};
+
+	await t.test(
+		'verifyInvitation: POST con token en body (nunca en URL); parser estricto',
+		async () => {
+			const controller = new AbortController();
+			const { fetchFn, calls } = mockFetch(
+				json({ valid: true, invitation: { ...publicInvitation, organizationId: ORG, email: 'x' } })
+			);
+			const result = await verifyInvitation({
+				token: ` ${TOKEN} `,
+				customFetch: fetchFn,
+				signal: controller.signal
+			});
+			assert.deepEqual(result, publicInvitation);
+			assert.equal(calls[0].url, '/api/invitations/verify');
+			assert.ok(!calls[0].url.includes(TOKEN));
+			assert.equal(calls[0].init.method, 'POST');
+			assert.equal(calls[0].init.signal, controller.signal);
+			assert.deepEqual(JSON.parse(calls[0].init.body), { token: TOKEN });
+			for (const bad of [
+				{ valid: false, invitation: publicInvitation },
+				{ valid: true },
+				{ valid: true, invitation: { ...publicInvitation, maskedEmail: 'ana@example.test' } },
+				{ valid: true, invitation: { ...publicInvitation, expiresAt: 'x' } },
+				{ valid: true, invitation: { ...publicInvitation, roleName: '' } }
+			])
+				await rejectsWith(verifyInvitation({ token: TOKEN, customFetch: async () => json(bad) }), {
+					code: 'INVALID_PAYLOAD'
+				});
+		}
+	);
+
+	await t.test(
+		'acceptInvitation: nuevo usuario (name+password) y usuario con sesión (solo token)',
+		async () => {
+			const { fetchFn, calls } = mockFetch(() =>
+				json({
+					accepted: true,
+					organization: { name: 'Alfa', id: ORG },
+					requiresLogin: true,
+					userId: USER
+				})
+			);
+			const created = await acceptInvitation({
+				token: TOKEN,
+				name: '  Nora ',
+				password: '  clave con espacios  ',
+				customFetch: fetchFn
+			});
+			assert.deepEqual(created, { organizationName: 'Alfa', requiresLogin: true });
+			assert.equal(calls[0].url, '/api/invitations/accept');
+			assert.deepEqual(JSON.parse(calls[0].init.body), {
+				token: TOKEN,
+				name: 'Nora',
+				password: '  clave con espacios  '
+			});
+			await acceptInvitation({ token: TOKEN, customFetch: fetchFn });
+			assert.deepEqual(
+				JSON.parse(calls[1].init.body),
+				{ token: TOKEN },
+				'sin flag de usuario existente'
+			);
+			for (const bad of [
+				{ accepted: false, organization: { name: 'A' }, requiresLogin: true },
+				{ accepted: true, requiresLogin: true },
+				{ accepted: true, organization: { name: 'A' } }
+			])
+				await rejectsWith(acceptInvitation({ token: TOKEN, customFetch: async () => json(bad) }), {
+					code: 'INVALID_PAYLOAD'
+				});
+		}
+	);
+
+	await t.test('validación previa: token, nombre y contraseña no llaman a fetch', async () => {
+		const { fetchFn, calls } = mockFetch(json({}));
+		for (const promise of [
+			verifyInvitation({ token: 'corto', customFetch: fetchFn }),
+			verifyInvitation({ customFetch: fetchFn }),
+			acceptInvitation({ token: 'x', customFetch: fetchFn }),
+			acceptInvitation({ token: TOKEN, name: 'A', customFetch: fetchFn }),
+			acceptInvitation({ token: TOKEN, name: ' ', password: 'x'.repeat(12), customFetch: fetchFn }),
+			acceptInvitation({ token: TOKEN, name: 'A', password: 'x'.repeat(11), customFetch: fetchFn }),
+			acceptInvitation({ token: TOKEN, name: 'A', password: 'x'.repeat(129), customFetch: fetchFn })
+		])
+			await rejectsWith(promise, { status: 0, code: 'INVALID_INPUT' });
+		assert.equal(calls.length, 0);
+	});
+
+	await t.test(
+		'errores públicos tipados: 400/401/403/404/409/429/5xx sin eco del backend',
+		async () => {
+			const res = (status, code) => async () =>
+				json({ error: { code, message: 'SQL: user_emails_email_lower_unique_idx' } }, status);
+			const cases = [
+				[400, 'INVALID_INPUT'],
+				[401, 'AUTHENTICATION_REQUIRED'],
+				[403, 'INVALID_ACCEPTOR'],
+				[404, 'INVALID_INVITATION'],
+				[409, 'ACCEPTANCE_CONFLICT'],
+				[429, 'RATE_LIMITED']
+			];
+			for (const [status, code] of cases)
+				await assert.rejects(
+					acceptInvitation({ token: TOKEN, customFetch: res(status, code) }),
+					(e) => {
+						assert.equal(e.status, status);
+						assert.equal(e.code, code);
+						assert.ok(!e.message.includes('SQL'));
+						return true;
+					}
+				);
+			await rejectsWith(
+				verifyInvitation({ token: TOKEN, customFetch: res(404, 'ROLE_NOT_FOUND') }),
+				{
+					status: 404,
+					code: 'INVALID_INVITATION'
+				}
+			);
+			await rejectsWith(verifyInvitation({ token: TOKEN, customFetch: res(429, 'OTHER') }), {
+				status: 429,
+				code: 'RATE_LIMITED'
+			});
+			await rejectsWith(
+				acceptInvitation({ token: TOKEN, customFetch: res(500, 'INTERNAL_ERROR') }),
+				{
+					status: 500,
+					code: 'SERVER_ERROR'
+				}
+			);
+		}
+	);
+
+	await t.test('AbortError se propaga; fallo de red -> NETWORK_ERROR', async () => {
+		const controller = new AbortController();
+		controller.abort();
+		await assert.rejects(
+			verifyInvitation({
+				token: TOKEN,
+				signal: controller.signal,
+				customFetch: async () => {
+					throw new DOMException('aborted', 'AbortError');
+				}
+			}),
+			(e) => e.name === 'AbortError'
+		);
+		await rejectsWith(
+			acceptInvitation({
+				token: TOKEN,
+				customFetch: async () => {
+					throw new TypeError('fetch failed');
+				}
+			}),
+			{ status: 0, code: 'NETWORK_ERROR' }
+		);
+	});
 });

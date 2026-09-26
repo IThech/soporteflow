@@ -179,7 +179,8 @@ test('SoporteFlow — Etapa 5.4S-A: invitations, permisos 5.4S y rol Customer', 
 				'expires_at',
 				'accepted_at',
 				'created_at',
-				'updated_at'
+				'updated_at',
+				'role_permission_ids' // 0016 (5.4S-D)
 			]
 		);
 		assert.equal(cols.id.data_type, 'uuid');
@@ -415,9 +416,8 @@ test('SoporteFlow — Etapa 5.4S-A: invitations, permisos 5.4S y rol Customer', 
 		assert.match(source, /emailAndPassword: \{ enabled: true, disableSignUp: true \}/);
 		for (const flow of ['sendResetPassword', 'sendVerificationEmail', 'emailVerification'])
 			assert.ok(!source.includes(flow), flow);
-		// 5.4S-C añade la administración de invitaciones; la aceptación pública es 5.4S-D
-		for (const route of ['verify', 'accept'])
-			assert.ok(!fs.existsSync(`src/routes/api/invitations/${route}`), route);
+		// 5.4S-D: el alta solo ocurre por aceptación de invitación; sign-up sigue deshabilitado
+		assert.ok(source.includes("'/sign-up/email'"), 'sign-up/email sigue en disabledPaths');
 	});
 
 	// =========================================================================
