@@ -48,6 +48,15 @@ export const PERMISSION_CATALOG = [
 		category: 'incidents',
 		allowedScopeTypes: ORGANIZATION_ONLY
 	},
+	// 5.4S: requester access (incidents whose clientUserId is the principal). Catalogued in 5.4S-A;
+	// it has no authorization effect until incident access consumes it (5.4S-B).
+	{
+		id: 'incidents:view_requested',
+		name: 'Ver incidencias solicitadas',
+		description: 'Consultar solo las incidencias en las que el propio usuario es el solicitante.',
+		category: 'incidents',
+		allowedScopeTypes: ORGANIZATION_ONLY
+	},
 	{
 		id: 'incidents:edit',
 		name: 'Editar incidencias',
@@ -165,6 +174,28 @@ export const PERMISSION_CATALOG = [
 		name: 'Ver membresías',
 		description: 'Consultar los miembros de la organización y sus roles asignados.',
 		category: 'memberships',
+		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	// Invitations (5.4S). Catalogued in 5.4S-A; no endpoint consumes them yet (5.4S-C).
+	{
+		id: 'invitations:create',
+		name: 'Crear invitaciones',
+		description: 'Invitar a personas a unirse a la organización con un rol.',
+		category: 'invitations',
+		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	{
+		id: 'invitations:view',
+		name: 'Ver invitaciones',
+		description: 'Consultar las invitaciones de la organización.',
+		category: 'invitations',
+		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	{
+		id: 'invitations:revoke',
+		name: 'Revocar invitaciones',
+		description: 'Cancelar invitaciones pendientes de la organización.',
+		category: 'invitations',
 		allowedScopeTypes: ORGANIZATION_ONLY
 	}
 ] as const satisfies readonly PermissionDefinition[];

@@ -310,7 +310,7 @@ test('SoporteFlow — Etapa 5.4R-A: cliente API de roles', async (t) => {
 		const listed = await listRoles({ organizationId: org.id, customFetch: bridge });
 		assert.deepEqual(
 			listed.map((r) => r.code),
-			['organization_admin', 'technician']
+			['customer', 'organization_admin', 'technician']
 		);
 		const technician = await getRole({
 			organizationId: org.id,

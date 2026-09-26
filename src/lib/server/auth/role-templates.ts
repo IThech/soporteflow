@@ -2,12 +2,16 @@ import type { PermissionId } from './permissions';
 
 /**
  * Canonical system role templates (5.4Q-C). Global blueprints: they never authorize anything
- * by themselves. ensureOrganizationRoles / migration 0012 copy them into tenant-local roles
- * (roles.is_custom = false, roles.template_id set) and physically copy their permissions into
- * role_permissions. Runtime authorization only follows
+ * by themselves. ensureOrganizationRoles / migrations 0012 and 0015 copy them into tenant-local
+ * roles (roles.is_custom = false, roles.template_id set) and physically copy their permissions
+ * into role_permissions. Runtime authorization only follows
  * membership -> role_assignment -> role -> role_permission -> permission.
  *
- * Customer (incidents:view_requested) is intentionally absent until 5.4S.
+ * Customer (5.4S-A) receives incidents:view_requested, which has no authorization effect until
+ * incident access consumes it (5.4S-B). organization_admin also holds it: it adds no visibility
+ * (view_all already covers every incident) but monotonic delegation requires the actor to hold
+ * every permission of a role it assigns or invites with, so without it no admin could ever grant
+ * the Customer role. Technician does not receive it.
  * Template ids and codes are permanent contracts; changing a template's permissions requires an
  * explicit migration (there is no automatic template -> role synchronization).
  */
@@ -44,7 +48,11 @@ export const ROLE_TEMPLATES = [
 			'roles:assign',
 			'roles:view',
 			'roles:manage',
-			'memberships:view'
+			'memberships:view',
+			'invitations:create',
+			'invitations:view',
+			'invitations:revoke',
+			'incidents:view_requested'
 		]
 	},
 	{
@@ -64,6 +72,20 @@ export const ROLE_TEMPLATES = [
 			'sites:view',
 			'categories:view',
 			'teams:view'
+		]
+	},
+	{
+		id: 'tpl_customer',
+		code: 'customer',
+		name: 'Cliente',
+		description: 'Rol para clientes externos y solicitantes de asistencia técnica.',
+		// Requester only: no view_all/view_own, edit, assign, internal notes or administration.
+		permissionIds: [
+			'incidents:create',
+			'incidents:view_requested',
+			'incidents:add_comment',
+			'sites:view',
+			'categories:view'
 		]
 	}
 ] as const satisfies readonly RoleTemplateDefinition[];

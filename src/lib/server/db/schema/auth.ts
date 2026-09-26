@@ -3,6 +3,7 @@ import {
 	boolean,
 	check,
 	foreignKey,
+	index,
 	pgTable,
 	primaryKey,
 	text,
@@ -12,7 +13,7 @@ import {
 	uuid,
 	varchar
 } from 'drizzle-orm/pg-core';
-import { organizations, memberships } from './identity';
+import { organizations, memberships, users } from './identity';
 import { departments, sites, teams } from './structure';
 
 /**
@@ -173,5 +174,61 @@ export const roleAssignments = pgTable(
 			sql`COALESCE(${table.teamId}, '00000000-0000-0000-0000-000000000000'::uuid)`,
 			sql`COALESCE(${table.siteId}, '00000000-0000-0000-0000-000000000000'::uuid)`
 		)
+	]
+);
+
+/**
+ * Organization invitations (5.4S-A: persistence only; no service, token generation or HTTP yet).
+ * - email: persisted already normalized by the service (trimmed, lower-case). The database rejects
+ *   non-normalized values instead of silently rewriting them, consistent with user_emails
+ *   (case-insensitive uniqueness via lower(email)).
+ * - token_hash: only a hash of the invitation token is ever stored (never the raw token).
+ * - role: composite FK (role_id, organization_id) -> roles(id, organization_id), so an invitation
+ *   can only reference a role of its own organization (same pattern as role_assignments).
+ * - At most one pending invitation per (organization, email): partial unique index. Resend and
+ *   revoke flows (5.4S-C) must retire the previous pending invitation in the same transaction.
+ */
+export const invitations = pgTable(
+	'invitations',
+	{
+		id: uuid('id').defaultRandom().primaryKey(),
+		organizationId: uuid('organization_id')
+			.notNull()
+			.references(() => organizations.id, { onDelete: 'cascade' }),
+		email: varchar('email', { length: 255 }).notNull(),
+		roleId: uuid('role_id').notNull(),
+		tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+		status: varchar('status', { length: 20 }).default('pending').notNull(),
+		invitedByUserId: uuid('invited_by_user_id')
+			.notNull()
+			.references(() => users.id, { onDelete: 'restrict' }),
+		expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+		acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
+	},
+	(table) => [
+		foreignKey({
+			name: 'invitations_role_org_fk',
+			columns: [table.roleId, table.organizationId],
+			foreignColumns: [roles.id, roles.organizationId]
+		}).onDelete('cascade'),
+		unique('invitations_token_hash_unique').on(table.tokenHash),
+		check(
+			'invitations_status_check',
+			sql`${table.status} IN ('pending', 'accepted', 'revoked', 'expired')`
+		),
+		check(
+			'invitations_email_normalized_check',
+			sql`${table.email} <> '' AND ${table.email} = lower(btrim(${table.email}))`
+		),
+		check(
+			'invitations_accepted_at_check',
+			sql`(${table.status} = 'accepted') = (${table.acceptedAt} IS NOT NULL)`
+		),
+		index('invitations_org_status_idx').on(table.organizationId, table.status),
+		uniqueIndex('invitations_org_email_pending_unique_idx')
+			.on(table.organizationId, table.email)
+			.where(sql`status = 'pending'`)
 	]
 );

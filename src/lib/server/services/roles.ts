@@ -103,7 +103,7 @@ export async function ensureOrganizationRoles(
 		if (templates.length !== CANONICAL_TEMPLATE_IDS.length) {
 			throw new IncidentServiceError(
 				'ROLE_TEMPLATE_NOT_FOUND',
-				'Canonical role templates are missing (migration 0012 not applied)'
+				'Canonical role templates are missing (migrations 0012/0015 not applied)'
 			);
 		}
 

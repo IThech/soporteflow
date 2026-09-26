@@ -21,6 +21,7 @@ test('SoporteFlow — Etapa 5.4Q-C: ensureOrganizationRoles', async (t) => {
 
 	const ADMIN = [...ROLE_TEMPLATES[0].permissionIds].sort();
 	const TECHNICIAN = [...ROLE_TEMPLATES[1].permissionIds].sort();
+	const CUSTOMER = [...ROLE_TEMPLATES[2].permissionIds].sort();
 	const DTO_KEYS = ['active', 'code', 'id', 'isCustom', 'name', 'templateId'];
 
 	async function rejectsWith(operation, code) {
@@ -55,21 +56,25 @@ test('SoporteFlow — Etapa 5.4Q-C: ensureOrganizationRoles', async (t) => {
 	}
 
 	await t.test(
-		'11-18. crea organization_admin y technician como roles de sistema con permisos exactos',
+		'11-18. crea organization_admin, technician y customer como roles de sistema con permisos exactos',
 		async () => {
 			const org = await organization();
 			const result = await ensureOrganizationRoles(db, org.id);
 			assert.deepEqual(Object.keys(result), ['roles']);
 			assert.deepEqual(
 				result.roles.map((r) => r.code),
-				['organization_admin', 'technician']
+				['customer', 'organization_admin', 'technician']
 			);
 			for (const role of result.roles) {
 				assert.deepEqual(Object.keys(role).sort(), DTO_KEYS);
 				assert.equal(role.isCustom, false);
 				assert.equal(role.active, true);
 			}
-			const [admin, tech] = result.roles;
+			const byCode = (code) => result.roles.find((r) => r.code === code);
+			const [admin, tech, customer] = ['organization_admin', 'technician', 'customer'].map(byCode);
+			assert.equal(customer.templateId, 'tpl_customer');
+			assert.equal(customer.name, 'Cliente');
+			assert.deepEqual(await permissionsOf(customer.id), CUSTOMER);
 			assert.equal(admin.templateId, 'tpl_organization_admin');
 			assert.equal(admin.name, 'Administrador de organización');
 			assert.equal(tech.templateId, 'tpl_technician');
@@ -85,7 +90,8 @@ test('SoporteFlow — Etapa 5.4Q-C: ensureOrganizationRoles', async (t) => {
 				'incidents:view_own'
 			])
 				assert.ok(!(await permissionsOf(tech.id)).includes(forbidden), forbidden);
-			assert.equal((await rolesOf(org)).length, 2);
+			assert.equal((await rolesOf(org)).length, 3);
+			assert.equal((await countAll()).ra, 0, 'crear roles no asigna nada a nadie');
 		}
 	);
 
@@ -126,7 +132,7 @@ test('SoporteFlow — Etapa 5.4Q-C: ensureOrganizationRoles', async (t) => {
 		const b = await ensureOrganizationRoles(db, orgB.id);
 		const idsA = a.roles.map((r) => r.id);
 		const idsB = b.roles.map((r) => r.id);
-		assert.equal(new Set([...idsA, ...idsB]).size, 4);
+		assert.equal(new Set([...idsA, ...idsB]).size, 6);
 		for (const role of await rolesOf(orgB)) assert.ok(idsB.includes(role.id));
 		const [customAfter] = await db.select().from(s.roles).where(eq(s.roles.id, custom.id));
 		assert.deepEqual(customAfter, custom);
@@ -145,7 +151,11 @@ test('SoporteFlow — Etapa 5.4Q-C: ensureOrganizationRoles', async (t) => {
 			for (const values of [
 				{ code: 'technician', isCustom: true, templateId: null },
 				{ code: 'technician', isCustom: false, templateId: null },
-				{ code: 'technician', isCustom: false, templateId: 'tpl_organization_admin' }
+				{ code: 'technician', isCustom: false, templateId: 'tpl_organization_admin' },
+				// 5.4S-A: customer preexistente custom / de otra plantilla nunca se adopta
+				{ code: 'customer', isCustom: true, templateId: null },
+				{ code: 'customer', isCustom: false, templateId: null },
+				{ code: 'customer', isCustom: false, templateId: 'tpl_technician' }
 			]) {
 				const org = await organization();
 				const [conflicting] = await db
@@ -154,7 +164,7 @@ test('SoporteFlow — Etapa 5.4Q-C: ensureOrganizationRoles', async (t) => {
 					.returning();
 				const before = await countAll();
 				await rejectsWith(ensureOrganizationRoles(db, org.id), 'ROLE_CODE_CONFLICT');
-				// organization_admin se procesa antes que technician y también se revierte
+				// las demás plantillas procesadas antes también se revierten
 				assert.deepEqual(await countAll(), before);
 				const roles = await rolesOf(org);
 				assert.equal(roles.length, 1);
@@ -177,7 +187,7 @@ test('SoporteFlow — Etapa 5.4Q-C: ensureOrganizationRoles', async (t) => {
 				const result = await ensureOrganizationRoles(db, org.id);
 				assert.deepEqual(
 					result.roles.map((r) => r.code),
-					['organization_admin']
+					['customer', 'organization_admin']
 				);
 				const existing = await ensureOrganizationRoles(db, existingOrg.id);
 				const tech = existing.roles.find((r) => r.code === 'technician');
@@ -248,7 +258,7 @@ test('SoporteFlow — Etapa 5.4Q-C: ensureOrganizationRoles', async (t) => {
 			await pg.exec('DROP TRIGGER test_fail_rp ON role_permissions; DROP FUNCTION test_fail_rp();');
 		}
 		assert.equal((await rolesOf(org)).length, 0);
-		assert.equal((await ensureOrganizationRoles(db, org.id)).roles.length, 2);
+		assert.equal((await ensureOrganizationRoles(db, org.id)).roles.length, 3);
 	});
 
 	// =========================================================================

@@ -34,8 +34,30 @@ const IDS_0011 = [
 	'memberships:create',
 	'roles:assign'
 ];
-/** Current canonical catalog: 0011 + role administration (0013, 5.4R-A) + memberships:view (0014, 5.4R-C). */
-const EXPECTED_IDS = [...IDS_0011, 'roles:view', 'roles:manage', 'memberships:view'];
+/** 5.4S permissions seeded by migration 0015 (5.4S-A). */
+const IDS_0015 = [
+	'incidents:view_requested',
+	'invitations:create',
+	'invitations:view',
+	'invitations:revoke'
+];
+/**
+ * Current canonical catalog, in catalog order: 0011 + role administration (0013, 5.4R-A) +
+ * memberships:view (0014, 5.4R-C) + 5.4S (0015); view_requested sits in the incidents group.
+ */
+const EXPECTED_IDS = [
+	'incidents:create',
+	'incidents:view_all',
+	'incidents:view_own',
+	'incidents:view_requested',
+	...IDS_0011.slice(3),
+	'roles:view',
+	'roles:manage',
+	'memberships:view',
+	'invitations:create',
+	'invitations:view',
+	'invitations:revoke'
+];
 const ID_PATTERN = /^[a-z][a-z_]*:[a-z][a-z_]*$/;
 const SCOPES = ['organization', 'department', 'team', 'site', 'personal'];
 
@@ -87,18 +109,21 @@ test('SoporteFlow — Etapa 5.4Q-B: catálogo canónico de permisos', async (t) 
 	await t.test('4-19. contiene exactamente los permisos canónicos Core v1', () => {
 		for (const id of EXPECTED_IDS) assert.ok(PERMISSION_IDS.includes(id), id);
 		assert.deepEqual([...PERMISSION_IDS].sort(), [...EXPECTED_IDS].sort());
+		assert.deepEqual([...PERMISSION_IDS], EXPECTED_IDS, 'orden determinista del catálogo');
+		assert.equal(new Set(PERMISSION_IDS).size, PERMISSION_IDS.length);
 		for (const id of EXPECTED_IDS) assert.equal(isPermissionId(id), true);
 		for (const value of ['foo:bar', 'incidents:view_all ', '', null, 42])
 			assert.equal(isPermissionId(value), false);
 	});
 
-	await t.test('20-24. excluye legacy, futuros y Customer', () => {
+	await t.test('20-24. excluye legacy y futuros (view_requested entra en 0015)', () => {
 		for (const id of [
 			'platform:manage',
 			'incidents:delete',
 			'incidents:classify',
 			'incidents:override_priority',
-			'incidents:view_requested',
+			'memberships:manage',
+			'invitations:accept',
 			'sla:manage',
 			'organization:manage',
 			'users:manage',
@@ -107,6 +132,32 @@ test('SoporteFlow — Etapa 5.4Q-B: catálogo canónico de permisos', async (t) 
 			assert.ok(!PERMISSION_IDS.includes(id), id);
 		assert.ok(!PERMISSION_IDS.some((id) => id.startsWith('platform:')));
 	});
+
+	await t.test(
+		'5.4S-A: metadata de los permisos 0015 (DB = catálogo, scope organization)',
+		async () => {
+			const rows = (
+				await pg.query(
+					`SELECT id, name, description, category, allowed_scope_types FROM permissions WHERE id = ANY($1) ORDER BY id`,
+					[IDS_0015]
+				)
+			).rows;
+			assert.equal(rows.length, 4);
+			for (const row of rows) {
+				const canonical = PERMISSION_CATALOG.find((p) => p.id === row.id);
+				assert.equal(row.name, canonical.name);
+				assert.equal(row.description, canonical.description);
+				assert.equal(row.category, canonical.category);
+				assert.deepEqual(row.allowed_scope_types, ['organization']);
+			}
+			assert.equal(
+				PERMISSION_CATALOG.find((p) => p.id === 'incidents:view_requested').category,
+				'incidents'
+			);
+			for (const id of IDS_0015.slice(1))
+				assert.equal(PERMISSION_CATALOG.find((p) => p.id === id).category, 'invitations');
+		}
+	);
 
 	await t.test(
 		'25-26. allowed scopes válidos; organization en todos (sin scopes granulares)',

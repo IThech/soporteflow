@@ -25,8 +25,28 @@ const ADMIN_0012 = [
 	'memberships:create',
 	'roles:assign'
 ].sort();
-/** Current organization_admin template: 0012 + roles:view / roles:manage (0013) + memberships:view (0014). */
-const ADMIN = [...ADMIN_0012, 'roles:view', 'roles:manage', 'memberships:view'].sort();
+/**
+ * Current organization_admin template: 0012 + roles:view / roles:manage (0013) + memberships:view
+ * (0014) + invitations:create/view/revoke + incidents:view_requested (0015).
+ */
+const ADMIN = [
+	...ADMIN_0012,
+	'roles:view',
+	'roles:manage',
+	'memberships:view',
+	'invitations:create',
+	'invitations:view',
+	'invitations:revoke',
+	'incidents:view_requested'
+].sort();
+/** Customer template (0015, 5.4S-A): exactly these 5 permissions. */
+const CUSTOMER = [
+	'incidents:create',
+	'incidents:view_requested',
+	'incidents:add_comment',
+	'sites:view',
+	'categories:view'
+].sort();
 const TECHNICIAN = [
 	'incidents:view_all',
 	'incidents:create',
@@ -90,27 +110,63 @@ test('SoporteFlow — Etapa 5.4Q-C: plantillas de rol canónicas', async (t) => 
 	const { ROLE_TEMPLATES } = await server.ssrLoadModule('/src/lib/server/auth/role-templates.ts');
 	const { PERMISSION_IDS } = await server.ssrLoadModule('/src/lib/server/auth/permissions.ts');
 
-	await t.test('registry: 2 plantillas, sin Customer, permisos canónicos sin duplicados', () => {
-		assert.deepEqual(
-			ROLE_TEMPLATES.map((t) => [t.id, t.code]),
-			[
-				['tpl_organization_admin', 'organization_admin'],
-				['tpl_technician', 'technician']
-			]
-		);
-		for (const template of ROLE_TEMPLATES) {
-			assert.equal(new Set(template.permissionIds).size, template.permissionIds.length);
-			for (const permission of template.permissionIds)
-				assert.ok(PERMISSION_IDS.includes(permission), permission);
-			assert.ok(!template.permissionIds.includes('incidents:view_own'));
-			assert.ok(!template.permissionIds.includes('incidents:view_requested'));
+	await t.test(
+		'registry: 3 plantillas (Admin, Technician, Customer), permisos canónicos sin duplicados',
+		() => {
+			assert.deepEqual(
+				ROLE_TEMPLATES.map((t) => [t.id, t.code]),
+				[
+					['tpl_organization_admin', 'organization_admin'],
+					['tpl_technician', 'technician'],
+					['tpl_customer', 'customer']
+				]
+			);
+			for (const template of ROLE_TEMPLATES) {
+				assert.equal(new Set(template.permissionIds).size, template.permissionIds.length);
+				for (const permission of template.permissionIds)
+					assert.ok(PERMISSION_IDS.includes(permission), permission);
+				assert.ok(!template.permissionIds.includes('incidents:view_own'));
+			}
+			assert.deepEqual([...ROLE_TEMPLATES[0].permissionIds].sort(), ADMIN);
+			assert.deepEqual([...ROLE_TEMPLATES[1].permissionIds].sort(), TECHNICIAN);
+			assert.deepEqual([...ROLE_TEMPLATES[2].permissionIds].sort(), CUSTOMER);
+			assert.equal(ROLE_TEMPLATES[2].name, 'Cliente');
+			assert.equal(
+				ROLE_TEMPLATES[2].description,
+				'Rol para clientes externos y solicitantes de asistencia técnica.'
+			);
+			// Admin necesita view_requested para poder delegar Customer (monotonía); Technician no cambia
+			assert.ok(ROLE_TEMPLATES[0].permissionIds.includes('incidents:view_requested'));
+			assert.ok(!ROLE_TEMPLATES[1].permissionIds.includes('incidents:view_requested'));
+			for (const permission of ROLE_TEMPLATES[2].permissionIds)
+				assert.ok(
+					ROLE_TEMPLATES[0].permissionIds.includes(permission),
+					'Admin incluye Customer: ' + permission
+				);
+			for (const forbidden of [
+				'incidents:view_all',
+				'incidents:view_own',
+				'incidents:edit',
+				'incidents:assign',
+				'incidents:view_internal_notes',
+				'incidents:add_internal_note',
+				'roles:view',
+				'roles:manage',
+				'roles:assign',
+				'memberships:view',
+				'memberships:create',
+				'identities:create',
+				'invitations:create',
+				'invitations:view',
+				'invitations:revoke'
+			])
+				assert.ok(!ROLE_TEMPLATES[2].permissionIds.includes(forbidden), forbidden);
+			assert.ok(!TECHNICIAN.some((p) => p.startsWith('invitations:')));
 		}
-		assert.deepEqual([...ROLE_TEMPLATES[0].permissionIds].sort(), ADMIN);
-		assert.deepEqual([...ROLE_TEMPLATES[1].permissionIds].sort(), TECHNICIAN);
-	});
+	);
 
 	await t.test(
-		'1-10. tras migrar: 2 plantillas canónicas exactas, activas, sin Customer',
+		'1-10. tras migrar: 3 plantillas canónicas exactas y activas (Customer en 0015)',
 		async () => {
 			const { rows } = await pg.query(
 				`SELECT id, code, name, description, active FROM role_templates ORDER BY id`
@@ -118,6 +174,7 @@ test('SoporteFlow — Etapa 5.4Q-C: plantillas de rol canónicas', async (t) => 
 			assert.deepEqual(
 				rows.map((r) => [r.id, r.code, r.name, r.active]),
 				[
+					['tpl_customer', 'customer', 'Cliente', true],
 					['tpl_organization_admin', 'organization_admin', 'Administrador de organización', true],
 					['tpl_technician', 'technician', 'Técnico de soporte', true]
 				]
@@ -125,10 +182,7 @@ test('SoporteFlow — Etapa 5.4Q-C: plantillas de rol canónicas', async (t) => 
 			for (const row of rows) assert.ok(row.description.trim().length > 0);
 			assert.deepEqual(await templatePermissions(pg, 'tpl_organization_admin'), ADMIN);
 			assert.deepEqual(await templatePermissions(pg, 'tpl_technician'), TECHNICIAN);
-			const customer = await pg.query(
-				`SELECT 1 FROM role_templates WHERE code = 'customer' OR id = 'tpl_customer'`
-			);
-			assert.equal(customer.rows.length, 0);
+			assert.deepEqual(await templatePermissions(pg, 'tpl_customer'), CUSTOMER);
 			const orphans = await pg.query(
 				`SELECT 1 FROM role_template_permissions tp LEFT JOIN permissions p ON p.id = tp.permission_id WHERE p.id IS NULL`
 			);
@@ -307,19 +361,23 @@ test('SoporteFlow — Etapa 5.4Q-C: plantillas de rol canónicas', async (t) => 
 		});
 	}
 
-	await t.test('migración completa sobre DB vacía: 0012 aplicada y sin roles tenant', async () => {
-		const clean = new PGlite();
-		try {
-			const applied = await applyMigrations(clean, directory);
-			assert.deepEqual(applied, expectedMigrations);
-			assert.ok(applied.includes('0012_role_templates.sql'));
-			assert.equal(
-				(await clean.query(`SELECT count(*)::int AS n FROM role_templates`)).rows[0].n,
-				2
-			);
-			assert.equal((await clean.query(`SELECT count(*)::int AS n FROM roles`)).rows[0].n, 0);
-		} finally {
-			await clean.close();
+	await t.test(
+		'migración completa sobre DB vacía: 0012 y 0015 aplicadas, 3 plantillas y sin roles tenant',
+		async () => {
+			const clean = new PGlite();
+			try {
+				const applied = await applyMigrations(clean, directory);
+				assert.deepEqual(applied, expectedMigrations);
+				assert.ok(applied.includes('0012_role_templates.sql'));
+				assert.ok(applied.includes('0015_invitations_customer.sql'));
+				assert.equal(
+					(await clean.query(`SELECT count(*)::int AS n FROM role_templates`)).rows[0].n,
+					3
+				);
+				assert.equal((await clean.query(`SELECT count(*)::int AS n FROM roles`)).rows[0].n, 0);
+			} finally {
+				await clean.close();
+			}
 		}
-	});
+	);
 });
