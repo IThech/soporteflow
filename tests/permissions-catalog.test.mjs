@@ -460,7 +460,8 @@ test('SoporteFlow — Etapa 5.4Q-B: catálogo canónico de permisos', async (t) 
 			if (file.split(path.sep).join('/').endsWith('src/lib/server/auth/permissions.ts')) continue;
 			const source = fs.readFileSync(file, 'utf8');
 			for (const match of source.matchAll(/'([a-z][a-z_]*:[a-z][a-z_]*)'/g))
-				found.set(match[1], file);
+				// Node built-in import specifiers ('node:crypto') are not permission literals.
+				if (!match[1].startsWith('node:')) found.set(match[1], file);
 		}
 		assert.ok(found.size >= EXPECTED_IDS.length - 1, 'el escaneo encuentra los permisos usados');
 		for (const [id, file] of found)

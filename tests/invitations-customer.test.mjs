@@ -415,11 +415,9 @@ test('SoporteFlow — Etapa 5.4S-A: invitations, permisos 5.4S y rol Customer', 
 		assert.match(source, /emailAndPassword: \{ enabled: true, disableSignUp: true \}/);
 		for (const flow of ['sendResetPassword', 'sendVerificationEmail', 'emailVerification'])
 			assert.ok(!source.includes(flow), flow);
-		assert.ok(!fs.existsSync('src/routes/api/invitations'), 'sin endpoints de invitaciones');
-		assert.ok(
-			!fs.existsSync('src/lib/server/services/invitations.ts'),
-			'sin servicio de invitaciones'
-		);
+		// 5.4S-C añade la administración de invitaciones; la aceptación pública es 5.4S-D
+		for (const route of ['verify', 'accept'])
+			assert.ok(!fs.existsSync(`src/routes/api/invitations/${route}`), route);
 	});
 
 	// =========================================================================

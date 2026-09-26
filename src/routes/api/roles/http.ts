@@ -142,6 +142,27 @@ export function roleServiceFailure(error: unknown) {
 			);
 		if (error.code === 'PERMISSION_NOT_DELEGABLE')
 			return failure(403, 'PERMISSION_NOT_DELEGABLE', 'Permission cannot be delegated.');
+		// Invitations (5.4S-C)
+		if (error.code === 'INVITATION_NOT_FOUND')
+			return failure(404, 'INVITATION_NOT_FOUND', 'Invitation not found.');
+		if (error.code === 'INVITATION_ALREADY_PENDING')
+			return failure(
+				409,
+				'INVITATION_ALREADY_PENDING',
+				'A pending invitation already exists for this email.'
+			);
+		if (error.code === 'INVITATION_NOT_REVOCABLE')
+			return failure(409, 'INVITATION_NOT_REVOCABLE', 'Invitation cannot be revoked.');
+		if (error.code === 'INVITATION_NOT_RESENDABLE')
+			return failure(409, 'INVITATION_NOT_RESENDABLE', 'Invitation cannot be resent.');
+		if (error.code === 'ALREADY_MEMBER')
+			return failure(409, 'ALREADY_MEMBER', 'Already a member of the organization.');
+		if (error.code === 'EMAIL_DELIVERY_FAILED')
+			return failure(
+				502,
+				'EMAIL_DELIVERY_FAILED',
+				'The invitation was saved but the email could not be delivered.'
+			);
 		if (error.code === 'ORGANIZATION_NOT_FOUND' || error.code === 'ORGANIZATION_NOT_OPERATIONAL')
 			return failure(403, 'FORBIDDEN', 'Permission denied.');
 	}
