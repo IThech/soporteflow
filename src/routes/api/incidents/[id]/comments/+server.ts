@@ -114,7 +114,10 @@ export const POST: RequestHandler = async (event) => {
 				organizationId,
 				incidentId,
 				actorUserId: principal.userId,
-				...incidentAccessRestriction(access)
+				...incidentAccessRestriction(access),
+				// 5.4T-B: a reply through a support scope (view_all / view_own) can be the first response;
+				// a requester-only scope (view_requested) never is.
+				supportResponse: access.viewAll === true || access.assignedToUserId !== undefined
 			},
 			body
 		);

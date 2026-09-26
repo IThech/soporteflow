@@ -54,7 +54,8 @@ export const ROLE_TEMPLATES = [
 			'invitations:revoke',
 			'incidents:view_requested',
 			'sla:view',
-			'sla:manage'
+			'sla:manage',
+			'sla:assign'
 		]
 	},
 	{
@@ -75,7 +76,9 @@ export const ROLE_TEMPLATES = [
 			'categories:view',
 			'teams:view',
 			// 5.4T-A: technicians need the operational SLA targets, never their configuration.
-			'sla:view'
+			'sla:view',
+			// 5.4T-B: technicians may choose/change an incident's SLA among existing policies.
+			'sla:assign'
 		]
 	},
 	{

@@ -212,6 +212,14 @@ export const PERMISSION_CATALOG = [
 		description: 'Crear, modificar, activar y desactivar políticas SLA de la organización.',
 		category: 'sla',
 		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	// 5.4T-B: choosing/changing an incident's SLA (not configuring policies).
+	{
+		id: 'sla:assign',
+		name: 'Asignar SLA a incidencias',
+		description: 'Elegir, cambiar o retirar la política SLA de incidencias accesibles.',
+		category: 'sla',
+		allowedScopeTypes: ORGANIZATION_ONLY
 	}
 ] as const satisfies readonly PermissionDefinition[];
 

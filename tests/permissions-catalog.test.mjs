@@ -59,7 +59,8 @@ const EXPECTED_IDS = [
 	'invitations:view',
 	'invitations:revoke',
 	'sla:view',
-	'sla:manage'
+	'sla:manage',
+	'sla:assign' // 0018 (5.4T-B)
 ];
 const ID_PATTERN = /^[a-z][a-z_]*:[a-z][a-z_]*$/;
 const SCOPES = ['organization', 'department', 'team', 'site', 'personal'];

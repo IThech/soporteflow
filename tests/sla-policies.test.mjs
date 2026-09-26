@@ -648,22 +648,20 @@ test('SoporteFlow — Etapa 5.4T-A: políticas SLA (configuración)', async (t) 
 		}
 	);
 
-	await t.test('34-37. sin integración prematura con incidencias', () => {
-		const incidentsSchema = fs.readFileSync('src/lib/server/db/schema/incidents.ts', 'utf8');
-		for (const field of [
-			'slaPolicyId',
-			'firstResponseDueAt',
-			'resolutionDueAt',
-			'breachedAt',
-			'slaStatus'
-		])
-			assert.ok(!incidentsSchema.includes(field), field);
-		for (const file of [
-			'src/lib/server/services/incidents.ts',
-			'src/lib/server/services/incident-history.ts'
-		])
-			assert.ok(!fs.readFileSync(file, 'utf8').includes('sla_policies'), file);
-		const history = fs.readFileSync('src/lib/server/services/incident-history.ts', 'utf8');
-		assert.ok(!/sla_(started|breached|paused)/.test(history));
-	});
+	await t.test(
+		'34-37. frontera T-B/T-C: sin breach, estado SLA ni eventos SLA en historial',
+		() => {
+			// 5.4T-B integra la asignación y los deadlines; incumplimientos y eventos son 5.4T-C.
+			const incidentsSchema = fs.readFileSync('src/lib/server/db/schema/incidents.ts', 'utf8');
+			for (const field of [
+				'breachedAt',
+				'slaStatus',
+				'firstResponseBreached',
+				'resolutionBreached'
+			])
+				assert.ok(!incidentsSchema.includes(field), field);
+			const history = fs.readFileSync('src/lib/server/services/incident-history.ts', 'utf8');
+			assert.ok(!/sla_(started|breached|paused|policy_changed)/.test(history));
+		}
+	);
 });

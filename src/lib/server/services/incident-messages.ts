@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import {
 	incidents,
 	incidentHistory,
@@ -46,6 +46,12 @@ export interface PublicCommentContext {
 }
 export interface CreatePublicCommentContext extends PublicCommentContext {
 	readonly actorUserId: string;
+	/**
+	 * 5.4T-B: true when the caller reaches the incident through a support scope (incidents:view_all
+	 * or incidents:view_own, resolved from capabilities, never role codes). Such a comment records
+	 * the incident's first response unless the actor is the incident's requester.
+	 */
+	readonly supportResponse?: boolean;
 }
 
 type Visibility = 'internal' | 'public';
@@ -152,6 +158,7 @@ const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[
 type AppendContext = CreateInternalNoteContext & {
 	readonly assignedToUserId?: string;
 	readonly clientUserId?: string;
+	readonly supportResponse?: boolean;
 };
 
 /** Restricted (view_own and/or view_requested) or unrestricted (neither field set). */
@@ -244,8 +251,11 @@ async function appendMessage(
 			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
 		}
 
-		// C. Lock the incident within the tenant and check access and status
-		const [incident] = await tx
+		// C. Lock the incident within the tenant and check access and status. A support reply may
+		// write first_response_at, so it takes the row lock up front (FOR UPDATE) instead of
+		// upgrading a shared lock later (two concurrent replies would otherwise deadlock).
+		const recordsResponse = visibility === 'public' && context.supportResponse === true;
+		const lookup = tx
 			.select({
 				id: incidents.id,
 				status: incidents.status,
@@ -259,8 +269,8 @@ async function appendMessage(
 					eq(incidents.organizationId, context.organizationId)
 				)
 			)
-			.limit(1)
-			.for('share');
+			.limit(1);
+		const [incident] = await (recordsResponse ? lookup.for('update') : lookup.for('share'));
 		if (!incident) {
 			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
 		}
@@ -282,6 +292,22 @@ async function appendMessage(
 				body: text
 			})
 			.returning({ id: incidentMessages.id, body: incidentMessages.body, createdAt: createdAtIso });
+
+		// D.2 First response (5.4T-B): first support reply by someone other than the requester.
+		// Idempotent, first write wins (never overwritten). Internal notes, requester comments and
+		// history never count.
+		if (recordsResponse && incident.clientUserId !== context.actorUserId) {
+			await tx
+				.update(incidents)
+				.set({ firstResponseAt: sql`now()` })
+				.where(
+					and(
+						eq(incidents.id, context.incidentId),
+						eq(incidents.organizationId, context.organizationId),
+						isNull(incidents.firstResponseAt)
+					)
+				);
+		}
 
 		// E. Audit event for internal notes only: the message id, never the note body
 		if (visibility === 'internal') {
@@ -433,7 +459,8 @@ export async function createPublicComment(
 			incidentId: context?.incidentId,
 			actorUserId: context?.actorUserId,
 			assignedToUserId: context?.assignedToUserId,
-			clientUserId: context?.clientUserId
+			clientUserId: context?.clientUserId,
+			supportResponse: context?.supportResponse === true
 		},
 		body,
 		'public'

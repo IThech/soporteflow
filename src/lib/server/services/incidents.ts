@@ -12,7 +12,8 @@ import {
 	teams,
 	teamMemberships,
 	roles,
-	roleAssignments
+	roleAssignments,
+	slaPolicies
 } from '../db/schema';
 export { getActiveTeams } from './teams';
 
@@ -76,6 +77,7 @@ export type IncidentServiceErrorCode =
 	| 'SLA_POLICY_CODE_CONFLICT'
 	| 'SLA_POLICY_INVALID_TARGET'
 	| 'SLA_POLICY_INVALID_DEFAULT'
+	| 'SLA_POLICY_INACTIVE'
 	| 'MEMBERSHIP_NOT_FOUND'
 	| 'MEMBERSHIP_INACTIVE'
 	| 'MEMBERSHIP_SITE_NOT_FOUND'
@@ -180,6 +182,147 @@ async function lockIncidentForMutation(
 	return incident;
 }
 
+// =============================================================================
+// SLA on incidents (5.4T-B): policy selection, snapshot and 24x7 deadlines
+// =============================================================================
+
+type SlaSelection = { id: string; firstResponseMinutes: number; resolutionMinutes: number } | null;
+
+/**
+ * Resolves the policy to apply (read FOR SHARE so it cannot be edited/deactivated mid-snapshot):
+ * - UUID: that policy, which must belong to the organization (SLA_POLICY_NOT_FOUND, never a
+ *   cross-tenant hint) and be active (SLA_POLICY_INACTIVE);
+ * - null: no SLA;
+ * - undefined: the organization's default policy if it exists and is active (a default is always
+ *   active by constraint; checked defensively), otherwise no SLA. Never fails for lack of default.
+ */
+async function resolveSlaPolicyForIncident(
+	tx: IncidentDatabase,
+	organizationId: string,
+	requested: string | null | undefined
+): Promise<SlaSelection> {
+	if (requested === null) return null;
+	const selection = {
+		id: slaPolicies.id,
+		active: slaPolicies.active,
+		firstResponseMinutes: slaPolicies.firstResponseMinutes,
+		resolutionMinutes: slaPolicies.resolutionMinutes
+	};
+	if (requested === undefined) {
+		const [policy] = await tx
+			.select(selection)
+			.from(slaPolicies)
+			.where(
+				and(
+					eq(slaPolicies.organizationId, organizationId),
+					eq(slaPolicies.isDefault, true),
+					eq(slaPolicies.active, true)
+				)
+			)
+			.limit(1)
+			.for('share');
+		return policy ?? null;
+	}
+	const [policy] = await tx
+		.select(selection)
+		.from(slaPolicies)
+		.where(and(eq(slaPolicies.id, requested), eq(slaPolicies.organizationId, organizationId)))
+		.limit(1)
+		.for('share');
+	if (!policy) throw new IncidentServiceError('SLA_POLICY_NOT_FOUND', 'SLA policy not found');
+	if (!policy.active)
+		throw new IncidentServiceError('SLA_POLICY_INACTIVE', 'SLA policy is not active');
+	return policy;
+}
+
+/** Snapshot columns: targets copied from the policy, deadlines = appliedAt + minutes (24x7). */
+function slaSnapshot(sla: SlaSelection, appliedAt: Date) {
+	if (!sla)
+		return {
+			slaPolicyId: null,
+			slaFirstResponseMinutes: null,
+			slaResolutionMinutes: null,
+			slaAppliedAt: null,
+			firstResponseDueAt: null,
+			resolutionDueAt: null
+		};
+	return {
+		slaPolicyId: sla.id,
+		slaFirstResponseMinutes: sla.firstResponseMinutes,
+		slaResolutionMinutes: sla.resolutionMinutes,
+		slaAppliedAt: appliedAt,
+		firstResponseDueAt: new Date(appliedAt.getTime() + sla.firstResponseMinutes * 60_000),
+		resolutionDueAt: new Date(appliedAt.getTime() + sla.resolutionMinutes * 60_000)
+	};
+}
+
+export interface ChangeIncidentSlaContext {
+	readonly organizationId: string;
+	readonly actorUserId: string;
+	/** Mutation access (view_all / view_own; never the requester scope). */
+	readonly access?: IncidentAccess;
+}
+
+/**
+ * Applies, replaces or removes the SLA of an incident (caller authorizes sla:assign). Order:
+ * organization active -> incident locked FOR UPDATE (404 -> access 403 -> closed 409) -> policy.
+ * - New policy: fresh snapshot; slaAppliedAt = now and deadlines are computed from now (applying a
+ *   policy later never produces deadlines already expired by time elapsed before it applied).
+ * - Same policy as now: no-op (the clock is not restarted).
+ * - null: all snapshot/deadline fields cleared.
+ * firstResponseAt is a general fact and is always kept. No history event (5.4T-C).
+ */
+export async function changeIncidentSla(
+	dbOrTx: IncidentDatabase,
+	context: ChangeIncidentSlaContext,
+	incidentId: string,
+	input: { slaPolicyId: string | null }
+): Promise<{ incident: IncidentRecord; changed: boolean }> {
+	if (!isValidUuid(context?.organizationId))
+		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
+	if (!isValidUuid(context.actorUserId))
+		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
+	if (!isValidUuid(incidentId))
+		throw new IncidentServiceError('INVALID_INPUT', 'incidentId must be a valid UUID');
+	if (!input || (input.slaPolicyId !== null && !isValidUuid(input.slaPolicyId)))
+		throw new IncidentServiceError('INVALID_INPUT', 'slaPolicyId must be a valid UUID or null');
+
+	const execute = async (tx: IncidentDatabase) => {
+		const [org] = await tx
+			.select({ status: organizations.status })
+			.from(organizations)
+			.where(eq(organizations.id, context.organizationId))
+			.limit(1);
+		if (!org)
+			throw new IncidentServiceError('ORGANIZATION_NOT_FOUND', 'Organization does not exist');
+		if (org.status !== 'active')
+			throw new IncidentServiceError(
+				'ORGANIZATION_NOT_OPERATIONAL',
+				`Organization is '${org.status}', operations require 'active'`
+			);
+		const current = await lockIncidentForMutation(
+			tx,
+			context.organizationId,
+			incidentId,
+			context.access
+		);
+		if (current.slaPolicyId === input.slaPolicyId) return { incident: current, changed: false };
+		const sla = await resolveSlaPolicyForIncident(tx, context.organizationId, input.slaPolicyId);
+		const now = new Date();
+		const [incident] = await tx
+			.update(incidents)
+			.set({ ...slaSnapshot(sla, now), updatedAt: now })
+			.where(
+				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
+			)
+			.returning();
+		return { incident, changed: true };
+	};
+	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function')
+		return await dbOrTx.transaction(async (tx) => execute(tx));
+	return await execute(dbOrTx);
+}
+
 export const INCIDENT_REASON_MAX_LENGTH = 1000;
 
 /** Shared reason validation: string, at most INCIDENT_REASON_MAX_LENGTH after trim, no NUL. */
@@ -266,6 +409,12 @@ export interface CreateIncidentInput {
 	clientUserId?: string | null;
 	siteId?: string | null;
 	categoryId?: string | null;
+	/**
+	 * 5.4T-B SLA selection (the caller authorizes sla:assign before passing it):
+	 * undefined -> the organization's active default policy, if any; null -> no SLA;
+	 * UUID -> that policy (same organization, active).
+	 */
+	slaPolicyId?: string | null;
 }
 
 export interface CreateIncidentResult {
@@ -355,6 +504,14 @@ export async function createIncidentRecord(
 		!isValidUuid(input.categoryId)
 	) {
 		throw new IncidentServiceError('INVALID_INPUT', 'categoryId must be a valid UUID');
+	}
+
+	if (
+		input.slaPolicyId !== undefined &&
+		input.slaPolicyId !== null &&
+		!isValidUuid(input.slaPolicyId)
+	) {
+		throw new IncidentServiceError('INVALID_INPUT', 'slaPolicyId must be a valid UUID or null');
 	}
 
 	// 3. Single atomic transaction execution
@@ -456,6 +613,10 @@ export async function createIncidentRecord(
 			await lockActiveCategory(tx, context.organizationId, input.categoryId);
 		}
 
+		// D.3 SLA (5.4T-B): explicit policy, else the active default, else none; snapshot below
+		const sla = await resolveSlaPolicyForIncident(tx, context.organizationId, input.slaPolicyId);
+		const now = new Date();
+
 		// E. Atomic counter increment via PostgreSQL UPSERT
 		const [counter] = await tx
 			.insert(organizationCounters)
@@ -489,7 +650,10 @@ export async function createIncidentRecord(
 				clientUserId: input.clientUserId ?? null,
 				createdByUserId: context.creatorUserId,
 				siteId: input.siteId ?? null,
-				categoryId: input.categoryId ?? null
+				categoryId: input.categoryId ?? null,
+				...slaSnapshot(sla, now),
+				createdAt: now,
+				updatedAt: now
 			})
 			.returning();
 
@@ -675,6 +839,13 @@ export async function getIncidentById(
 			assignedToUserId: incidents.assignedToUserId,
 			teamId: incidents.teamId,
 			supportLevel: incidents.supportLevel,
+			slaPolicyId: incidents.slaPolicyId,
+			slaFirstResponseMinutes: incidents.slaFirstResponseMinutes,
+			slaResolutionMinutes: incidents.slaResolutionMinutes,
+			slaAppliedAt: incidents.slaAppliedAt,
+			firstResponseDueAt: incidents.firstResponseDueAt,
+			resolutionDueAt: incidents.resolutionDueAt,
+			firstResponseAt: incidents.firstResponseAt,
 			createdAt: incidents.createdAt,
 			updatedAt: incidents.updatedAt,
 			assignedToUserName: users.name,

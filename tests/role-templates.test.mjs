@@ -40,7 +40,8 @@ const ADMIN = [
 	'invitations:revoke',
 	'incidents:view_requested',
 	'sla:view',
-	'sla:manage'
+	'sla:manage',
+	'sla:assign' // 0018 (5.4T-B)
 ].sort();
 /** Customer template (0015, 5.4S-A): exactly these 5 permissions. */
 const CUSTOMER = [
@@ -63,8 +64,8 @@ const TECHNICIAN_0012 = [
 	'categories:view',
 	'teams:view'
 ].sort();
-/** Current technician template: 0012 + sla:view (0017, 5.4T-A). */
-const TECHNICIAN = [...TECHNICIAN_0012, 'sla:view'].sort();
+/** Current technician template: 0012 + sla:view (0017, 5.4T-A) + sla:assign (0018, 5.4T-B). */
+const TECHNICIAN = [...TECHNICIAN_0012, 'sla:view', 'sla:assign'].sort();
 
 function errorCode(error) {
 	return error?.code ?? error?.cause?.code;

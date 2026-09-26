@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { organizations, memberships } from './identity';
 import { categories, sites, teams } from './structure';
+import { slaPolicies } from './sla';
 
 /**
  * Sequential incident number counters per organization.
@@ -54,6 +55,22 @@ export const incidents = pgTable(
 		supportLevel: varchar('support_level', { length: 10 }).default('N1').notNull(),
 		/** Optional flat Core category (5.4P). Nullable: incidents may have no category. */
 		categoryId: uuid('category_id'),
+		/**
+		 * SLA (5.4T-B, 24x7 elapsed minutes). Snapshot taken when the policy is applied: later edits or
+		 * deactivation of the policy never change it. Either all SLA snapshot/deadline fields are set
+		 * (with deadlines = applied_at + minutes) or none is (no SLA) — enforced by CHECK.
+		 */
+		slaPolicyId: uuid('sla_policy_id'),
+		slaFirstResponseMinutes: integer('sla_first_response_minutes'),
+		slaResolutionMinutes: integer('sla_resolution_minutes'),
+		slaAppliedAt: timestamp('sla_applied_at', { withTimezone: true }),
+		firstResponseDueAt: timestamp('first_response_due_at', { withTimezone: true }),
+		resolutionDueAt: timestamp('resolution_due_at', { withTimezone: true }),
+		/**
+		 * First public reply by support staff (not the requester). A general fact, recorded with or
+		 * without SLA and kept when the SLA changes; first write wins.
+		 */
+		firstResponseAt: timestamp('first_response_at', { withTimezone: true }),
 		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
 	},
@@ -102,11 +119,26 @@ export const incidents = pgTable(
 			sql`${table.priority} IN ('low', 'medium', 'high', 'urgent')`
 		),
 		check('incidents_support_level_check', sql`${table.supportLevel} IN ('N1', 'N2', 'N3')`),
+		foreignKey({
+			name: 'incidents_sla_policy_org_fk',
+			columns: [table.slaPolicyId, table.organizationId],
+			foreignColumns: [slaPolicies.id, slaPolicies.organizationId]
+		}).onDelete('restrict'),
+		check(
+			'incidents_sla_snapshot_check',
+			sql`(${table.slaPolicyId} IS NULL AND ${table.slaFirstResponseMinutes} IS NULL AND ${table.slaResolutionMinutes} IS NULL AND ${table.slaAppliedAt} IS NULL AND ${table.firstResponseDueAt} IS NULL AND ${table.resolutionDueAt} IS NULL) OR (${table.slaPolicyId} IS NOT NULL AND ${table.slaFirstResponseMinutes} BETWEEN 1 AND 5256000 AND ${table.slaResolutionMinutes} BETWEEN ${table.slaFirstResponseMinutes} AND 5256000 AND ${table.slaAppliedAt} IS NOT NULL AND ${table.firstResponseDueAt} = ${table.slaAppliedAt} + ${table.slaFirstResponseMinutes} * interval '1 minute' AND ${table.resolutionDueAt} = ${table.slaAppliedAt} + ${table.slaResolutionMinutes} * interval '1 minute')`
+		),
 		index('incidents_org_status_idx').on(table.organizationId, table.status, table.createdAt),
 		index('incidents_org_site_idx').on(table.organizationId, table.siteId),
 		index('incidents_org_team_idx').on(table.organizationId, table.teamId),
 		index('incidents_org_support_level_idx').on(table.organizationId, table.supportLevel),
-		index('incidents_org_category_idx').on(table.organizationId, table.categoryId)
+		index('incidents_org_category_idx').on(table.organizationId, table.categoryId),
+		// Deadline lookups (overdue queries arrive in 5.4T-C).
+		index('incidents_org_first_response_due_idx').on(
+			table.organizationId,
+			table.firstResponseDueAt
+		),
+		index('incidents_org_resolution_due_idx').on(table.organizationId, table.resolutionDueAt)
 	]
 );
 

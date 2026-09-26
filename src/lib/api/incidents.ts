@@ -17,6 +17,17 @@ export interface IncidentListItem {
 	teamName?: string | null;
 	/** Core category id (5.4P). Names are resolved from the categories catalog client-side. */
 	categoryId: string | null;
+	/**
+	 * SLA snapshot (5.4T-B, 24x7). All null when the incident has no SLA. Deadlines never change
+	 * when the policy is edited later. firstResponseAt is set on the first support reply.
+	 */
+	slaPolicyId: string | null;
+	slaFirstResponseMinutes: number | null;
+	slaResolutionMinutes: number | null;
+	slaAppliedAt: string | null;
+	firstResponseDueAt: string | null;
+	resolutionDueAt: string | null;
+	firstResponseAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -194,6 +205,13 @@ export async function listIncidents(
 		if (item.categoryId === undefined) {
 			item.categoryId = null;
 		}
+		if (!normalizeSlaFields(item)) {
+			throw new IncidentApiError(
+				res.status,
+				'INVALID_PAYLOAD',
+				'No se pudo interpretar la respuesta del servidor.'
+			);
+		}
 	}
 
 	return incidents as IncidentListItem[];
@@ -276,6 +294,47 @@ export async function getIncident(
 
 	const incident = (data as { incident?: unknown }).incident;
 	return parseAndValidateIncident(incident, organizationId, incidentId, res.status);
+}
+
+const SLA_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+const SLA_FIELDS = [
+	'slaPolicyId',
+	'slaFirstResponseMinutes',
+	'slaResolutionMinutes',
+	'slaAppliedAt',
+	'firstResponseDueAt',
+	'resolutionDueAt'
+] as const;
+
+function isSlaTimestamp(value: unknown): boolean {
+	return (
+		typeof value === 'string' && SLA_TIMESTAMP.test(value) && Number.isFinite(Date.parse(value))
+	);
+}
+
+function isSlaMinutes(value: unknown): value is number {
+	return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+/**
+ * SLA fields (5.4T-B): absent (legacy payload) -> null. Either every snapshot field is null (no
+ * SLA) or all are valid and coherent; firstResponseAt is independent. Mutates item in place.
+ */
+function normalizeSlaFields(item: Record<string, unknown>): boolean {
+	for (const key of [...SLA_FIELDS, 'firstResponseAt'] as const)
+		if (item[key] === undefined) item[key] = null;
+	if (item.firstResponseAt !== null && !isSlaTimestamp(item.firstResponseAt)) return false;
+	if (SLA_FIELDS.every((key) => item[key] === null)) return true;
+	return (
+		typeof item.slaPolicyId === 'string' &&
+		CATEGORY_UUID.test(item.slaPolicyId) &&
+		isSlaMinutes(item.slaFirstResponseMinutes) &&
+		isSlaMinutes(item.slaResolutionMinutes) &&
+		item.slaResolutionMinutes >= item.slaFirstResponseMinutes &&
+		isSlaTimestamp(item.slaAppliedAt) &&
+		isSlaTimestamp(item.firstResponseDueAt) &&
+		isSlaTimestamp(item.resolutionDueAt)
+	);
 }
 
 function parseAndValidateIncident(
@@ -361,6 +420,13 @@ function parseAndValidateIncident(
 	if (item.categoryId === undefined) {
 		item.categoryId = null;
 	}
+	if (!normalizeSlaFields(item)) {
+		throw new IncidentApiError(
+			status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
 
 	if (item.organizationId !== expectedOrgId) {
 		throw new IncidentApiError(
@@ -388,6 +454,11 @@ export interface CreateIncidentInput {
 	priority: 'low' | 'medium' | 'high' | 'urgent';
 	/** Optional Core category (active, same organization). Omitted or null: no category. */
 	categoryId?: string | null;
+	/**
+	 * 5.4T-B, requires sla:assign: a policy UUID, or null for no SLA. Omit it to let the server
+	 * apply the organization's default policy (the only option without sla:assign).
+	 */
+	slaPolicyId?: string | null;
 }
 
 export interface CreateIncidentOptions {
@@ -415,6 +486,13 @@ export async function createIncident(
 	) {
 		throw new IncidentApiError(0, 'INVALID_INPUT', 'La categoría seleccionada no es válida.');
 	}
+	if (
+		input?.slaPolicyId !== undefined &&
+		input.slaPolicyId !== null &&
+		(typeof input.slaPolicyId !== 'string' || !CATEGORY_UUID.test(input.slaPolicyId))
+	) {
+		throw new IncidentApiError(0, 'INVALID_INPUT', 'La política SLA seleccionada no es válida.');
+	}
 	// Explicit allowlist: the strict server contract rejects any other property.
 	const payload: Record<string, unknown> = {
 		organizationId,
@@ -424,6 +502,7 @@ export async function createIncident(
 		priority: input.priority
 	};
 	if (input.categoryId !== undefined) payload.categoryId = input.categoryId;
+	if (input.slaPolicyId !== undefined) payload.slaPolicyId = input.slaPolicyId;
 
 	let res: Response;
 	try {
@@ -469,6 +548,9 @@ export async function createIncident(
 			if (backendCode === 'CATEGORY_NOT_FOUND') {
 				message = 'La categoría seleccionada no está disponible.';
 				code = 'CATEGORY_NOT_FOUND';
+			} else if (backendCode === 'SLA_POLICY_NOT_FOUND') {
+				message = 'La política SLA seleccionada no está disponible.';
+				code = 'SLA_POLICY_NOT_FOUND';
 			} else {
 				message = 'No se pudo asociar la sede o el cliente especificado.';
 				code = 'NOT_FOUND';
@@ -477,6 +559,9 @@ export async function createIncident(
 			if (backendCode === 'CATEGORY_INACTIVE') {
 				message = 'La categoría seleccionada está inactiva.';
 				code = 'CATEGORY_INACTIVE';
+			} else if (backendCode === 'SLA_POLICY_INACTIVE') {
+				message = 'La política SLA seleccionada está inactiva.';
+				code = 'SLA_POLICY_INACTIVE';
 			} else {
 				message = 'No se pudo crear la incidencia con los datos indicados.';
 				code = 'CONFLICT';
@@ -1578,4 +1663,110 @@ export async function createIncidentInternalNote(
 	input: CreateIncidentMessageInput
 ): Promise<IncidentInternalNote> {
 	return createIncidentMessage('internal-notes', input);
+}
+
+export interface UpdateIncidentSlaOptions {
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+/**
+ * PATCH /api/incidents/<id>/sla?organizationId=<UUID> (requires sla:assign and mutation access).
+ * slaPolicyId: a policy UUID (snapshot + deadlines from now) or null (removes the SLA).
+ */
+export async function updateIncidentSla(
+	organizationId: string,
+	incidentId: string,
+	input: { slaPolicyId: string | null },
+	options?: UpdateIncidentSlaOptions
+): Promise<IncidentListItem> {
+	if (
+		!CATEGORY_UUID.test(organizationId) ||
+		!CATEGORY_UUID.test(incidentId) ||
+		!input ||
+		(input.slaPolicyId !== null &&
+			(typeof input.slaPolicyId !== 'string' || !CATEGORY_UUID.test(input.slaPolicyId)))
+	) {
+		throw new IncidentApiError(0, 'INVALID_INPUT', 'Los datos del cambio de SLA no son válidos.');
+	}
+	const fetchFn = options?.customFetch ?? fetch;
+	const url = `/api/incidents/${encodeURIComponent(incidentId)}/sla?${new URLSearchParams({ organizationId }).toString()}`;
+	let res: Response;
+	try {
+		res = await fetchFn(url, {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ slaPolicyId: input.slaPolicyId }),
+			signal: options?.signal
+		});
+	} catch (err: unknown) {
+		if (err instanceof IncidentApiError) throw err;
+		if ((err as Error)?.name === 'AbortError' || options?.signal?.aborted) throw err;
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+	if (!res.ok) {
+		let backendCode: unknown;
+		try {
+			backendCode = ((await res.json()) as { error?: { code?: unknown } })?.error?.code;
+		} catch {
+			backendCode = undefined;
+		}
+		let message = 'No se pudo cambiar el SLA. Inténtalo de nuevo.';
+		let code = 'INTERNAL_ERROR';
+		if (res.status === 400) {
+			message = 'Revisa la política SLA seleccionada.';
+			code = 'INVALID_INPUT';
+		} else if (res.status === 401) {
+			message = 'Tu sesión ya no es válida.';
+			code = 'UNAUTHORIZED';
+		} else if (res.status === 403) {
+			message = 'No tienes permisos para cambiar el SLA de esta incidencia.';
+			code = 'FORBIDDEN';
+		} else if (res.status === 404) {
+			if (backendCode === 'SLA_POLICY_NOT_FOUND') {
+				message = 'La política SLA seleccionada no está disponible.';
+				code = 'SLA_POLICY_NOT_FOUND';
+			} else {
+				message = 'La incidencia no está disponible.';
+				code = 'NOT_FOUND';
+			}
+		} else if (res.status === 409) {
+			if (backendCode === 'SLA_POLICY_INACTIVE') {
+				message = 'La política SLA seleccionada está inactiva.';
+				code = 'SLA_POLICY_INACTIVE';
+			} else if (backendCode === 'INCIDENT_CLOSED') {
+				message = 'La incidencia está cerrada y no admite cambios.';
+				code = 'INCIDENT_CLOSED';
+			} else {
+				code = 'CONFLICT';
+			}
+		} else if (res.status >= 500) {
+			code = 'SERVER_ERROR';
+		}
+		throw new IncidentApiError(res.status, code, message);
+	}
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	const incident = parseAndValidateIncident(
+		(data as { incident?: unknown })?.incident,
+		organizationId,
+		incidentId,
+		res.status
+	);
+	if (incident.slaPolicyId !== input.slaPolicyId) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	return incident;
 }

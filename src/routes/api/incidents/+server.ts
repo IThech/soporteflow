@@ -88,7 +88,8 @@ export const POST: RequestHandler = async (event) => {
 		'priority',
 		'clientUserId',
 		'siteId',
-		'categoryId'
+		'categoryId',
+		'slaPolicyId'
 	]);
 	for (const key of Object.keys(body)) {
 		if (!allowedKeys.has(key)) {
@@ -160,6 +161,27 @@ export const POST: RequestHandler = async (event) => {
 		clientUserId = principal.userId;
 	}
 
+	// 4.2 SLA (5.4T-B). Deadlines and snapshot are always server-owned. Choosing the policy
+	// (a UUID, or null for "no SLA") requires sla:assign; without it the server applies the
+	// organization's default policy, if any. A caller lacking sla:assign that sends slaPolicyId
+	// is refused (403), consistent with the requester spoof rule above.
+	const slaPolicyId = body.slaPolicyId;
+	if (slaPolicyId !== undefined) {
+		if (slaPolicyId !== null && !isValidUuid(slaPolicyId)) {
+			return json(
+				{ error: { code: 'INVALID_INPUT', message: 'slaPolicyId must be a valid UUID or null.' } },
+				{ status: 400 }
+			);
+		}
+		const canAssignSla = await authorizeAction(event.request.headers, {
+			organizationId,
+			permissionId: 'sla:assign'
+		});
+		if (!canAssignSla) {
+			return json({ error: { code: 'FORBIDDEN', message: 'Permission denied.' } }, { status: 403 });
+		}
+	}
+
 	// 5. Execute service
 	try {
 		const result = await createIncidentRecord(
@@ -175,7 +197,8 @@ export const POST: RequestHandler = async (event) => {
 				priority: body.priority as IncidentPriority | undefined,
 				clientUserId,
 				siteId: body.siteId as string | null | undefined,
-				categoryId: body.categoryId as string | null | undefined
+				categoryId: body.categoryId as string | null | undefined,
+				slaPolicyId: slaPolicyId as string | null | undefined
 			}
 		);
 
@@ -198,6 +221,16 @@ export const POST: RequestHandler = async (event) => {
 							}
 						},
 						{ status: 400 }
+					);
+				case 'SLA_POLICY_NOT_FOUND':
+					return json(
+						{ error: { code: 'SLA_POLICY_NOT_FOUND', message: 'SLA policy not found.' } },
+						{ status: 404 }
+					);
+				case 'SLA_POLICY_INACTIVE':
+					return json(
+						{ error: { code: 'SLA_POLICY_INACTIVE', message: 'SLA policy is not active.' } },
+						{ status: 409 }
 					);
 				case 'SITE_NOT_FOUND':
 				case 'CATEGORY_NOT_FOUND':
