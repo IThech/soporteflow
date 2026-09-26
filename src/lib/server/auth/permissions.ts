@@ -197,6 +197,21 @@ export const PERMISSION_CATALOG = [
 		description: 'Cancelar invitaciones pendientes de la organización.',
 		category: 'invitations',
 		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	// SLA (5.4T-A): policy configuration only; incident deadlines arrive in 5.4T-B.
+	{
+		id: 'sla:view',
+		name: 'Ver políticas SLA',
+		description: 'Consultar las políticas SLA de la organización.',
+		category: 'sla',
+		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	{
+		id: 'sla:manage',
+		name: 'Gestionar políticas SLA',
+		description: 'Crear, modificar, activar y desactivar políticas SLA de la organización.',
+		category: 'sla',
+		allowedScopeTypes: ORGANIZATION_ONLY
 	}
 ] as const satisfies readonly PermissionDefinition[];
 

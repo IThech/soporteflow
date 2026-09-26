@@ -4,3 +4,4 @@ export * from './auth';
 export * from './modules';
 export * from './authentication';
 export * from './incidents';
+export * from './sla';

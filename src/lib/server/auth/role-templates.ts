@@ -52,7 +52,9 @@ export const ROLE_TEMPLATES = [
 			'invitations:create',
 			'invitations:view',
 			'invitations:revoke',
-			'incidents:view_requested'
+			'incidents:view_requested',
+			'sla:view',
+			'sla:manage'
 		]
 	},
 	{
@@ -71,7 +73,9 @@ export const ROLE_TEMPLATES = [
 			'incidents:add_internal_note',
 			'sites:view',
 			'categories:view',
-			'teams:view'
+			'teams:view',
+			// 5.4T-A: technicians need the operational SLA targets, never their configuration.
+			'sla:view'
 		]
 	},
 	{

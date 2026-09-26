@@ -27,7 +27,8 @@ const ADMIN_0012 = [
 ].sort();
 /**
  * Current organization_admin template: 0012 + roles:view / roles:manage (0013) + memberships:view
- * (0014) + invitations:create/view/revoke + incidents:view_requested (0015).
+ * (0014) + invitations:create/view/revoke + incidents:view_requested (0015) + sla:view/sla:manage
+ * (0017).
  */
 const ADMIN = [
 	...ADMIN_0012,
@@ -37,7 +38,9 @@ const ADMIN = [
 	'invitations:create',
 	'invitations:view',
 	'invitations:revoke',
-	'incidents:view_requested'
+	'incidents:view_requested',
+	'sla:view',
+	'sla:manage'
 ].sort();
 /** Customer template (0015, 5.4S-A): exactly these 5 permissions. */
 const CUSTOMER = [
@@ -47,7 +50,8 @@ const CUSTOMER = [
 	'sites:view',
 	'categories:view'
 ].sort();
-const TECHNICIAN = [
+/** technician permissions as seeded by migration 0012 (5.4Q-C). */
+const TECHNICIAN_0012 = [
 	'incidents:view_all',
 	'incidents:create',
 	'incidents:edit',
@@ -59,6 +63,8 @@ const TECHNICIAN = [
 	'categories:view',
 	'teams:view'
 ].sort();
+/** Current technician template: 0012 + sla:view (0017, 5.4T-A). */
+const TECHNICIAN = [...TECHNICIAN_0012, 'sla:view'].sort();
 
 function errorCode(error) {
 	return error?.code ?? error?.cause?.code;
@@ -271,10 +277,10 @@ test('SoporteFlow — Etapa 5.4Q-C: plantillas de rol canónicas', async (t) => 
 				assert.equal(techB.name, 'Técnico B', 'no se renombra');
 				assert.deepEqual(
 					await rolePermissionsOf(up, existing),
-					[...TECHNICIAN, 'sites:manage'].sort()
+					[...TECHNICIAN_0012, 'sites:manage'].sort()
 				);
 				// la plantilla sí se sincroniza de forma exacta
-				assert.deepEqual(await templatePermissions(up, 'tpl_technician'), TECHNICIAN);
+				assert.deepEqual(await templatePermissions(up, 'tpl_technician'), TECHNICIAN_0012);
 				// custom intacto
 				const customRow = first.find((r) => r.id === custom);
 				assert.equal(customRow.is_custom, true);

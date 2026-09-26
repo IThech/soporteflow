@@ -43,7 +43,8 @@ const IDS_0015 = [
 ];
 /**
  * Current canonical catalog, in catalog order: 0011 + role administration (0013, 5.4R-A) +
- * memberships:view (0014, 5.4R-C) + 5.4S (0015); view_requested sits in the incidents group.
+ * memberships:view (0014, 5.4R-C) + 5.4S (0015) + sla:view/sla:manage (0017, 5.4T-A);
+ * view_requested sits in the incidents group.
  */
 const EXPECTED_IDS = [
 	'incidents:create',
@@ -56,7 +57,9 @@ const EXPECTED_IDS = [
 	'memberships:view',
 	'invitations:create',
 	'invitations:view',
-	'invitations:revoke'
+	'invitations:revoke',
+	'sla:view',
+	'sla:manage'
 ];
 const ID_PATTERN = /^[a-z][a-z_]*:[a-z][a-z_]*$/;
 const SCOPES = ['organization', 'department', 'team', 'site', 'personal'];
@@ -124,7 +127,6 @@ test('SoporteFlow — Etapa 5.4Q-B: catálogo canónico de permisos', async (t) 
 			'incidents:override_priority',
 			'memberships:manage',
 			'invitations:accept',
-			'sla:manage',
 			'organization:manage',
 			'users:manage',
 			'users:view'
