@@ -398,18 +398,16 @@ test('SoporteFlow — Etapa 5.4S-A: invitations, permisos 5.4S y rol Customer', 
 		);
 	});
 
-	await t.test('view_requested todavía sin efecto en acceso a incidencias (S-B)', async () => {
+	await t.test('Customer: acceso de solicitante (5.4S-B); Admin view_all domina', async () => {
 		const customer = await member(A.org, [A.customer]);
 		const effective = await resolveEffectivePermissions(customer.headers, A.org.id);
 		assert.deepEqual([...effective].sort(), CUSTOMER);
-		assert.equal(
-			await resolveIncidentAccess(customer.headers, A.org.id, customer.user.id),
-			null,
-			'Customer aún no ve incidencias'
-		);
-		assert.deepEqual(await resolveIncidentAccess(adminA.headers, A.org.id, adminA.user.id), {});
-		const source = fs.readFileSync('src/lib/server/auth/incident-access.ts', 'utf8');
-		assert.ok(!source.includes('view_requested'));
+		assert.deepEqual(await resolveIncidentAccess(customer.headers, A.org.id, customer.user.id), {
+			clientUserId: customer.user.id
+		});
+		assert.deepEqual(await resolveIncidentAccess(adminA.headers, A.org.id, adminA.user.id), {
+			viewAll: true
+		});
 	});
 
 	await t.test('Better Auth sigue cerrado: disableSignUp true, sin flujos nuevos', () => {

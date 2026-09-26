@@ -7,7 +7,7 @@ import {
 	organizations,
 	users
 } from '../db/schema';
-import { IncidentServiceError, type IncidentDatabase } from './incidents';
+import { IncidentServiceError, incidentAccessAllows, type IncidentDatabase } from './incidents';
 
 /** Message DTO: explicit allowlist, never exposes tenant, incident or author UUIDs. */
 export interface IncidentMessageItem {
@@ -36,10 +36,13 @@ export interface PublicCommentContext {
 	readonly organizationId: string;
 	readonly incidentId: string;
 	/**
-	 * Set by callers that only hold incidents:view_own: access is limited to incidents
-	 * assigned to this user. Omit it only when the caller holds incidents:view_all.
+	 * Read restrictions resolved from the caller's permissions (5.4S-B), applied as a UNION:
+	 * - assignedToUserId (incidents:view_own): incidents assigned to this user;
+	 * - clientUserId (incidents:view_requested): incidents whose requester is this user.
+	 * Omit both only when the caller holds incidents:view_all.
 	 */
 	readonly assignedToUserId?: string;
+	readonly clientUserId?: string;
 }
 export interface CreatePublicCommentContext extends PublicCommentContext {
 	readonly actorUserId: string;
@@ -146,7 +149,23 @@ function validateBody(body: unknown): string {
 }
 const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-type AppendContext = CreateInternalNoteContext & { readonly assignedToUserId?: string };
+type AppendContext = CreateInternalNoteContext & {
+	readonly assignedToUserId?: string;
+	readonly clientUserId?: string;
+};
+
+/** Restricted (view_own and/or view_requested) or unrestricted (neither field set). */
+function restrictionOf(context: { assignedToUserId?: string; clientUserId?: string }) {
+	if (context.assignedToUserId === undefined && context.clientUserId === undefined)
+		return undefined;
+	return { assignedToUserId: context.assignedToUserId, clientUserId: context.clientUserId };
+}
+function invalidRestriction(context: { assignedToUserId?: string; clientUserId?: string }) {
+	return (
+		(context.assignedToUserId !== undefined && !isValidUuid(context.assignedToUserId)) ||
+		(context.clientUserId !== undefined && !isValidUuid(context.clientUserId))
+	);
+}
 
 /**
  * Shared append path. Organization, actor and incident checks run inside one transaction;
@@ -170,8 +189,8 @@ async function appendMessage(
 	if (!isValidUuid(context?.actorUserId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
 	}
-	if (context.assignedToUserId !== undefined && !isValidUuid(context.assignedToUserId)) {
-		throw new IncidentServiceError('INVALID_INPUT', 'assignedToUserId must be a valid UUID');
+	if (invalidRestriction(context)) {
+		throw new IncidentServiceError('INVALID_INPUT', 'access restriction must be a valid UUID');
 	}
 	const text = validateBody(body);
 
@@ -230,7 +249,8 @@ async function appendMessage(
 			.select({
 				id: incidents.id,
 				status: incidents.status,
-				assignedToUserId: incidents.assignedToUserId
+				assignedToUserId: incidents.assignedToUserId,
+				clientUserId: incidents.clientUserId
 			})
 			.from(incidents)
 			.where(
@@ -244,10 +264,7 @@ async function appendMessage(
 		if (!incident) {
 			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
 		}
-		if (
-			context.assignedToUserId !== undefined &&
-			incident.assignedToUserId !== context.assignedToUserId
-		) {
+		if (!incidentAccessAllows(restrictionOf(context), incident)) {
 			throw accessDenied();
 		}
 		if (incident.status === 'closed') {
@@ -303,13 +320,17 @@ async function listMessages(
 	if (
 		!isValidUuid(context?.organizationId) ||
 		!isValidUuid(context?.incidentId) ||
-		(context.assignedToUserId !== undefined && !isValidUuid(context.assignedToUserId))
+		invalidRestriction(context)
 	) {
 		throw new IncidentServiceError('INVALID_INPUT', QUERY_ERROR[visibility]);
 	}
 	const { limit, cursor } = parseMessageQuery(params, visibility);
 	const [incident] = await db
-		.select({ id: incidents.id, assignedToUserId: incidents.assignedToUserId })
+		.select({
+			id: incidents.id,
+			assignedToUserId: incidents.assignedToUserId,
+			clientUserId: incidents.clientUserId
+		})
 		.from(incidents)
 		.where(
 			and(
@@ -319,11 +340,7 @@ async function listMessages(
 		)
 		.limit(1);
 	if (!incident) throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found.');
-	if (
-		context.assignedToUserId !== undefined &&
-		incident.assignedToUserId !== context.assignedToUserId
-	)
-		throw accessDenied();
+	if (!incidentAccessAllows(restrictionOf(context), incident)) throw accessDenied();
 
 	const conditions = [
 		eq(incidentMessages.organizationId, context.organizationId),
@@ -400,8 +417,9 @@ export async function listInternalNotes(
 
 /**
  * Appends a public comment. Visibility is fixed to 'public' and no incident_history event
- * is written. Caller must authorize incidents:add_comment plus incident access: pass
- * assignedToUserId = actor when the caller only holds incidents:view_own.
+ * is written. Caller must authorize incidents:add_comment plus incident access: pass the
+ * restrictions held (assignedToUserId for view_own, clientUserId for view_requested) unless the
+ * caller holds incidents:view_all.
  */
 export async function createPublicComment(
 	dbOrTx: IncidentDatabase,
@@ -414,7 +432,8 @@ export async function createPublicComment(
 			organizationId: context?.organizationId,
 			incidentId: context?.incidentId,
 			actorUserId: context?.actorUserId,
-			assignedToUserId: context?.assignedToUserId
+			assignedToUserId: context?.assignedToUserId,
+			clientUserId: context?.clientUserId
 		},
 		body,
 		'public'
@@ -422,8 +441,9 @@ export async function createPublicComment(
 }
 
 /**
- * Lists public comments only. Caller must authorize incidents:view_all, or incidents:view_own
- * and pass assignedToUserId = principal so that only assigned incidents are readable.
+ * Lists public comments only (the whole public thread, never filtered by author). Caller must
+ * authorize incidents:view_all, or pass the restrictions held (assignedToUserId for view_own,
+ * clientUserId for view_requested) so that only accessible incidents are readable.
  */
 export async function listPublicComments(
 	db: IncidentDatabase,
@@ -435,7 +455,8 @@ export async function listPublicComments(
 		{
 			organizationId: context?.organizationId,
 			incidentId: context?.incidentId,
-			assignedToUserId: context?.assignedToUserId
+			assignedToUserId: context?.assignedToUserId,
+			clientUserId: context?.clientUserId
 		},
 		params,
 		'public'

@@ -5,7 +5,8 @@ import { authorizeAction } from '$lib/server/auth/authorization';
 import {
 	canAccessIncident,
 	incidentMutationFailure,
-	resolveIncidentAccess
+	resolveIncidentAccess,
+	resolveIncidentMutationAccess
 } from '$lib/server/auth/incident-access';
 import {
 	getIncidentById,
@@ -289,7 +290,7 @@ export const PATCH: RequestHandler = async (event) => {
 		permissionId: 'incidents:edit'
 	});
 	const access = authorized
-		? await resolveIncidentAccess(event.request.headers, organizationId, principal.userId)
+		? await resolveIncidentMutationAccess(event.request.headers, organizationId, principal.userId)
 		: null;
 	if (!access) {
 		return json(

@@ -211,6 +211,20 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 	});
 	const sessionA = await createSession(f, userA.id);
 
+	// 5.4S-B: elegir otro solicitante (clientUserId) exige incidents:view_all (personal de soporte).
+	const staffA = await identity(f);
+	const [membershipStaffA] = await db
+		.insert(s.memberships)
+		.values({ organizationId: orgA.id, userId: staffA.id, active: true })
+		.returning();
+	for (const permissionId of ['incidents:create', 'incidents:view_all'])
+		await grantPermission(f, {
+			organizationId: orgA.id,
+			membershipId: membershipStaffA.id,
+			permissionId
+		});
+	const sessionStaffA = await createSession(f, staffA.id);
+
 	// Identidad y membresía para User B (creador autorizado en Org B)
 	const userB = await identity(f);
 	const [membershipB] = await db
@@ -689,7 +703,7 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 	await t.test('21. clientUserId válido de la misma organización -> 201', async () => {
 		const res = await callPost(POST, {
 			body: { ...basePayloadA, clientUserId: clientUserA.id },
-			headers: { cookie: sessionA.cookieHeader }
+			headers: { cookie: sessionStaffA.cookieHeader }
 		});
 		assert.equal(res.status, 201);
 		assert.equal(res.json.incident.clientUserId, clientUserA.id);
@@ -705,11 +719,11 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 			const nonexistentClientUserId = randomUUID();
 			const resCrossTenant = await callPost(POST, {
 				body: { ...basePayloadA, clientUserId: clientUserB.id },
-				headers: { cookie: sessionA.cookieHeader }
+				headers: { cookie: sessionStaffA.cookieHeader }
 			});
 			const resNonexistent = await callPost(POST, {
 				body: { ...basePayloadA, clientUserId: nonexistentClientUserId },
-				headers: { cookie: sessionA.cookieHeader }
+				headers: { cookie: sessionStaffA.cookieHeader }
 			});
 
 			// Mismo status HTTP (404)
@@ -740,7 +754,7 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 	await t.test('23. clientUserId inactivo -> 409', async () => {
 		const res = await callPost(POST, {
 			body: { ...basePayloadA, clientUserId: clientUserInactiveA.id },
-			headers: { cookie: sessionA.cookieHeader }
+			headers: { cookie: sessionStaffA.cookieHeader }
 		});
 		assert.equal(res.status, 409);
 		assert.equal(res.json.error?.code, 'CLIENT_USER_INACTIVE');

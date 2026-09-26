@@ -2,7 +2,10 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
-import { incidentMutationFailure, resolveIncidentAccess } from '$lib/server/auth/incident-access';
+import {
+	incidentMutationFailure,
+	resolveIncidentMutationAccess
+} from '$lib/server/auth/incident-access';
 import { assignIncidentRecord, IncidentServiceError } from '$lib/server/services/incidents';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -164,7 +167,7 @@ export const POST: RequestHandler = async (event) => {
 	// Mutation permission plus read access to the incident (view_all / view_own);
 	// the assignee restriction is enforced by the service under the incident row lock.
 	const access = authorized
-		? await resolveIncidentAccess(event.request.headers, organizationId, principal.userId)
+		? await resolveIncidentMutationAccess(event.request.headers, organizationId, principal.userId)
 		: null;
 	if (!access) {
 		return json(

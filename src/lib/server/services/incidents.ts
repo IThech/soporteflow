@@ -1,4 +1,4 @@
-import { and, eq, desc, asc, isNull, sql } from 'drizzle-orm';
+import { and, eq, desc, asc, isNull, or, sql, type SQL } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import {
 	incidents,
@@ -82,14 +82,55 @@ export class IncidentServiceError extends Error {
 }
 
 /**
- * Incident read access resolved by the HTTP layer from the caller's permissions
- * (same semantics as GET /api/incidents/[id]):
- * - {}                        incidents:view_all, any incident of the tenant;
- * - { assignedToUserId: me }  incidents:view_own, only incidents assigned to the principal.
- * clientUserId never grants access. Omitted only by trusted internal callers.
+ * Incident read access resolved by the HTTP layer from the caller's permissions (5.4S-B):
+ * - { viewAll: true }            incidents:view_all, any incident of the tenant;
+ * - { assignedToUserId: me }     incidents:view_own, incidents assigned to the principal (staff);
+ * - { clientUserId: me }         incidents:view_requested, incidents whose requester
+ *                                (incidents.client_user_id) is the principal (customer);
+ * - both restrictions            view_own + view_requested: UNION (assigned OR requested).
+ * The two restrictions are distinct fields so technician and requester scopes never mix, and
+ * view_all always dominates. A restricted access with no restriction set grants nothing
+ * (fail-closed). createdByUserId and the legacy client text never grant access; a null
+ * client_user_id never matches. Omitted (undefined) only by trusted internal callers.
  */
-export interface IncidentAccess {
-	readonly assignedToUserId?: string;
+export type IncidentAccess =
+	| { readonly viewAll: true; readonly assignedToUserId?: never; readonly clientUserId?: never }
+	| {
+			readonly viewAll?: false;
+			readonly assignedToUserId?: string;
+			readonly clientUserId?: string;
+	  };
+
+/** Single evaluation of IncidentAccess against one incident (OR of the restrictions held). */
+export function incidentAccessAllows(
+	access: IncidentAccess | undefined,
+	incident: { assignedToUserId: string | null; clientUserId: string | null }
+): boolean {
+	if (access === undefined) return true;
+	if (access.viewAll === true) return true;
+	return (
+		(access.assignedToUserId !== undefined &&
+			incident.assignedToUserId === access.assignedToUserId) ||
+		(access.clientUserId !== undefined && incident.clientUserId === access.clientUserId)
+	);
+}
+
+/** SQL form of incidentAccessAllows for list queries (null = unrestricted). */
+function incidentAccessCondition(access: IncidentAccess | undefined): SQL | null {
+	if (access === undefined || access.viewAll === true) return null;
+	const branches: SQL[] = [];
+	if (access.assignedToUserId !== undefined) {
+		if (!isValidUuid(access.assignedToUserId))
+			throw new IncidentServiceError('INVALID_INPUT', 'assignedToUserId must be a valid UUID');
+		branches.push(eq(incidents.assignedToUserId, access.assignedToUserId));
+	}
+	if (access.clientUserId !== undefined) {
+		if (!isValidUuid(access.clientUserId))
+			throw new IncidentServiceError('INVALID_INPUT', 'clientUserId must be a valid UUID');
+		branches.push(eq(incidents.clientUserId, access.clientUserId));
+	}
+	// Fail-closed: a restricted access without any restriction matches nothing.
+	return branches.length === 0 ? sql`false` : or(...branches)!;
 }
 
 /**
@@ -116,10 +157,7 @@ async function lockIncidentForMutation(
 	if (!incident) {
 		throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
 	}
-	if (
-		access?.assignedToUserId !== undefined &&
-		incident.assignedToUserId !== access.assignedToUserId
-	) {
+	if (!incidentAccessAllows(access, incident)) {
 		throw new IncidentServiceError('INCIDENT_ACCESS_DENIED', 'Incident access denied');
 	}
 	if (rejectClosed && incident.status === 'closed') {
@@ -474,6 +512,11 @@ export async function createIncidentRecord(
 export interface ListIncidentsContext {
 	readonly organizationId: string;
 	readonly actorUserId?: string;
+	/**
+	 * Read scope applied in SQL on top of every filter (5.4S-B). Omitted by callers that already
+	 * authorized incidents:view_all for the requested queue.
+	 */
+	readonly access?: IncidentAccess;
 }
 
 /**
@@ -491,6 +534,8 @@ export async function listIncidents(
 	}
 
 	const conditions = [eq(incidents.organizationId, context.organizationId)];
+	const scope = incidentAccessCondition(context.access);
+	if (scope) conditions.push(scope);
 
 	if (filters?.status) {
 		if (!VALID_STATUSES.has(filters.status)) {

@@ -2,11 +2,13 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
+import { resolveIncidentAccess } from '$lib/server/auth/incident-access';
 import {
 	createIncidentRecord,
 	listIncidents,
 	IncidentServiceError,
 	type IncidentPriority,
+	type IncidentAccess,
 	type IncidentStatus,
 	type IncidentQueue,
 	type SupportLevel,
@@ -133,6 +135,31 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
+	// 4.1 Requester (5.4S-B). Choosing another member as requester (clientUserId) gives that
+	// member read access through incidents:view_requested, so it is reserved to callers that can
+	// already see every incident of the tenant (incidents:view_all: support staff / admin).
+	// Anyone else creates the incident for themselves: clientUserId is set by the server to the
+	// principal; an explicit different value is refused (never silently re-targeted).
+	const canChooseRequester = await authorizeAction(event.request.headers, {
+		organizationId,
+		permissionId: 'incidents:view_all'
+	});
+	let clientUserId = body.clientUserId as string | null | undefined;
+	if (!canChooseRequester) {
+		if (clientUserId !== undefined && clientUserId !== null && clientUserId !== principal.userId) {
+			return json(
+				{
+					error: {
+						code: 'FORBIDDEN',
+						message: 'Permission denied.'
+					}
+				},
+				{ status: 403 }
+			);
+		}
+		clientUserId = principal.userId;
+	}
+
 	// 5. Execute service
 	try {
 		const result = await createIncidentRecord(
@@ -146,7 +173,7 @@ export const POST: RequestHandler = async (event) => {
 				description: body.description as string,
 				client: body.client as string,
 				priority: body.priority as IncidentPriority | undefined,
-				clientUserId: body.clientUserId as string | null | undefined,
+				clientUserId,
 				siteId: body.siteId as string | null | undefined,
 				categoryId: body.categoryId as string | null | undefined
 			}
@@ -273,25 +300,36 @@ export const GET: RequestHandler = async (event) => {
 			{ status: 400 }
 		);
 	}
-	const queue: IncidentQueue = (rawQueue as IncidentQueue) ?? 'all';
-
-	// 5. Authorize based on queue:
-	// queue=all or queue=unassigned requires incidents:view_all
-	// queue=mine requires incidents:view_all OR incidents:view_own
-	const authorized =
-		queue === 'mine'
-			? (await authorizeAction(event.request.headers, {
-					organizationId,
-					permissionId: 'incidents:view_all'
-				})) ||
-				(await authorizeAction(event.request.headers, {
-					organizationId,
-					permissionId: 'incidents:view_own'
-				}))
-			: await authorizeAction(event.request.headers, {
-					organizationId,
-					permissionId: 'incidents:view_all'
-				});
+	// 5. Authorize from the resolved incident access (5.4S-B):
+	// - explicit queue=all / queue=unassigned: incidents:view_all only (a requester can never use
+	//   them to widen access);
+	// - explicit queue=mine: incidents:view_all OR incidents:view_own (assigned to the principal);
+	// - no queue: view_all -> every incident of the tenant (unchanged); a caller holding the
+	//   requester scope (incidents:view_requested) gets exactly its authorized scope, filtered in
+	//   SQL (requested, or assigned OR requested with view_own too); view_own alone keeps its 5.4N-0
+	//   contract (403 without queue=mine).
+	const access = await resolveIncidentAccess(
+		event.request.headers,
+		organizationId,
+		principal.userId
+	);
+	const viewAll = access?.viewAll === true;
+	let queue: IncidentQueue | undefined;
+	let scope: IncidentAccess | undefined;
+	let authorized = false;
+	if (rawQueue === 'mine') {
+		queue = 'mine';
+		authorized = viewAll || access?.assignedToUserId !== undefined;
+	} else if (rawQueue !== null) {
+		queue = rawQueue as IncidentQueue;
+		authorized = viewAll;
+	} else if (viewAll) {
+		queue = 'all';
+		authorized = true;
+	} else if (access && access.clientUserId !== undefined) {
+		scope = access;
+		authorized = true;
+	}
 
 	if (!authorized) {
 		return json(
@@ -306,7 +344,7 @@ export const GET: RequestHandler = async (event) => {
 	}
 
 	// 6. Extract optional filters from query string
-	const filters: ListIncidentsFilters = { queue };
+	const filters: ListIncidentsFilters = queue === undefined ? {} : { queue };
 	const statusParam = event.url.searchParams.get('status');
 	if (statusParam !== null) {
 		filters.status = statusParam as IncidentStatus;
@@ -368,7 +406,7 @@ export const GET: RequestHandler = async (event) => {
 	try {
 		const incidents = await listIncidents(
 			db,
-			{ organizationId, actorUserId: principal.userId },
+			{ organizationId, actorUserId: principal.userId, access: scope },
 			filters
 		);
 

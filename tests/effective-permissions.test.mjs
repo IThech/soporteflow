@@ -437,7 +437,7 @@ test('SoporteFlow — Etapa 5.4Q-D: permisos efectivos, /api/me y history view_o
 			const mine = await incident({ assignedToUserId: ownTech.user.id });
 			await changeIncidentSite(
 				db,
-				{ organizationId: A.org.id, actorUserId: creator.user.id, access: {} },
+				{ organizationId: A.org.id, actorUserId: creator.user.id, access: { viewAll: true } },
 				mine.id,
 				{ siteId: site.id }
 			);

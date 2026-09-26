@@ -396,7 +396,7 @@ test('SoporteFlow — Etapa 5.4P-C: categorías reales en incidencias', async (t
 	// =========================================================================
 	// Cambio de categoría (servicio)
 	// =========================================================================
-	const ctx = (who = editor, access = {}) => ({
+	const ctx = (who = editor, access = { viewAll: true }) => ({
 		organizationId: orgA.id,
 		actorUserId: who.user.id,
 		access

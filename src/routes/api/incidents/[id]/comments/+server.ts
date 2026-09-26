@@ -2,7 +2,7 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
-import { resolveIncidentAccess } from '$lib/server/auth/incident-access';
+import { incidentAccessRestriction, resolveIncidentAccess } from '$lib/server/auth/incident-access';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import {
 	createPublicComment,
@@ -60,7 +60,7 @@ export const GET: RequestHandler = async (event) => {
 		parsePublicCommentsQuery(event.url.searchParams);
 		const page = await listPublicComments(
 			db,
-			{ organizationId, incidentId, ...access },
+			{ organizationId, incidentId, ...incidentAccessRestriction(access) },
 			event.url.searchParams
 		);
 		return json({ items: page.items, nextCursor: page.nextCursor }, { headers: noStore });
@@ -110,7 +110,12 @@ export const POST: RequestHandler = async (event) => {
 
 		const item = await createPublicComment(
 			db,
-			{ organizationId, incidentId, actorUserId: principal.userId, ...access },
+			{
+				organizationId,
+				incidentId,
+				actorUserId: principal.userId,
+				...incidentAccessRestriction(access)
+			},
 			body
 		);
 		return json(

@@ -1,6 +1,11 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { incidents, incidentHistory } from '../db/schema';
-import { IncidentServiceError, type IncidentAccess, type IncidentDatabase } from './incidents';
+import {
+	IncidentServiceError,
+	incidentAccessAllows,
+	type IncidentAccess,
+	type IncidentDatabase
+} from './incidents';
 
 export const SAFE_HISTORY_TYPES = [
 	'created',
@@ -190,9 +195,11 @@ export function projectHistoryItem(row: ProjectionRow): IncidentHistoryItem | nu
 	}
 }
 /**
- * Caller must resolve incident read access (view_all -> {}, view_own -> { assignedToUserId }).
- * Tenant membership of the incident is checked here too. With a view_own restriction, an incident
- * not assigned to the principal is indistinguishable from a missing one (INCIDENT_NOT_FOUND).
+ * Caller must resolve incident read access (view_all -> { viewAll }, view_own ->
+ * { assignedToUserId }, view_requested -> { clientUserId }, both -> union). Tenant membership of
+ * the incident is checked here too. An incident outside the caller's restrictions is
+ * indistinguishable from a missing one (INCIDENT_NOT_FOUND). Only SAFE_HISTORY_TYPES are returned,
+ * whoever the caller is.
  */
 export async function listIncidentHistory(
 	db: IncidentDatabase,
@@ -202,7 +209,11 @@ export async function listIncidentHistory(
 	if (!uuid.test(context.organizationId) || !uuid.test(context.incidentId)) throw invalid();
 	const { limit, cursor } = parseHistoryQuery(params);
 	const [incident] = await db
-		.select({ id: incidents.id, assignedToUserId: incidents.assignedToUserId })
+		.select({
+			id: incidents.id,
+			assignedToUserId: incidents.assignedToUserId,
+			clientUserId: incidents.clientUserId
+		})
 		.from(incidents)
 		.where(
 			and(
@@ -211,11 +222,7 @@ export async function listIncidentHistory(
 			)
 		)
 		.limit(1);
-	if (
-		!incident ||
-		(context.access?.assignedToUserId !== undefined &&
-			incident.assignedToUserId !== context.access.assignedToUserId)
-	)
+	if (!incident || !incidentAccessAllows(context.access, incident))
 		throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found.');
 	const conditions = [
 		eq(incidentHistory.incidentId, context.incidentId),

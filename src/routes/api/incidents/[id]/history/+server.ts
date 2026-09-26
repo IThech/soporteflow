@@ -16,8 +16,9 @@ export const GET: RequestHandler = async (event) => {
 		return failure(400, 'INVALID_INPUT', 'Invalid history query.');
 	try {
 		// Authenticate and authorize before validating pagination parameters.
-		// History is part of reading the incident: same access as the detail (view_all, or
-		// view_own on incidents assigned to the principal); no separate history permission.
+		// History is part of reading the incident: same access as the detail (view_all, view_own on
+		// assigned incidents, view_requested on requested incidents, or their union); no separate
+		// history permission. Only the safe projection is ever returned.
 		const principal = await resolvePrincipal(event.request.headers);
 		if (!principal) return failure(401, 'UNAUTHORIZED', 'Authentication required.');
 		const access = await resolveIncidentAccess(

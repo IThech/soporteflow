@@ -422,7 +422,11 @@ test('SoporteFlow — Etapa 5.4O-D: autorización de edición y closed inmutable
 					queries.push('commit');
 				}
 			};
-			const ctx = { organizationId: orgA.id, actorUserId: editAll.user.id, access: {} };
+			const ctx = {
+				organizationId: orgA.id,
+				actorUserId: editAll.user.id,
+				access: { viewAll: true }
+			};
 			try {
 				await service.updateIncidentRecord(logged, ctx, targets[0].id, { priority: 'high' });
 				await service.assignIncidentRecord(logged, ctx, targets[1].id, { teamId: teamA.id });
@@ -494,7 +498,11 @@ test('SoporteFlow — Etapa 5.4O-D: autorización de edición y closed inmutable
 	);
 
 	await t.test('razones: máximo 1000 y sin NUL en asignación y nivel de soporte', async () => {
-		const ctx = { organizationId: orgA.id, actorUserId: editAll.user.id, access: {} };
+		const ctx = {
+			organizationId: orgA.id,
+			actorUserId: editAll.user.id,
+			access: { viewAll: true }
+		};
 		const target = await incident({ teamId: teamA.id });
 		for (const reason of ['x'.repeat(1001), 'a\u0000b', 5]) {
 			await assert.rejects(
