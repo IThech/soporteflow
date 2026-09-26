@@ -15,6 +15,7 @@ import {
 	type IncidentStatus,
 	type IncidentPriority
 } from '$lib/server/services/incidents';
+import { withSlaCompliance } from '$lib/server/services/sla-compliance';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -118,7 +119,7 @@ export const GET: RequestHandler = async (event) => {
 		// 8. Success response
 		return json(
 			{
-				incident: result.incident
+				incident: withSlaCompliance(result.incident)
 			},
 			{ status: 200 }
 		);
@@ -318,7 +319,7 @@ export const PATCH: RequestHandler = async (event) => {
 
 		return json(
 			{
-				incident: result.incident
+				incident: withSlaCompliance(result.incident)
 			},
 			{ status: 200 }
 		);

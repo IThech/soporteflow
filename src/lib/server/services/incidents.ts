@@ -1,5 +1,5 @@
-import { and, eq, desc, asc, isNull, or, sql, type SQL } from 'drizzle-orm';
-import type { PgDatabase } from 'drizzle-orm/pg-core';
+import { and, eq, desc, asc, isNotNull, isNull, not, or, sql, type SQL } from 'drizzle-orm';
+import type { AnyPgColumn, PgDatabase } from 'drizzle-orm/pg-core';
 import {
 	incidents,
 	incidentHistory,
@@ -16,6 +16,12 @@ import {
 	slaPolicies
 } from '../db/schema';
 export { getActiveTeams } from './teams';
+import {
+	SLA_OBJECTIVE_STATUSES,
+	SLA_OVERALL_STATUSES,
+	type SlaObjectiveStatus,
+	type SlaOverallStatus
+} from './sla-compliance';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type IncidentDatabase = PgDatabase<any, any>;
@@ -256,6 +262,19 @@ function slaSnapshot(sla: SlaSelection, appliedAt: Date) {
 	};
 }
 
+/** Internal audit payload (the public history projection exposes the event type only). */
+function slaAuditPayload(fromPolicyId: string | null, incident: IncidentRecord) {
+	return {
+		fromPolicyId,
+		toPolicyId: incident.slaPolicyId,
+		firstResponseMinutes: incident.slaFirstResponseMinutes,
+		resolutionMinutes: incident.slaResolutionMinutes,
+		appliedAt: incident.slaAppliedAt?.toISOString() ?? null,
+		firstResponseDueAt: incident.firstResponseDueAt?.toISOString() ?? null,
+		resolutionDueAt: incident.resolutionDueAt?.toISOString() ?? null
+	};
+}
+
 export interface ChangeIncidentSlaContext {
 	readonly organizationId: string;
 	readonly actorUserId: string;
@@ -316,6 +335,20 @@ export async function changeIncidentSla(
 				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
 			)
 			.returning();
+		// 5.4T-C: every change is audited (applied / changed / cleared), including re-applications
+		// that restart the clock, so SLA resets are traceable.
+		await tx.insert(incidentHistory).values({
+			incidentId,
+			organizationId: context.organizationId,
+			eventType: !current.slaPolicyId
+				? 'sla_applied'
+				: !incident.slaPolicyId
+					? 'sla_cleared'
+					: 'sla_changed',
+			actorType: 'user',
+			actorUserId: context.actorUserId,
+			payload: slaAuditPayload(current.slaPolicyId, incident)
+		});
 		return { incident, changed: true };
 	};
 	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function')
@@ -431,6 +464,10 @@ export interface ListIncidentsFilters {
 	supportLevel?: SupportLevel;
 	/** Filters by incidents.category_id within the tenant; the category may be inactive. */
 	categoryId?: string;
+	/** 5.4T-C derived SLA compliance filters, evaluated in SQL against `now`. */
+	slaStatus?: SlaOverallStatus;
+	slaFirstResponseStatus?: SlaObjectiveStatus;
+	slaResolutionStatus?: SlaObjectiveStatus;
 }
 
 export type IncidentDetailRecord = IncidentRecord & {
@@ -678,6 +715,18 @@ export async function createIncidentRecord(
 			})
 			.returning();
 
+		// H. SLA audit (5.4T-C): the applied snapshot, in the same transaction
+		if (incident.slaPolicyId) {
+			await tx.insert(incidentHistory).values({
+				incidentId: incident.id,
+				organizationId: context.organizationId,
+				eventType: 'sla_applied',
+				actorType: 'user',
+				actorUserId: context.creatorUserId,
+				payload: slaAuditPayload(null, incident)
+			});
+		}
+
 		return { incident, history };
 	};
 
@@ -695,6 +744,57 @@ export interface ListIncidentsContext {
 	 * authorized incidents:view_all for the requested queue.
 	 */
 	readonly access?: IncidentAccess;
+	/** Reference time for SLA compliance filters (defaults to the current time). */
+	readonly now?: Date;
+}
+
+/**
+ * SQL form of one SLA objective status (same rules as sla-compliance.ts). Every branch is
+ * NULL-safe so NOT() never meets an unknown.
+ */
+function slaObjectiveCondition(
+	dueAt: AnyPgColumn,
+	achievedAt: AnyPgColumn,
+	status: SlaObjectiveStatus,
+	now: Date
+): SQL {
+	const nowSql = sql`${now.toISOString()}::timestamptz`;
+	const hasSla = isNotNull(incidents.slaPolicyId);
+	switch (status) {
+		case 'not_applicable':
+			return isNull(incidents.slaPolicyId);
+		case 'met':
+			return and(hasSla, isNotNull(achievedAt), sql`${achievedAt} <= ${dueAt}`)!;
+		case 'breached':
+			return and(
+				hasSla,
+				or(
+					and(isNull(achievedAt), sql`${dueAt} < ${nowSql}`),
+					and(isNotNull(achievedAt), sql`${achievedAt} > ${dueAt}`)
+				)
+			)!;
+		case 'pending':
+			return and(hasSla, isNull(achievedAt), sql`${dueAt} >= ${nowSql}`)!;
+	}
+}
+
+function slaOverallCondition(status: SlaOverallStatus, now: Date): SQL {
+	const fr = (x: SlaObjectiveStatus) =>
+		slaObjectiveCondition(incidents.firstResponseDueAt, incidents.firstResponseAt, x, now);
+	const res = (x: SlaObjectiveStatus) =>
+		slaObjectiveCondition(incidents.resolutionDueAt, incidents.firstResolvedAt, x, now);
+	const breached = or(fr('breached'), res('breached'))!;
+	const met = and(fr('met'), res('met'))!;
+	switch (status) {
+		case 'not_applicable':
+			return isNull(incidents.slaPolicyId);
+		case 'breached':
+			return breached;
+		case 'met':
+			return met;
+		case 'on_track':
+			return and(isNotNull(incidents.slaPolicyId), not(breached), not(met))!;
+	}
 }
 
 /**
@@ -796,6 +896,38 @@ export async function listIncidents(
 		conditions.push(eq(incidents.supportLevel, filters.supportLevel));
 	}
 
+	// SLA compliance filters (5.4T-C): derived in SQL, never by loading rows into memory.
+	const now = context.now ?? new Date();
+	if (filters?.slaStatus !== undefined) {
+		if (!SLA_OVERALL_STATUSES.includes(filters.slaStatus))
+			throw new IncidentServiceError('INVALID_INPUT', 'invalid slaStatus filter');
+		conditions.push(slaOverallCondition(filters.slaStatus, now));
+	}
+	if (filters?.slaFirstResponseStatus !== undefined) {
+		if (!SLA_OBJECTIVE_STATUSES.includes(filters.slaFirstResponseStatus))
+			throw new IncidentServiceError('INVALID_INPUT', 'invalid slaFirstResponseStatus filter');
+		conditions.push(
+			slaObjectiveCondition(
+				incidents.firstResponseDueAt,
+				incidents.firstResponseAt,
+				filters.slaFirstResponseStatus,
+				now
+			)
+		);
+	}
+	if (filters?.slaResolutionStatus !== undefined) {
+		if (!SLA_OBJECTIVE_STATUSES.includes(filters.slaResolutionStatus))
+			throw new IncidentServiceError('INVALID_INPUT', 'invalid slaResolutionStatus filter');
+		conditions.push(
+			slaObjectiveCondition(
+				incidents.resolutionDueAt,
+				incidents.firstResolvedAt,
+				filters.slaResolutionStatus,
+				now
+			)
+		);
+	}
+
 	return await db
 		.select()
 		.from(incidents)
@@ -846,6 +978,7 @@ export async function getIncidentById(
 			firstResponseDueAt: incidents.firstResponseDueAt,
 			resolutionDueAt: incidents.resolutionDueAt,
 			firstResponseAt: incidents.firstResponseAt,
+			firstResolvedAt: incidents.firstResolvedAt,
 			createdAt: incidents.createdAt,
 			updatedAt: incidents.updatedAt,
 			assignedToUserName: users.name,
@@ -1020,6 +1153,14 @@ export async function updateIncidentRecord(
 			updateValues.status = input.status!;
 		}
 
+		// 5.4T-C: the first entry into resolved (or closed) fixes the resolution time. First write
+		// wins: reopening and resolving again never move it, so the SLA is not restarted.
+		const resolvesNow =
+			isStatusChanged &&
+			(input.status === 'resolved' || input.status === 'closed') &&
+			currentIncident.firstResolvedAt === null;
+		if (resolvesNow) updateValues.firstResolvedAt = updateValues.updatedAt;
+
 		if (isPriorityChanged) {
 			updateValues.priority = input.priority!;
 		}
@@ -1068,6 +1209,27 @@ export async function updateIncidentRecord(
 				.returning();
 
 			historyRecords.push(statusHistory);
+
+			// SLA resolution result, recorded once, in the same transaction as the transition
+			if (resolvesNow && currentIncident.slaPolicyId && currentIncident.resolutionDueAt) {
+				const achievedAt = updateValues.firstResolvedAt as Date;
+				const met = achievedAt.getTime() <= currentIncident.resolutionDueAt.getTime();
+				const [slaHistory] = await tx
+					.insert(incidentHistory)
+					.values({
+						incidentId,
+						organizationId: context.organizationId,
+						eventType: met ? 'sla_resolution_met' : 'sla_resolution_breached',
+						actorType: 'user',
+						actorUserId: context.actorUserId,
+						payload: {
+							dueAt: currentIncident.resolutionDueAt.toISOString(),
+							achievedAt: achievedAt.toISOString()
+						}
+					})
+					.returning();
+				historyRecords.push(slaHistory);
+			}
 		}
 
 		if (isPriorityChanged) {

@@ -1550,6 +1550,11 @@ test('SoporteFlow — Etapa 5.2B: Endpoint HTTP GET /api/incidents', async (t) =
 				'firstResponseDueAt',
 				'resolutionDueAt',
 				'firstResponseAt',
+				// SLA compliance (5.4T-C)
+				'firstResolvedAt',
+				'slaOverallStatus',
+				'slaFirstResponseStatus',
+				'slaResolutionStatus',
 				'createdAt',
 				'updatedAt'
 			]);
@@ -2012,6 +2017,11 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 			'firstResponseDueAt',
 			'resolutionDueAt',
 			'firstResponseAt',
+			// SLA compliance (5.4T-C)
+			'firstResolvedAt',
+			'slaOverallStatus',
+			'slaFirstResponseStatus',
+			'slaResolutionStatus',
 			'createdAt',
 			'updatedAt'
 		]);

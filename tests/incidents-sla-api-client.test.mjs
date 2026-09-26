@@ -19,7 +19,11 @@ const SLA = {
 	slaAppliedAt: '2026-09-26T10:00:00.000Z',
 	firstResponseDueAt: '2026-09-26T11:00:00.000Z',
 	resolutionDueAt: '2026-09-26T18:00:00.000Z',
-	firstResponseAt: null
+	firstResponseAt: null,
+	firstResolvedAt: null,
+	slaOverallStatus: 'on_track',
+	slaFirstResponseStatus: 'pending',
+	slaResolutionStatus: 'pending'
 };
 function incident(overrides = {}) {
 	return {
@@ -78,7 +82,10 @@ test('SoporteFlow — Etapa 5.4T-B: cliente de incidencias con SLA', async (t) =
 							slaAppliedAt: null,
 							firstResponseDueAt: null,
 							resolutionDueAt: null,
-							firstResponseAt: '2026-09-26T10:30:00.000000+00:00'
+							firstResponseAt: '2026-09-26T10:30:00.000000+00:00',
+							slaOverallStatus: 'not_applicable',
+							slaFirstResponseStatus: 'not_applicable',
+							slaResolutionStatus: 'not_applicable'
 						})
 					})
 			});
@@ -89,7 +96,8 @@ test('SoporteFlow — Etapa 5.4T-B: cliente de incidencias con SLA', async (t) =
 			const parsed = await getIncident(ORG, INC, {
 				customFetch: async () => json({ incident: legacy })
 			});
-			for (const key of Object.keys(SLA)) assert.equal(parsed[key], null, key);
+			for (const key of Object.keys(SLA))
+				assert.equal(parsed[key], key.endsWith('Status') ? 'not_applicable' : null, key);
 		}
 	);
 
@@ -253,6 +261,157 @@ test('SoporteFlow — Etapa 5.4T-B: cliente de incidencias con SLA', async (t) =
 				),
 				{ status: 0, code: 'NETWORK_ERROR' }
 			);
+		}
+	);
+});
+
+test('SoporteFlow — Etapa 5.4T-C: cliente, estados de cumplimiento SLA', async (t) => {
+	await t.test('estados: enums estrictos y coherentes con la presencia de SLA', async () => {
+		const ok = await getIncident(ORG, INC, {
+			customFetch: async () =>
+				json({
+					incident: incident({
+						slaOverallStatus: 'breached',
+						slaFirstResponseStatus: 'breached',
+						slaResolutionStatus: 'pending',
+						firstResolvedAt: null
+					})
+				})
+		});
+		assert.equal(ok.slaOverallStatus, 'breached');
+		for (const bad of [
+			{ slaOverallStatus: 'late' },
+			{ slaFirstResponseStatus: 'on_track' },
+			{
+				slaResolutionStatus: undefined,
+				slaOverallStatus: undefined,
+				slaFirstResponseStatus: undefined
+			},
+			{ slaOverallStatus: 'not_applicable' },
+			{ firstResolvedAt: 'ayer' }
+		])
+			await rejectsWith(
+				getIncident(ORG, INC, { customFetch: async () => json({ incident: incident(bad) }) }),
+				{ code: 'INVALID_PAYLOAD' }
+			);
+		const noSla = {
+			slaPolicyId: null,
+			slaFirstResponseMinutes: null,
+			slaResolutionMinutes: null,
+			slaAppliedAt: null,
+			firstResponseDueAt: null,
+			resolutionDueAt: null
+		};
+		await rejectsWith(
+			getIncident(ORG, INC, {
+				customFetch: async () => json({ incident: incident({ ...noSla }) })
+			}),
+			{ code: 'INVALID_PAYLOAD' },
+			'sin SLA pero con estados activos'
+		);
+		const legacy = incident({
+			...noSla,
+			slaOverallStatus: undefined,
+			slaFirstResponseStatus: undefined,
+			slaResolutionStatus: undefined,
+			firstResolvedAt: undefined
+		});
+		const parsed = await getIncident(ORG, INC, {
+			customFetch: async () => json({ incident: legacy })
+		});
+		assert.equal(parsed.slaOverallStatus, 'not_applicable');
+		assert.equal(parsed.firstResolvedAt, null);
+	});
+
+	await t.test(
+		'listIncidents: filtros SLA en la URL; valor inválido no llama a fetch',
+		async () => {
+			const calls = [];
+			await listIncidents(ORG, {
+				slaStatus: 'breached',
+				slaFirstResponseStatus: 'pending',
+				slaResolutionStatus: 'met',
+				customFetch: async (url) => {
+					calls.push(url);
+					return json({ incidents: [] });
+				}
+			});
+			assert.ok(calls[0].includes('&slaStatus=breached'));
+			assert.ok(calls[0].includes('&slaFirstResponseStatus=pending'));
+			assert.ok(calls[0].includes('&slaResolutionStatus=met'));
+			await rejectsWith(
+				listIncidents(ORG, { slaStatus: 'late', customFetch: async () => json({ incidents: [] }) }),
+				{ status: 0, code: 'INVALID_INPUT' }
+			);
+			await rejectsWith(
+				listIncidents(ORG, {
+					slaResolutionStatus: 'on_track',
+					customFetch: async () => json({ incidents: [] })
+				}),
+				{ status: 0, code: 'INVALID_INPUT' }
+			);
+		}
+	);
+});
+
+test('SoporteFlow — Corrección 5.4T-C: dominios objective vs overall en el cliente', async (t) => {
+	const withStatuses = (over) =>
+		incident({
+			slaOverallStatus: 'on_track',
+			slaFirstResponseStatus: 'pending',
+			slaResolutionStatus: 'pending',
+			...over
+		});
+	await t.test(
+		'parser: overall acepta on_track y rechaza pending; objetivos aceptan pending',
+		async () => {
+			for (const over of [
+				{},
+				{ slaFirstResponseStatus: 'met', slaResolutionStatus: 'pending' },
+				{ slaFirstResponseStatus: 'pending', slaResolutionStatus: 'met' }
+			]) {
+				const parsed = await getIncident(ORG, INC, {
+					customFetch: async () => json({ incident: withStatuses(over) })
+				});
+				assert.equal(parsed.slaOverallStatus, 'on_track');
+			}
+			for (const bad of [
+				{ slaOverallStatus: 'pending' },
+				{ slaFirstResponseStatus: 'on_track' },
+				{ slaResolutionStatus: 'on_track' }
+			])
+				await rejectsWith(
+					getIncident(ORG, INC, { customFetch: async () => json({ incident: withStatuses(bad) }) }),
+					{ code: 'INVALID_PAYLOAD' }
+				);
+		}
+	);
+
+	await t.test(
+		'listIncidents: slaStatus=pending no llama a fetch; objetivos pending sí',
+		async () => {
+			const calls = [];
+			const fetchFn = async (url) => {
+				calls.push(url);
+				return json({ incidents: [] });
+			};
+			await rejectsWith(listIncidents(ORG, { slaStatus: 'pending', customFetch: fetchFn }), {
+				status: 0,
+				code: 'INVALID_INPUT'
+			});
+			await rejectsWith(
+				listIncidents(ORG, { slaFirstResponseStatus: 'on_track', customFetch: fetchFn }),
+				{ status: 0, code: 'INVALID_INPUT' }
+			);
+			assert.equal(calls.length, 0);
+			await listIncidents(ORG, { slaStatus: 'on_track', customFetch: fetchFn });
+			await listIncidents(ORG, {
+				slaFirstResponseStatus: 'pending',
+				slaResolutionStatus: 'pending',
+				customFetch: fetchFn
+			});
+			assert.ok(calls[0].includes('&slaStatus=on_track'));
+			assert.ok(calls[1].includes('&slaFirstResponseStatus=pending&slaResolutionStatus=pending'));
 		}
 	);
 });

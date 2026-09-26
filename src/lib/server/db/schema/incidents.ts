@@ -71,6 +71,12 @@ export const incidents = pgTable(
 		 * without SLA and kept when the SLA changes; first write wins.
 		 */
 		firstResponseAt: timestamp('first_response_at', { withTimezone: true }),
+		/**
+		 * 5.4T-C: first time the incident entered resolved (or closed). First write wins and it is
+		 * never cleared: reopening does not restart the SLA, so the resolution result of the original
+		 * cycle is kept. A general fact (recorded with or without SLA), used for resolution compliance.
+		 */
+		firstResolvedAt: timestamp('first_resolved_at', { withTimezone: true }),
 		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
 	},
@@ -188,7 +194,10 @@ export const incidentHistory = pgTable(
 				'resolution_accepted', 'resolution_rejected', 'closed',
 				'reopened', 'reclassified', 'priority_override_applied',
 				'priority_override_modified', 'priority_override_removed',
-				'internal_note_added', 'support_level_changed', 'category_changed'
+				'internal_note_added', 'support_level_changed', 'category_changed',
+				'sla_applied', 'sla_changed', 'sla_cleared',
+				'sla_first_response_met', 'sla_first_response_breached',
+				'sla_resolution_met', 'sla_resolution_breached'
 			)`
 		),
 		index('incident_history_incident_created_idx').on(table.incidentId, table.createdAt)

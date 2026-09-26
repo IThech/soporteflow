@@ -15,6 +15,13 @@ import {
 	VALID_SUPPORT_LEVELS,
 	type ListIncidentsFilters
 } from '$lib/server/services/incidents';
+import {
+	SLA_OBJECTIVE_STATUSES,
+	SLA_OVERALL_STATUSES,
+	withSlaCompliance,
+	type SlaObjectiveStatus,
+	type SlaOverallStatus
+} from '$lib/server/services/sla-compliance';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -205,7 +212,7 @@ export const POST: RequestHandler = async (event) => {
 		// 6. Success response
 		return json(
 			{
-				incident: result.incident
+				incident: withSlaCompliance(result.incident)
 			},
 			{ status: 201 }
 		);
@@ -435,16 +442,42 @@ export const GET: RequestHandler = async (event) => {
 		filters.supportLevel = supportLevelParam as SupportLevel;
 	}
 
-	// 7. Execute listIncidents
+	// 6.1 SLA compliance filters (5.4T-C): derived in SQL at request time; they only narrow the
+	// caller's already-authorized scope (never widen it). Single value each; unknown values -> 400.
+	const slaParams = [
+		['slaStatus', SLA_OVERALL_STATUSES],
+		['slaFirstResponseStatus', SLA_OBJECTIVE_STATUSES],
+		['slaResolutionStatus', SLA_OBJECTIVE_STATUSES]
+	] as const;
+	for (const [name, allowed] of slaParams) {
+		const values = event.url.searchParams.getAll(name);
+		if (values.length === 0) continue;
+		if (values.length !== 1 || !(allowed as readonly string[]).includes(values[0])) {
+			return json(
+				{ error: { code: 'INVALID_INPUT', message: `invalid ${name} parameter.` } },
+				{ status: 400 }
+			);
+		}
+		if (name === 'slaStatus') filters.slaStatus = values[0] as SlaOverallStatus;
+		else if (name === 'slaFirstResponseStatus')
+			filters.slaFirstResponseStatus = values[0] as SlaObjectiveStatus;
+		else filters.slaResolutionStatus = values[0] as SlaObjectiveStatus;
+	}
+
+	// 7. Execute listIncidents (one reference time for SQL filters and derived DTO fields)
 	try {
+		const now = new Date();
 		const incidents = await listIncidents(
 			db,
-			{ organizationId, actorUserId: principal.userId, access: scope },
+			{ organizationId, actorUserId: principal.userId, access: scope, now },
 			filters
 		);
 
 		// 8. Success response
-		return json({ incidents }, { status: 200 });
+		return json(
+			{ incidents: incidents.map((incident) => withSlaCompliance(incident, now)) },
+			{ status: 200 }
+		);
 	} catch (err: unknown) {
 		if (err instanceof IncidentServiceError && err.code === 'INVALID_INPUT') {
 			return json(

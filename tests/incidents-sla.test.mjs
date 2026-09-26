@@ -535,19 +535,23 @@ test('SoporteFlow — Etapa 5.4T-B: SLA aplicado a incidencias', async (t) => {
 		}
 	);
 
-	await t.test('45. sin eventos SLA en historial: SAFE_HISTORY_TYPES intacto', async () => {
-		assert.ok(!SAFE_HISTORY_TYPES.some((type) => type.startsWith('sla')));
-		const inc = (await create(admin, A.org)).json.incident;
-		await changeSla(admin, A.org, inc.id, { slaPolicyId: premiumA.id });
-		const events = await db
-			.select()
-			.from(s.incidentHistory)
-			.where(eq(s.incidentHistory.incidentId, inc.id));
-		assert.deepEqual(
-			events.map((e) => e.eventType),
-			['created']
-		);
-	});
+	await t.test(
+		'45 (5.4T-C). cambios de SLA auditados: sla_applied al crear y sla_changed al reasignar',
+		async () => {
+			assert.ok(SAFE_HISTORY_TYPES.includes('sla_changed'));
+			const inc = (await create(admin, A.org)).json.incident;
+			await changeSla(admin, A.org, inc.id, { slaPolicyId: premiumA.id });
+			const events = await db
+				.select()
+				.from(s.incidentHistory)
+				.where(eq(s.incidentHistory.incidentId, inc.id));
+			assert.deepEqual(events.map((e) => e.eventType).sort(), [
+				'created',
+				'sla_applied',
+				'sla_changed'
+			]);
+		}
+	);
 
 	// =========================================================================
 	// Primera respuesta (55-57)

@@ -7,6 +7,7 @@ import {
 	resolveIncidentMutationAccess
 } from '$lib/server/auth/incident-access';
 import { changeIncidentCategory, IncidentServiceError } from '$lib/server/services/incidents';
+import { withSlaCompliance } from '$lib/server/services/sla-compliance';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -73,7 +74,10 @@ export const PATCH: RequestHandler = async (event) => {
 			incidentId,
 			{ categoryId: categoryId as string | null, reason: reason as string | undefined }
 		);
-		return json({ incident: result.incident }, { status: 200, headers: noStore });
+		return json(
+			{ incident: withSlaCompliance(result.incident) },
+			{ status: 200, headers: noStore }
+		);
 	} catch (error) {
 		if (error instanceof IncidentServiceError) {
 			if (error.code === 'INVALID_INPUT') return failure(400, 'INVALID_INPUT', error.message + '.');

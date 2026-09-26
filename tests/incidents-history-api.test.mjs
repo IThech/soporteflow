@@ -233,7 +233,15 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 				'site_changed',
 				'category_changed',
 				'status_changed',
-				'support_level_changed'
+				'support_level_changed',
+				// 5.4T-C SLA audit events (projected as type only)
+				'sla_applied',
+				'sla_changed',
+				'sla_cleared',
+				'sla_first_response_met',
+				'sla_first_response_breached',
+				'sla_resolution_met',
+				'sla_resolution_breached'
 			].sort()
 		);
 		assert.ok(!SAFE_HISTORY_TYPES.includes('internal_note_added'));

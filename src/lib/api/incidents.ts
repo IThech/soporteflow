@@ -1,3 +1,19 @@
+/** 5.4T-C derived SLA compliance (computed by the server at request time). */
+export type SlaObjectiveStatus = 'not_applicable' | 'pending' | 'met' | 'breached';
+export type SlaOverallStatus = 'not_applicable' | 'on_track' | 'met' | 'breached';
+const SLA_OBJECTIVE_STATUSES: readonly SlaObjectiveStatus[] = [
+	'not_applicable',
+	'pending',
+	'met',
+	'breached'
+];
+const SLA_OVERALL_STATUSES: readonly SlaOverallStatus[] = [
+	'not_applicable',
+	'on_track',
+	'met',
+	'breached'
+];
+
 export interface IncidentListItem {
 	id: string;
 	organizationId: string;
@@ -28,6 +44,11 @@ export interface IncidentListItem {
 	firstResponseDueAt: string | null;
 	resolutionDueAt: string | null;
 	firstResponseAt: string | null;
+	/** First entry into resolved/closed (kept on reopen: the SLA is never restarted). */
+	firstResolvedAt: string | null;
+	slaOverallStatus: SlaOverallStatus;
+	slaFirstResponseStatus: SlaObjectiveStatus;
+	slaResolutionStatus: SlaObjectiveStatus;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -66,6 +87,10 @@ export interface ListIncidentsOptions {
 	supportLevel?: SupportLevel;
 	/** Filters by Core category id (UUID); the category may be inactive. */
 	categoryId?: string;
+	/** 5.4T-C SLA compliance filters (narrow the authorized scope only). */
+	slaStatus?: SlaOverallStatus;
+	slaFirstResponseStatus?: SlaObjectiveStatus;
+	slaResolutionStatus?: SlaObjectiveStatus;
 	signal?: AbortSignal;
 	customFetch?: typeof fetch;
 }
@@ -100,6 +125,17 @@ export async function listIncidents(
 			throw new IncidentApiError(0, 'INVALID_INPUT', 'El filtro de categoría no es válido.');
 		}
 		url += `&categoryId=${encodeURIComponent(options.categoryId)}`;
+	}
+	for (const [key, allowed] of [
+		['slaStatus', SLA_OVERALL_STATUSES],
+		['slaFirstResponseStatus', SLA_OBJECTIVE_STATUSES],
+		['slaResolutionStatus', SLA_OBJECTIVE_STATUSES]
+	] as const) {
+		const value = options?.[key];
+		if (value === undefined) continue;
+		if (!(allowed as readonly string[]).includes(value))
+			throw new IncidentApiError(0, 'INVALID_INPUT', 'El filtro de SLA no es válido.');
+		url += `&${key}=${encodeURIComponent(value)}`;
 	}
 
 	let res: Response;
@@ -321,9 +357,11 @@ function isSlaMinutes(value: unknown): value is number {
  * SLA) or all are valid and coherent; firstResponseAt is independent. Mutates item in place.
  */
 function normalizeSlaFields(item: Record<string, unknown>): boolean {
-	for (const key of [...SLA_FIELDS, 'firstResponseAt'] as const)
+	for (const key of [...SLA_FIELDS, 'firstResponseAt', 'firstResolvedAt'] as const)
 		if (item[key] === undefined) item[key] = null;
 	if (item.firstResponseAt !== null && !isSlaTimestamp(item.firstResponseAt)) return false;
+	if (item.firstResolvedAt !== null && !isSlaTimestamp(item.firstResolvedAt)) return false;
+	if (!normalizeSlaStatuses(item)) return false;
 	if (SLA_FIELDS.every((key) => item[key] === null)) return true;
 	return (
 		typeof item.slaPolicyId === 'string' &&
@@ -335,6 +373,25 @@ function normalizeSlaFields(item: Record<string, unknown>): boolean {
 		isSlaTimestamp(item.firstResponseDueAt) &&
 		isSlaTimestamp(item.resolutionDueAt)
 	);
+}
+
+/**
+ * 5.4T-C statuses: strict enums, coherent with the presence of an SLA (no SLA <-> every status is
+ * not_applicable). Absent in a legacy payload without SLA -> not_applicable; absent with an SLA ->
+ * invalid (the server always derives them).
+ */
+function normalizeSlaStatuses(item: Record<string, unknown>): boolean {
+	const keys = ['slaOverallStatus', 'slaFirstResponseStatus', 'slaResolutionStatus'] as const;
+	const hasSla = item.slaPolicyId !== null;
+	if (keys.every((key) => item[key] === undefined)) {
+		if (hasSla) return false;
+		for (const key of keys) item[key] = 'not_applicable';
+		return true;
+	}
+	if (!SLA_OVERALL_STATUSES.includes(item.slaOverallStatus as SlaOverallStatus)) return false;
+	for (const key of ['slaFirstResponseStatus', 'slaResolutionStatus'] as const)
+		if (!SLA_OBJECTIVE_STATUSES.includes(item[key] as SlaObjectiveStatus)) return false;
+	return keys.every((key) => (item[key] === 'not_applicable') === !hasSla);
 }
 
 function parseAndValidateIncident(

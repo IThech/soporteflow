@@ -297,7 +297,7 @@ async function appendMessage(
 		// Idempotent, first write wins (never overwritten). Internal notes, requester comments and
 		// history never count.
 		if (recordsResponse && incident.clientUserId !== context.actorUserId) {
-			await tx
+			const [recorded] = await tx
 				.update(incidents)
 				.set({ firstResponseAt: sql`now()` })
 				.where(
@@ -306,7 +306,30 @@ async function appendMessage(
 						eq(incidents.organizationId, context.organizationId),
 						isNull(incidents.firstResponseAt)
 					)
-				);
+				)
+				.returning({
+					slaPolicyId: incidents.slaPolicyId,
+					firstResponseAt: incidents.firstResponseAt,
+					firstResponseDueAt: incidents.firstResponseDueAt
+				});
+			// 5.4T-C: SLA first-response result, recorded once (only when this reply is the first one
+			// and the incident has an SLA), in the same transaction as the comment.
+			if (recorded?.slaPolicyId && recorded.firstResponseAt && recorded.firstResponseDueAt) {
+				const met = recorded.firstResponseAt.getTime() <= recorded.firstResponseDueAt.getTime();
+				await tx.insert(incidentHistory).values({
+					incidentId: context.incidentId,
+					organizationId: context.organizationId,
+					eventType: met ? 'sla_first_response_met' : 'sla_first_response_breached',
+					actorType: 'user',
+					actorUserId: context.actorUserId,
+					reason: null,
+					comment: null,
+					payload: {
+						dueAt: recorded.firstResponseDueAt.toISOString(),
+						achievedAt: recorded.firstResponseAt.toISOString()
+					}
+				});
+			}
 		}
 
 		// E. Audit event for internal notes only: the message id, never the note body

@@ -18,7 +18,15 @@ export const SAFE_HISTORY_TYPES = [
 	'category_changed',
 	'resolved',
 	'closed',
-	'reopened'
+	'reopened',
+	// 5.4T-C SLA audit events: projected as type only (never policy ids, targets or deadlines)
+	'sla_applied',
+	'sla_changed',
+	'sla_cleared',
+	'sla_first_response_met',
+	'sla_first_response_breached',
+	'sla_resolution_met',
+	'sla_resolution_breached'
 ] as const;
 export type SafeIncidentHistoryType = (typeof SAFE_HISTORY_TYPES)[number];
 type Status = 'open' | 'pending' | 'resolved' | 'closed';
@@ -31,8 +39,17 @@ type Base<T extends SafeIncidentHistoryType> = {
 	occurredAt: string;
 	actor: { type: 'user' | 'system'; label: 'Usuario' | 'Sistema' };
 };
+type SlaHistoryType =
+	| 'sla_applied'
+	| 'sla_changed'
+	| 'sla_cleared'
+	| 'sla_first_response_met'
+	| 'sla_first_response_breached'
+	| 'sla_resolution_met'
+	| 'sla_resolution_breached';
 export type IncidentHistoryItem =
 	| Base<'created'>
+	| Base<SlaHistoryType>
 	| (Base<'status_changed' | 'resolved' | 'closed' | 'reopened'> & {
 			changes?: { status: Change<Status> };
 	  })
@@ -130,6 +147,15 @@ export function projectHistoryItem(row: ProjectionRow): IncidentHistoryItem | nu
 	switch (row.eventType) {
 		case 'created':
 			return { ...base, type: 'created' };
+		case 'sla_applied':
+		case 'sla_changed':
+		case 'sla_cleared':
+		case 'sla_first_response_met':
+		case 'sla_first_response_breached':
+		case 'sla_resolution_met':
+		case 'sla_resolution_breached':
+			// Signal only: the stored payload (policy ids, targets, deadlines) is internal audit data.
+			return { ...base, type: row.eventType };
 		case 'assigned':
 		case 'reassigned':
 			return {
