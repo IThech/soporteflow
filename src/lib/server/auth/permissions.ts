@@ -158,6 +158,14 @@ export const PERMISSION_CATALOG = [
 		description: 'Crear y modificar roles personalizados de la organización (5.4R-B/C).',
 		category: 'roles',
 		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	// Membership administration (5.4R-C). Assignment/revocation uses roles:assign.
+	{
+		id: 'memberships:view',
+		name: 'Ver membresías',
+		description: 'Consultar los miembros de la organización y sus roles asignados.',
+		category: 'memberships',
+		allowedScopeTypes: ORGANIZATION_ONLY
 	}
 ] as const satisfies readonly PermissionDefinition[];
 

@@ -25,8 +25,8 @@ const ADMIN_0012 = [
 	'memberships:create',
 	'roles:assign'
 ].sort();
-/** Current organization_admin template: 0012 + roles:view / roles:manage (0013, 5.4R-A). */
-const ADMIN = [...ADMIN_0012, 'roles:view', 'roles:manage'].sort();
+/** Current organization_admin template: 0012 + roles:view / roles:manage (0013) + memberships:view (0014). */
+const ADMIN = [...ADMIN_0012, 'roles:view', 'roles:manage', 'memberships:view'].sort();
 const TECHNICIAN = [
 	'incidents:view_all',
 	'incidents:create',

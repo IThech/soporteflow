@@ -33,13 +33,17 @@ export async function requireRolesView(
 	headers: Headers,
 	organizationId: string
 ): Promise<Response | null> {
-	return requireRolesPermission(headers, organizationId, 'roles:view');
+	return requireCapability(headers, organizationId, 'roles:view');
 }
 
-async function requireRolesPermission(
+/**
+ * Session (401) + one capability on the organization (403). A missing, foreign or suspended
+ * organization is indistinguishable (403). Shared by role and membership administration.
+ */
+export async function requireCapability(
 	headers: Headers,
 	organizationId: string,
-	permissionId: 'roles:view' | 'roles:manage'
+	permissionId: PermissionId
 ): Promise<Response | null> {
 	const principal = await resolvePrincipal(headers);
 	if (!principal) return failure(401, 'UNAUTHORIZED', 'Authentication required.');
@@ -57,7 +61,16 @@ export async function requireRolesManage(
 	headers: Headers,
 	organizationId: string
 ): Promise<{ denied: Response } | { actorPermissions: PermissionId[] }> {
-	const denied = await requireRolesPermission(headers, organizationId, 'roles:manage');
+	return requireDelegatingActor(headers, organizationId, 'roles:manage');
+}
+
+/** requireCapability + the actor's effective permissions for monotonic delegation. */
+export async function requireDelegatingActor(
+	headers: Headers,
+	organizationId: string,
+	permissionId: PermissionId
+): Promise<{ denied: Response } | { actorPermissions: PermissionId[] }> {
+	const denied = await requireCapability(headers, organizationId, permissionId);
 	if (denied) return { denied };
 	const actorPermissions = await resolveEffectivePermissions(headers, organizationId);
 	if (!actorPermissions) return { denied: failure(403, 'FORBIDDEN', 'Permission denied.') };
@@ -99,7 +112,11 @@ export function toRoleDto(role: AdminRoleRecord) {
 	};
 }
 
-/** Maps service errors to stable client messages; never forwards driver or SQL details. */
+/**
+ * Maps role and membership administration service errors to stable client messages; never
+ * forwards driver or SQL details. Wrong-tenant or missing resources are 404; an inaccessible
+ * organization is 403.
+ */
 export function roleServiceFailure(error: unknown) {
 	if (error instanceof IncidentServiceError) {
 		if (error.code === 'INVALID_INPUT') return failure(400, 'INVALID_INPUT', 'Invalid request.');
@@ -110,6 +127,19 @@ export function roleServiceFailure(error: unknown) {
 			return failure(409, 'SYSTEM_ROLE_IMMUTABLE', 'System roles cannot be modified.');
 		if (error.code === 'ROLE_HAS_UNKNOWN_PERMISSIONS')
 			return failure(409, 'ROLE_HAS_UNKNOWN_PERMISSIONS', 'Role permissions cannot be replaced.');
+		if (error.code === 'MEMBERSHIP_NOT_FOUND')
+			return failure(404, 'MEMBERSHIP_NOT_FOUND', 'Membership not found.');
+		if (error.code === 'ROLE_ASSIGNMENT_NOT_FOUND')
+			return failure(404, 'ROLE_ASSIGNMENT_NOT_FOUND', 'Role assignment not found.');
+		if (error.code === 'MEMBERSHIP_INACTIVE')
+			return failure(409, 'MEMBERSHIP_INACTIVE', 'Membership is not active.');
+		if (error.code === 'ROLE_INACTIVE') return failure(409, 'ROLE_INACTIVE', 'Role is not active.');
+		if (error.code === 'LAST_ADMIN_REQUIRED')
+			return failure(
+				409,
+				'LAST_ADMIN_REQUIRED',
+				'The organization must keep at least one administrator.'
+			);
 		if (error.code === 'PERMISSION_NOT_DELEGABLE')
 			return failure(403, 'PERMISSION_NOT_DELEGABLE', 'Permission cannot be delegated.');
 		if (error.code === 'ORGANIZATION_NOT_FOUND' || error.code === 'ORGANIZATION_NOT_OPERATIONAL')

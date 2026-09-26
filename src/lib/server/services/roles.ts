@@ -1,10 +1,14 @@
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import {
+	memberships,
 	organizations,
+	permissions as permissionsTable,
+	roleAssignments,
 	rolePermissions,
 	roles,
 	roleTemplatePermissions,
-	roleTemplates
+	roleTemplates,
+	users
 } from '../db/schema';
 import { ROLE_TEMPLATES } from '../auth/role-templates';
 import {
@@ -361,10 +365,12 @@ function validateRolePermissions(permissions: unknown): PermissionId[] {
 }
 
 /**
- * Monotonic delegation: the actor can only grant permissions it effectively holds right now in
- * this organization (resolved before the mutation, so editing one's own role cannot escalate).
+ * Monotonic delegation (single implementation for role mutations and role assignment): the actor
+ * can only grant, or control, permissions it effectively holds right now in this organization
+ * (resolved before the mutation, so editing or assigning one's own role cannot escalate).
+ * Non-canonical ids are never in actorPermissions, so they are never delegable.
  */
-function assertDelegable(
+export function assertDelegable(
 	actorPermissions: readonly PermissionId[],
 	permissions: readonly string[]
 ) {
@@ -386,13 +392,21 @@ function isRoleCodeViolation(error: unknown): boolean {
 	});
 }
 
-async function assertOperationalOrganization(tx: IncidentDatabase, organizationId: string) {
+/**
+ * Checks the organization exists and is active. Mutations that can change who administers the
+ * tenant lock the row FOR UPDATE so they are serialized per organization (last-admin guard).
+ */
+export async function assertOperationalOrganization(
+	tx: IncidentDatabase,
+	organizationId: string,
+	lock: 'share' | 'update' = 'share'
+) {
 	const [org] = await tx
 		.select({ status: organizations.status })
 		.from(organizations)
 		.where(eq(organizations.id, organizationId))
 		.limit(1)
-		.for('share');
+		.for(lock);
 	if (!org) throw new IncidentServiceError('ORGANIZATION_NOT_FOUND', 'Organization does not exist');
 	if (org.status !== 'active')
 		throw new IncidentServiceError(
@@ -501,7 +515,8 @@ export async function updateCustomRole(
 	const active = input.active as boolean | undefined;
 
 	return inTransaction(dbOrTx, async (tx) => {
-		await assertOperationalOrganization(tx, organizationId);
+		await assertOperationalOrganization(tx, organizationId, 'update');
+		const administratorsBefore = await countTenantAdministrators(tx, organizationId);
 		const [role] = await tx
 			.select({ id: roles.id, isCustom: roles.isCustom, templateId: roles.templateId })
 			.from(roles)
@@ -564,6 +579,105 @@ export async function updateCustomRole(
 					.where(and(eq(roles.id, roleId), eq(roles.organizationId, organizationId)));
 			}
 		}
+		await assertAdministratorRemains(tx, organizationId, administratorsBefore);
 		return getOrganizationRole(tx, organizationId, roleId);
 	});
+}
+
+// =============================================================================
+// Tenant administrator guard (5.4R-C/D)
+// =============================================================================
+
+const ADMIN_TEMPLATE = ROLE_TEMPLATES.find((template) => template.id === 'tpl_organization_admin')!;
+
+/**
+ * Permission set that defines a full tenant administrator: the canonical permissions of this
+ * organization's organization_admin system role (live role_permissions, so a divergent tenant is
+ * measured against its own admin role), or the canonical template when the tenant has none.
+ */
+async function tenantAdministratorPermissions(
+	tx: IncidentDatabase,
+	organizationId: string
+): Promise<string[]> {
+	const rows = await tx
+		.select({ permissionId: rolePermissions.permissionId })
+		.from(roles)
+		.innerJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+		.where(
+			and(
+				eq(roles.organizationId, organizationId),
+				eq(roles.templateId, ADMIN_TEMPLATE.id),
+				eq(roles.isCustom, false)
+			)
+		);
+	const held = new Set(rows.map((row) => row.permissionId));
+	const live = PERMISSION_IDS.filter((id) => held.has(id));
+	return live.length > 0 ? live : [...ADMIN_TEMPLATE.permissionIds];
+}
+
+/**
+ * Number of memberships that can fully administer the tenant right now: active user, active
+ * membership, and organization-scoped assignments of active roles that together grant every
+ * tenant-administrator permission (same rules as runtime authorization; any role, system or
+ * custom, counts). One aggregate query, no N+1.
+ */
+export async function countTenantAdministrators(
+	tx: IncidentDatabase,
+	organizationId: string
+): Promise<number> {
+	const required = await tenantAdministratorPermissions(tx, organizationId);
+	const rows = await tx
+		.select({ membershipId: memberships.id })
+		.from(memberships)
+		.innerJoin(users, and(eq(users.id, memberships.userId), eq(users.active, true)))
+		.innerJoin(
+			roleAssignments,
+			and(
+				eq(roleAssignments.membershipId, memberships.id),
+				eq(roleAssignments.organizationId, memberships.organizationId),
+				eq(roleAssignments.scopeType, 'organization')
+			)
+		)
+		.innerJoin(
+			roles,
+			and(
+				eq(roles.id, roleAssignments.roleId),
+				eq(roles.organizationId, roleAssignments.organizationId),
+				eq(roles.active, true)
+			)
+		)
+		.innerJoin(
+			rolePermissions,
+			and(eq(rolePermissions.roleId, roles.id), inArray(rolePermissions.permissionId, required))
+		)
+		.innerJoin(
+			permissionsTable,
+			and(
+				eq(permissionsTable.id, rolePermissions.permissionId),
+				sql`'organization' = ANY(${permissionsTable.allowedScopeTypes})`
+			)
+		)
+		.where(and(eq(memberships.organizationId, organizationId), eq(memberships.active, true)))
+		.groupBy(memberships.id)
+		.having(sql`count(distinct ${rolePermissions.permissionId}) = ${required.length}`);
+	return rows.length;
+}
+
+/**
+ * Last-admin protection: a mutation may not take a tenant that had at least one full
+ * administrator down to zero. Called after the mutation inside the same transaction, so a
+ * violation rolls it back. The caller must hold the organization row FOR UPDATE.
+ */
+export async function assertAdministratorRemains(
+	tx: IncidentDatabase,
+	organizationId: string,
+	administratorsBefore: number
+): Promise<void> {
+	if (administratorsBefore === 0) return;
+	if ((await countTenantAdministrators(tx, organizationId)) === 0) {
+		throw new IncidentServiceError(
+			'LAST_ADMIN_REQUIRED',
+			'The organization must keep at least one administrator'
+		);
+	}
 }

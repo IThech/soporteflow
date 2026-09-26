@@ -34,8 +34,8 @@ const IDS_0011 = [
 	'memberships:create',
 	'roles:assign'
 ];
-/** Current canonical catalog: 0011 + role administration permissions (0013, 5.4R-A). */
-const EXPECTED_IDS = [...IDS_0011, 'roles:view', 'roles:manage'];
+/** Current canonical catalog: 0011 + role administration (0013, 5.4R-A) + memberships:view (0014, 5.4R-C). */
+const EXPECTED_IDS = [...IDS_0011, 'roles:view', 'roles:manage', 'memberships:view'];
 const ID_PATTERN = /^[a-z][a-z_]*:[a-z][a-z_]*$/;
 const SCOPES = ['organization', 'department', 'team', 'site', 'personal'];
 

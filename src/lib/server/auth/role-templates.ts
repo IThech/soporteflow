@@ -43,7 +43,8 @@ export const ROLE_TEMPLATES = [
 			'memberships:create',
 			'roles:assign',
 			'roles:view',
-			'roles:manage'
+			'roles:manage',
+			'memberships:view'
 		]
 	},
 	{

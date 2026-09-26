@@ -23,7 +23,8 @@ export const expectedMigrations = [
 	'0010_odd_angel.sql',
 	'0011_permissions_catalog.sql',
 	'0012_role_templates.sql',
-	'0013_roles_admin_permissions.sql'
+	'0013_roles_admin_permissions.sql',
+	'0014_memberships_admin_permissions.sql'
 ];
 
 export const TEST_SECRET = 'synthetic-phase-b-only-secret-123456789';
