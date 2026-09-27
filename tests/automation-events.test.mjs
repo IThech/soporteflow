@@ -904,7 +904,7 @@ test('SoporteFlow — Etapa 5.4V-A: eventos canónicos de automatización', asyn
 	// Fronteras V-A / V-B / V-C / V-D
 	// =========================================================================
 	await t.test(
-		'fronteras: dominio solo vía producers; sin webhooks, reglas, n8n ni scheduler',
+		'fronteras: dominio solo vía producers; sin ejecución inline, n8n ni scheduler',
 		() => {
 			const read = (file) => fs.readFileSync('src/lib/server/services/' + file, 'utf8');
 			const strip = (code) => code.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
@@ -943,7 +943,7 @@ test('SoporteFlow — Etapa 5.4V-A: eventos canónicos de automatización', asyn
 					assert.doesNotMatch(
 						String(file),
 						// 5.4V-B: outbound webhook files are expected now; rules, n8n, schedulers are not
-						/n8n|automation[-_]rule|scheduler|cron/i,
+						/n8n|scheduler|cron/i,
 						String(file)
 					);
 			const schema = strip(fs.readFileSync('src/lib/server/db/schema/automation.ts', 'utf8'));

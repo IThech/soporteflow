@@ -1,3 +1,4 @@
+import { fanoutAutomationExecutions } from './automation-rule-fanout';
 import { and, eq } from 'drizzle-orm';
 import { incidents } from '../db/schema';
 import type {
@@ -22,7 +23,7 @@ import { fanoutWebhookDeliveries } from './webhook-fanout';
  * - facts are appended in the given order (e.g. unassigned before assigned) and share the
  *   mutation's occurredAt;
  * - 5.4V-B: each appended event is fanned out to webhook delivery intents (webhook-fanout, pure DB)
- *   in the same transaction; HTTP happens later in the webhook processor. No rules or n8n (V-C/V-D).
+ *   in the same transaction; HTTP happens later in the webhook processor. V-C adds rule intents only; no inline execution or n8n.
  */
 
 type Status = AutomationIncidentStatus;
@@ -71,7 +72,7 @@ export type IncidentAutomationFact =
 export interface RecordIncidentAutomationEventsInput {
 	organizationId: string;
 	incidentId: string;
-	/** Mutation actor; null only for system events (none produced in V-A). */
+	/** Mutation actor; null for system events; the processor binds authority to the caller transaction. */
 	actorUserId: string | null;
 	/** Timestamp of the mutation (shared by all its facts). */
 	occurredAt: Date;
@@ -256,6 +257,7 @@ export async function recordIncidentAutomationEvents(
 		});
 		// 5.4V-B: webhook delivery intents for this event, same transaction (DB only, no HTTP).
 		await fanoutWebhookDeliveries(tx, event);
+		await fanoutAutomationExecutions(tx, event);
 		stored.push(event);
 	}
 	return stored;

@@ -86,27 +86,34 @@ test('SoporteFlow — Etapa 5.4N-A: esquema relacional de incident_messages en P
 	const incidentA = await createIncident(orgA, authorA);
 	const incidentB = await createIncident(orgB, authorB);
 
-	await t.test('2. La tabla incident_messages existe con las columnas exactas de v1', async () => {
-		const res = await pg.query(
-			`SELECT column_name, data_type, is_nullable, character_maximum_length
+	await t.test(
+		'2. La tabla incident_messages existe con las columnas exactas con autoría explícita 5.4V-C',
+		async () => {
+			const res = await pg.query(
+				`SELECT column_name, data_type, is_nullable, character_maximum_length
 			 FROM information_schema.columns
 			 WHERE table_schema = 'public' AND table_name = 'incident_messages'
 			 ORDER BY ordinal_position;`
-		);
-		assert.deepEqual(
-			res.rows.map((r) => [r.column_name, r.data_type, r.is_nullable]),
-			[
-				['id', 'uuid', 'NO'],
-				['organization_id', 'uuid', 'NO'],
-				['incident_id', 'uuid', 'NO'],
-				['author_user_id', 'uuid', 'NO'],
-				['visibility', 'character varying', 'NO'],
-				['body', 'text', 'NO'],
-				['created_at', 'timestamp with time zone', 'NO']
-			]
-		);
-		assert.equal(res.rows.find((r) => r.column_name === 'visibility').character_maximum_length, 20);
-	});
+			);
+			assert.deepEqual(
+				res.rows.map((r) => [r.column_name, r.data_type, r.is_nullable]),
+				[
+					['id', 'uuid', 'NO'],
+					['organization_id', 'uuid', 'NO'],
+					['incident_id', 'uuid', 'NO'],
+					['author_user_id', 'uuid', 'YES'],
+					['visibility', 'character varying', 'NO'],
+					['body', 'text', 'NO'],
+					['created_at', 'timestamp with time zone', 'NO'],
+					['author_type', 'character varying', 'NO']
+				]
+			);
+			assert.equal(
+				res.rows.find((r) => r.column_name === 'visibility').character_maximum_length,
+				20
+			);
+		}
+	);
 
 	await t.test('3. Inserción válida public', async () => {
 		const [row] = await db

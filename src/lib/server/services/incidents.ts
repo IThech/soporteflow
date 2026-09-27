@@ -1,3 +1,4 @@
+import { automationAuthority, automationHistoryMetadata } from './automation-authority';
 import { and, eq, desc, asc, isNotNull, isNull, not, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn, PgDatabase } from 'drizzle-orm/pg-core';
 import {
@@ -1020,7 +1021,7 @@ const ALLOWED_STATUS_TRANSITIONS: Record<IncidentStatus, ReadonlySet<IncidentSta
 
 export interface UpdateIncidentContext {
 	readonly organizationId: string;
-	readonly actorUserId: string;
+	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
 }
 
@@ -1050,7 +1051,9 @@ export async function updateIncidentRecord(
 	if (!isValidUuid(context?.organizationId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
 	}
-	if (!isValidUuid(context?.actorUserId)) {
+	const system =
+		context?.actorUserId === null && !!automationAuthority(dbOrTx, context.organizationId);
+	if (!system && !isValidUuid(context?.actorUserId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
 	}
 	if (!isValidUuid(incidentId)) {
@@ -1085,37 +1088,39 @@ export async function updateIncidentRecord(
 		}
 
 		// B. Validate Actor Membership and User activity
-		const [actorRecord] = await tx
-			.select({
-				membershipActive: memberships.active,
-				userActive: users.active
-			})
-			.from(memberships)
-			.innerJoin(users, eq(users.id, memberships.userId))
-			.where(
-				and(
-					eq(memberships.organizationId, context.organizationId),
-					eq(memberships.userId, context.actorUserId)
+		if (!system) {
+			const [actorRecord] = await tx
+				.select({
+					membershipActive: memberships.active,
+					userActive: users.active
+				})
+				.from(memberships)
+				.innerJoin(users, eq(users.id, memberships.userId))
+				.where(
+					and(
+						eq(memberships.organizationId, context.organizationId),
+						eq(memberships.userId, context.actorUserId!)
+					)
 				)
-			)
-			.limit(1);
+				.limit(1);
 
-		if (!actorRecord) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_NOT_FOUND',
-				'Actor user is not a member of this organization'
-			);
-		}
+			if (!actorRecord) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_NOT_FOUND',
+					'Actor user is not a member of this organization'
+				);
+			}
 
-		if (!actorRecord.membershipActive) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_INACTIVE',
-				'Actor user membership is inactive'
-			);
-		}
+			if (!actorRecord.membershipActive) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_INACTIVE',
+					'Actor user membership is inactive'
+				);
+			}
 
-		if (!actorRecord.userActive) {
-			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+			if (!actorRecord.userActive) {
+				throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+			}
 		}
 
 		// C. Lock the incident within the tenant and check access
@@ -1211,11 +1216,12 @@ export async function updateIncidentRecord(
 					incidentId,
 					organizationId: context.organizationId,
 					eventType: statusEventType,
-					actorType: 'user',
+					actorType: system ? 'system' : 'user',
 					actorUserId: context.actorUserId,
 					reason: null,
 					comment: null,
 					payload: {
+						...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
 						oldStatus,
 						newStatus
 					}
@@ -1234,9 +1240,10 @@ export async function updateIncidentRecord(
 						incidentId,
 						organizationId: context.organizationId,
 						eventType: met ? 'sla_resolution_met' : 'sla_resolution_breached',
-						actorType: 'user',
+						actorType: system ? 'system' : 'user',
 						actorUserId: context.actorUserId,
 						payload: {
+							...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
 							dueAt: currentIncident.resolutionDueAt.toISOString(),
 							achievedAt: achievedAt.toISOString()
 						}
@@ -1253,11 +1260,12 @@ export async function updateIncidentRecord(
 					incidentId,
 					organizationId: context.organizationId,
 					eventType: 'priority_changed',
-					actorType: 'user',
+					actorType: system ? 'system' : 'user',
 					actorUserId: context.actorUserId,
 					reason: null,
 					comment: null,
 					payload: {
+						...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
 						oldPriority: currentPriority,
 						newPriority: input.priority!
 					}
@@ -1335,7 +1343,7 @@ export async function updateIncidentRecord(
 		return { incident: updatedIncident, history: historyRecords };
 	};
 
-	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+	if (!system && 'transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
 		return await dbOrTx.transaction(async (tx) => execute(tx));
 	}
 	return await execute(dbOrTx);
@@ -1454,7 +1462,7 @@ export async function getAssignableTechnicians(
 
 export interface AssignIncidentContext {
 	readonly organizationId: string;
-	readonly actorUserId: string;
+	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
 }
 
@@ -1491,7 +1499,9 @@ export async function assignIncidentRecord(
 	if (!isValidUuid(context?.organizationId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
 	}
-	if (!isValidUuid(context?.actorUserId)) {
+	const system =
+		context?.actorUserId === null && !!automationAuthority(dbOrTx, context.organizationId);
+	if (!system && !isValidUuid(context?.actorUserId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
 	}
 	if (!isValidUuid(incidentId)) {
@@ -1535,37 +1545,39 @@ export async function assignIncidentRecord(
 		}
 
 		// B. Validate Actor Membership and User Activity
-		const [actorRecord] = await tx
-			.select({
-				membershipActive: memberships.active,
-				userActive: users.active
-			})
-			.from(memberships)
-			.innerJoin(users, eq(users.id, memberships.userId))
-			.where(
-				and(
-					eq(memberships.organizationId, context.organizationId),
-					eq(memberships.userId, context.actorUserId)
+		if (!system) {
+			const [actorRecord] = await tx
+				.select({
+					membershipActive: memberships.active,
+					userActive: users.active
+				})
+				.from(memberships)
+				.innerJoin(users, eq(users.id, memberships.userId))
+				.where(
+					and(
+						eq(memberships.organizationId, context.organizationId),
+						eq(memberships.userId, context.actorUserId!)
+					)
 				)
-			)
-			.limit(1);
+				.limit(1);
 
-		if (!actorRecord) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_NOT_FOUND',
-				'Actor user is not a member of this organization'
-			);
-		}
+			if (!actorRecord) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_NOT_FOUND',
+					'Actor user is not a member of this organization'
+				);
+			}
 
-		if (!actorRecord.membershipActive) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_INACTIVE',
-				'Actor user membership is inactive'
-			);
-		}
+			if (!actorRecord.membershipActive) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_INACTIVE',
+					'Actor user membership is inactive'
+				);
+			}
 
-		if (!actorRecord.userActive) {
-			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+			if (!actorRecord.userActive) {
+				throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+			}
 		}
 
 		// C. Lock the incident within the tenant; check access and reject closed incidents
@@ -1740,11 +1752,12 @@ export async function assignIncidentRecord(
 				incidentId,
 				organizationId: context.organizationId,
 				eventType,
-				actorType: 'user',
+				actorType: system ? 'system' : 'user',
 				actorUserId: context.actorUserId,
 				reason: cleanReason,
 				comment: null,
 				payload: {
+					...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
 					previousTeamId: currentIncident.teamId,
 					newTeamId: finalTeamId,
 					previousAssigneeUserId: currentIncident.assignedToUserId,
@@ -1807,7 +1820,7 @@ export async function assignIncidentRecord(
 		return { incident: updatedIncident, history: historyRecord };
 	};
 
-	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+	if (!system && 'transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
 		return await dbOrTx.transaction(async (tx) => execute(tx));
 	}
 	return await execute(dbOrTx);
@@ -1815,7 +1828,7 @@ export async function assignIncidentRecord(
 
 export interface UpdateIncidentSupportLevelContext {
 	readonly organizationId: string;
-	readonly actorUserId: string;
+	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
 }
 
@@ -1854,7 +1867,9 @@ export async function updateIncidentSupportLevel(
 	if (!isValidUuid(context?.organizationId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
 	}
-	if (!isValidUuid(context?.actorUserId)) {
+	const system =
+		context?.actorUserId === null && !!automationAuthority(dbOrTx, context.organizationId);
+	if (!system && !isValidUuid(context?.actorUserId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
 	}
 	if (!isValidUuid(incidentId)) {
@@ -1889,37 +1904,39 @@ export async function updateIncidentSupportLevel(
 		}
 
 		// B. Validate Actor Membership and User Activity
-		const [actorRecord] = await tx
-			.select({
-				membershipActive: memberships.active,
-				userActive: users.active
-			})
-			.from(memberships)
-			.innerJoin(users, eq(users.id, memberships.userId))
-			.where(
-				and(
-					eq(memberships.organizationId, context.organizationId),
-					eq(memberships.userId, context.actorUserId)
+		if (!system) {
+			const [actorRecord] = await tx
+				.select({
+					membershipActive: memberships.active,
+					userActive: users.active
+				})
+				.from(memberships)
+				.innerJoin(users, eq(users.id, memberships.userId))
+				.where(
+					and(
+						eq(memberships.organizationId, context.organizationId),
+						eq(memberships.userId, context.actorUserId!)
+					)
 				)
-			)
-			.limit(1);
+				.limit(1);
 
-		if (!actorRecord) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_NOT_FOUND',
-				'Actor user is not a member of this organization'
-			);
-		}
+			if (!actorRecord) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_NOT_FOUND',
+					'Actor user is not a member of this organization'
+				);
+			}
 
-		if (!actorRecord.membershipActive) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_INACTIVE',
-				'Actor user membership is inactive'
-			);
-		}
+			if (!actorRecord.membershipActive) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_INACTIVE',
+					'Actor user membership is inactive'
+				);
+			}
 
-		if (!actorRecord.userActive) {
-			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+			if (!actorRecord.userActive) {
+				throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+			}
 		}
 
 		// C. Lock the incident within the tenant; check access and reject closed incidents
@@ -1963,11 +1980,12 @@ export async function updateIncidentSupportLevel(
 				incidentId,
 				organizationId: context.organizationId,
 				eventType: 'support_level_changed',
-				actorType: 'user',
+				actorType: system ? 'system' : 'user',
 				actorUserId: context.actorUserId,
 				reason: cleanReason,
 				comment: null,
 				payload: {
+					...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
 					previousSupportLevel: currentIncident.supportLevel,
 					newSupportLevel: input.supportLevel
 				}
@@ -1991,7 +2009,7 @@ export async function updateIncidentSupportLevel(
 		return { incident: updatedIncident, history: historyRecord };
 	};
 
-	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+	if (!system && 'transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
 		return await dbOrTx.transaction(async (tx) => execute(tx));
 	}
 	return await execute(dbOrTx);
@@ -2001,7 +2019,7 @@ export { updateIncidentSupportLevel as updateIncidentSupportLevelRecord };
 
 export interface ChangeIncidentSiteContext {
 	readonly organizationId: string;
-	readonly actorUserId: string;
+	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
 }
 
@@ -2036,7 +2054,9 @@ export async function changeIncidentSite(
 	if (!isValidUuid(context?.organizationId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
 	}
-	if (!isValidUuid(context?.actorUserId)) {
+	const system =
+		context?.actorUserId === null && !!automationAuthority(dbOrTx, context.organizationId);
+	if (!system && !isValidUuid(context?.actorUserId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
 	}
 	if (!isValidUuid(incidentId)) {
@@ -2066,31 +2086,33 @@ export async function changeIncidentSite(
 		}
 
 		// B. Validate Actor Membership and User Activity
-		const [actorRecord] = await tx
-			.select({ membershipActive: memberships.active, userActive: users.active })
-			.from(memberships)
-			.innerJoin(users, eq(users.id, memberships.userId))
-			.where(
-				and(
-					eq(memberships.organizationId, context.organizationId),
-					eq(memberships.userId, context.actorUserId)
+		if (!system) {
+			const [actorRecord] = await tx
+				.select({ membershipActive: memberships.active, userActive: users.active })
+				.from(memberships)
+				.innerJoin(users, eq(users.id, memberships.userId))
+				.where(
+					and(
+						eq(memberships.organizationId, context.organizationId),
+						eq(memberships.userId, context.actorUserId!)
+					)
 				)
-			)
-			.limit(1);
-		if (!actorRecord) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_NOT_FOUND',
-				'Actor user is not a member of this organization'
-			);
-		}
-		if (!actorRecord.membershipActive) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_INACTIVE',
-				'Actor user membership is inactive'
-			);
-		}
-		if (!actorRecord.userActive) {
-			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+				.limit(1);
+			if (!actorRecord) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_NOT_FOUND',
+					'Actor user is not a member of this organization'
+				);
+			}
+			if (!actorRecord.membershipActive) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_INACTIVE',
+					'Actor user membership is inactive'
+				);
+			}
+			if (!actorRecord.userActive) {
+				throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+			}
 		}
 
 		// C. Lock the incident within the tenant; check access and reject closed incidents
@@ -2138,11 +2160,15 @@ export async function changeIncidentSite(
 				incidentId,
 				organizationId: context.organizationId,
 				eventType: 'site_changed',
-				actorType: 'user',
+				actorType: system ? 'system' : 'user',
 				actorUserId: context.actorUserId,
 				reason: cleanReason,
 				comment: null,
-				payload: { fromSiteId, toSiteId: targetSiteId }
+				payload: {
+					...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
+					fromSiteId,
+					toSiteId: targetSiteId
+				}
 			})
 			.returning();
 
@@ -2159,7 +2185,7 @@ export async function changeIncidentSite(
 		return { incident: updatedIncident, history: historyRecord };
 	};
 
-	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+	if (!system && 'transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
 		return await dbOrTx.transaction(async (tx) => execute(tx));
 	}
 	return await execute(dbOrTx);
@@ -2167,7 +2193,7 @@ export async function changeIncidentSite(
 
 export interface ChangeIncidentCategoryContext {
 	readonly organizationId: string;
-	readonly actorUserId: string;
+	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
 }
 
@@ -2204,7 +2230,9 @@ export async function changeIncidentCategory(
 	if (!isValidUuid(context?.organizationId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
 	}
-	if (!isValidUuid(context?.actorUserId)) {
+	const system =
+		context?.actorUserId === null && !!automationAuthority(dbOrTx, context.organizationId);
+	if (!system && !isValidUuid(context?.actorUserId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
 	}
 	if (!isValidUuid(incidentId)) {
@@ -2234,31 +2262,33 @@ export async function changeIncidentCategory(
 		}
 
 		// B. Validate Actor Membership and User Activity
-		const [actorRecord] = await tx
-			.select({ membershipActive: memberships.active, userActive: users.active })
-			.from(memberships)
-			.innerJoin(users, eq(users.id, memberships.userId))
-			.where(
-				and(
-					eq(memberships.organizationId, context.organizationId),
-					eq(memberships.userId, context.actorUserId)
+		if (!system) {
+			const [actorRecord] = await tx
+				.select({ membershipActive: memberships.active, userActive: users.active })
+				.from(memberships)
+				.innerJoin(users, eq(users.id, memberships.userId))
+				.where(
+					and(
+						eq(memberships.organizationId, context.organizationId),
+						eq(memberships.userId, context.actorUserId!)
+					)
 				)
-			)
-			.limit(1);
-		if (!actorRecord) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_NOT_FOUND',
-				'Actor user is not a member of this organization'
-			);
-		}
-		if (!actorRecord.membershipActive) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_INACTIVE',
-				'Actor user membership is inactive'
-			);
-		}
-		if (!actorRecord.userActive) {
-			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+				.limit(1);
+			if (!actorRecord) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_NOT_FOUND',
+					'Actor user is not a member of this organization'
+				);
+			}
+			if (!actorRecord.membershipActive) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_INACTIVE',
+					'Actor user membership is inactive'
+				);
+			}
+			if (!actorRecord.userActive) {
+				throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+			}
 		}
 
 		// C. Lock the incident within the tenant; check access and reject closed incidents
@@ -2306,11 +2336,15 @@ export async function changeIncidentCategory(
 				incidentId,
 				organizationId: context.organizationId,
 				eventType: 'category_changed',
-				actorType: 'user',
+				actorType: system ? 'system' : 'user',
 				actorUserId: context.actorUserId,
 				reason: cleanReason,
 				comment: null,
-				payload: { fromCategoryId, toCategoryId: targetCategoryId }
+				payload: {
+					...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
+					fromCategoryId,
+					toCategoryId: targetCategoryId
+				}
 			})
 			.returning();
 
@@ -2331,7 +2365,7 @@ export async function changeIncidentCategory(
 		return { incident: updatedIncident, history: historyRecord };
 	};
 
-	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+	if (!system && 'transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
 		return await dbOrTx.transaction(async (tx) => execute(tx));
 	}
 	return await execute(dbOrTx);

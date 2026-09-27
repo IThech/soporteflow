@@ -235,6 +235,21 @@ export const PERMISSION_CATALOG = [
 		description: 'Crear, modificar, desactivar webhooks salientes y rotar sus secretos de firma.',
 		category: 'webhooks',
 		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	// 5.4V-C: tenant-system automation administration.
+	{
+		id: 'automations:view',
+		name: 'Ver automatizaciones',
+		description: 'Consultar reglas y ejecuciones de la organización.',
+		category: 'automations',
+		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	{
+		id: 'automations:manage',
+		name: 'Gestionar automatizaciones',
+		description: 'Configurar acciones internas con autoridad de sistema en la organización.',
+		category: 'automations',
+		allowedScopeTypes: ORGANIZATION_ONLY
 	}
 ] as const satisfies readonly PermissionDefinition[];
 

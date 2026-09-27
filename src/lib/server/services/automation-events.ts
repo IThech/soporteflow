@@ -1,3 +1,4 @@
+import { automationAuthority } from './automation-authority';
 import { and, asc, eq, gt } from 'drizzle-orm';
 import { automationEvents } from '../db/schema';
 import {
@@ -100,6 +101,8 @@ export async function appendAutomationEvent<T extends AutomationEventType>(
 	if (!(input.occurredAt instanceof Date) || Number.isNaN(input.occurredAt.getTime()))
 		throw invalid();
 	validPayload(input.payload);
+	const authority = automationAuthority(tx, input.organizationId);
+	if (authority && input.actorUserId !== null) throw invalid();
 	const [row] = await tx
 		.insert(automationEvents)
 		.values({
@@ -110,6 +113,9 @@ export async function appendAutomationEvent<T extends AutomationEventType>(
 			aggregateId: input.aggregateId,
 			actorUserId: input.actorUserId,
 			occurredAt: input.occurredAt,
+			causationEventId: authority?.causationEventId ?? null,
+			automationExecutionId: authority?.executionId ?? null,
+			automationDepth: authority?.depth ?? 0,
 			payload: input.payload
 		})
 		.returning(columns);

@@ -50,13 +50,13 @@ export type NotificationRecipientEvent =
 			organizationId: string;
 			incidentId: string;
 			/** User who performed the action (comment author for public comments). */
-			actorUserId: string;
+			actorUserId: string | null;
 	  }
 	| {
 			eventType: 'incident.unassigned';
 			organizationId: string;
 			incidentId: string;
-			actorUserId: string;
+			actorUserId: string | null;
 			previousAssigneeUserId: string;
 	  }
 	| {

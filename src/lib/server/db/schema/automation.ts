@@ -38,10 +38,18 @@ export const automationEvents = pgTable(
 		aggregateId: uuid('aggregate_id').notNull(),
 		actorUserId: uuid('actor_user_id'),
 		payload: jsonb('payload').notNull(),
+		causationEventId: uuid('causation_event_id'),
+		automationExecutionId: uuid('automation_execution_id'),
+		automationDepth: integer('automation_depth').default(0).notNull(),
 		occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
 		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull()
 	},
 	(table) => [
+		unique('automation_events_id_org_unique').on(table.id, table.organizationId),
+		check(
+			'automation_events_depth_check',
+			sql`(${table.automationDepth} = 0 AND ${table.causationEventId} IS NULL AND ${table.automationExecutionId} IS NULL) OR (${table.automationDepth} BETWEEN 1 AND 5 AND ${table.causationEventId} IS NOT NULL AND ${table.automationExecutionId} IS NOT NULL AND ${table.actorUserId} IS NULL)`
+		),
 		unique('automation_events_position_unique').on(table.position),
 		foreignKey({
 			name: 'automation_events_organization_fk',

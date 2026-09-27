@@ -31,7 +31,7 @@ interface BaseEvent {
 	organizationId: string;
 	incidentId: string;
 	/** User who performed the domain action; never notified. */
-	actorUserId: string;
+	actorUserId: string | null;
 }
 
 export type DomainNotificationEvent =

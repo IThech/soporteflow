@@ -1,3 +1,4 @@
+import { automationAuthority, automationHistoryMetadata } from './automation-authority';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import {
 	incidents,
@@ -35,7 +36,7 @@ export interface InternalNoteContext {
 	readonly incidentId: string;
 }
 export interface CreateInternalNoteContext extends InternalNoteContext {
-	readonly actorUserId: string;
+	readonly actorUserId: string | null;
 }
 export interface PublicCommentContext {
 	readonly organizationId: string;
@@ -198,7 +199,11 @@ async function appendMessage(
 	if (!isValidUuid(context?.incidentId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'incidentId must be a valid UUID');
 	}
-	if (!isValidUuid(context?.actorUserId)) {
+	const system =
+		visibility === 'internal' &&
+		context?.actorUserId === null &&
+		!!automationAuthority(dbOrTx, context.organizationId);
+	if (!system && !isValidUuid(context?.actorUserId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'actorUserId must be a valid UUID');
 	}
 	if (invalidRestriction(context)) {
@@ -224,36 +229,40 @@ async function appendMessage(
 		}
 
 		// B. Validate actor membership and user activity in this tenant
-		const [actor] = await tx
-			.select({
-				membershipActive: memberships.active,
-				userActive: users.active,
-				name: users.name,
-				displayName: users.displayName
-			})
-			.from(memberships)
-			.innerJoin(users, eq(users.id, memberships.userId))
-			.where(
-				and(
-					eq(memberships.organizationId, context.organizationId),
-					eq(memberships.userId, context.actorUserId)
-				)
-			)
-			.limit(1);
-		if (!actor) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_NOT_FOUND',
-				'Actor user is not a member of this organization'
-			);
-		}
-		if (!actor.membershipActive) {
-			throw new IncidentServiceError(
-				'CREATOR_MEMBERSHIP_INACTIVE',
-				'Actor user membership is inactive'
-			);
-		}
-		if (!actor.userActive) {
-			throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+		const [actor] = system
+			? []
+			: await tx
+					.select({
+						membershipActive: memberships.active,
+						userActive: users.active,
+						name: users.name,
+						displayName: users.displayName
+					})
+					.from(memberships)
+					.innerJoin(users, eq(users.id, memberships.userId))
+					.where(
+						and(
+							eq(memberships.organizationId, context.organizationId),
+							eq(memberships.userId, context.actorUserId!)
+						)
+					)
+					.limit(1);
+		if (!system) {
+			if (!actor) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_NOT_FOUND',
+					'Actor user is not a member of this organization'
+				);
+			}
+			if (!actor.membershipActive) {
+				throw new IncidentServiceError(
+					'CREATOR_MEMBERSHIP_INACTIVE',
+					'Actor user membership is inactive'
+				);
+			}
+			if (!actor.userActive) {
+				throw new IncidentServiceError('CREATOR_USER_INACTIVE', 'Actor user account is inactive');
+			}
 		}
 
 		// C. Lock the incident within the tenant and check access and status. A support reply may
@@ -293,10 +302,16 @@ async function appendMessage(
 				organizationId: context.organizationId,
 				incidentId: context.incidentId,
 				authorUserId: context.actorUserId,
+				authorType: system ? 'system' : 'user',
 				visibility,
 				body: text
 			})
-			.returning({ id: incidentMessages.id, body: incidentMessages.body, createdAt: createdAtIso });
+			.returning({
+				id: incidentMessages.id,
+				body: incidentMessages.body,
+				authorType: incidentMessages.authorType,
+				createdAt: createdAtIso
+			});
 
 		// D.2 First response (5.4T-B): first support reply by someone other than the requester.
 		// Idempotent, first write wins (never overwritten). Internal notes, requester comments and
@@ -332,11 +347,12 @@ async function appendMessage(
 					incidentId: context.incidentId,
 					organizationId: context.organizationId,
 					eventType: met ? 'sla_first_response_met' : 'sla_first_response_breached',
-					actorType: 'user',
+					actorType: system ? 'system' : 'user',
 					actorUserId: context.actorUserId,
 					reason: null,
 					comment: null,
 					payload: {
+						...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
 						dueAt: recorded.firstResponseDueAt.toISOString(),
 						achievedAt: recorded.firstResponseAt.toISOString()
 					}
@@ -350,11 +366,14 @@ async function appendMessage(
 				incidentId: context.incidentId,
 				organizationId: context.organizationId,
 				eventType: 'internal_note_added',
-				actorType: 'user',
+				actorType: system ? 'system' : 'user',
 				actorUserId: context.actorUserId,
 				reason: null,
 				comment: null,
-				payload: { messageId: message.id }
+				payload: {
+					...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
+					messageId: message.id
+				}
 			});
 		}
 
@@ -394,11 +413,11 @@ async function appendMessage(
 			id: message.id,
 			body: message.body,
 			createdAt: message.createdAt,
-			author: { name: authorName(actor.displayName, actor.name) }
+			author: { name: system ? 'Sistema' : authorName(actor!.displayName, actor!.name) }
 		};
 	};
 
-	if ('transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
+	if (!system && 'transaction' in dbOrTx && typeof dbOrTx.transaction === 'function') {
 		return await dbOrTx.transaction(async (tx) => execute(tx));
 	}
 	return await execute(dbOrTx);
@@ -448,6 +467,7 @@ async function listMessages(
 		.select({
 			id: incidentMessages.id,
 			body: incidentMessages.body,
+			authorType: incidentMessages.authorType,
 			createdAt: createdAtIso,
 			name: users.name,
 			displayName: users.displayName
@@ -464,7 +484,9 @@ async function listMessages(
 			id: row.id,
 			body: row.body,
 			createdAt: row.createdAt,
-			author: { name: authorName(row.displayName, row.name) }
+			author: {
+				name: row.authorType === 'system' ? 'Sistema' : authorName(row.displayName, row.name)
+			}
 		})),
 		nextCursor:
 			rows.length > limit && last ? encodeCursor({ at: last.createdAt, id: last.id }) : null

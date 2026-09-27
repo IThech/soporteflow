@@ -218,7 +218,8 @@ export const incidentMessages = pgTable(
 			.notNull()
 			.references(() => organizations.id, { onDelete: 'restrict' }),
 		incidentId: uuid('incident_id').notNull(),
-		authorUserId: uuid('author_user_id').notNull(),
+		authorUserId: uuid('author_user_id'),
+		authorType: varchar('author_type', { length: 20 }).default('user').notNull(),
 		visibility: varchar('visibility', { length: 20 }).notNull(),
 		body: text('body').notNull(),
 		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull()
@@ -234,6 +235,10 @@ export const incidentMessages = pgTable(
 			columns: [table.organizationId, table.authorUserId],
 			foreignColumns: [memberships.organizationId, memberships.userId]
 		}).onDelete('restrict'),
+		check(
+			'incident_messages_author_check',
+			sql`(${table.authorType} = 'user' AND ${table.authorUserId} IS NOT NULL) OR (${table.authorType} = 'system' AND ${table.authorUserId} IS NULL AND ${table.visibility} = 'internal')`
+		),
 		check('incident_messages_visibility_check', sql`${table.visibility} IN ('public', 'internal')`),
 		check('incident_messages_body_check', sql`btrim(${table.body}) <> ''`),
 		check('incident_messages_body_length_check', sql`char_length(${table.body}) <= 4000`),
