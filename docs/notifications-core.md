@@ -143,6 +143,60 @@ to the assignee (no admin broadcast, no team/escalation fallback yet).
 
 ## Boundaries
 
-U-B creates no notifications: nothing calls the resolver or `createNotification` from incidents,
+U-B created no notifications (superseded by U-C below): nothing called the resolver or `createNotification` from incidents,
 comments, SLA, history or invitations. U-C will connect domain events → resolver → notification
 producer (and decide deduplication). U-D: email/push, outbox, retries, digests, retention.
+
+# Domain notification generation — 5.4U-C
+
+## Producer
+
+`src/lib/server/services/notification-producer.ts` → `produceDomainNotification(tx, event)` is the
+only bridge between domain services and the notification subsystem:
+
+event → `resolveNotificationRecipients` (U-B rules) → centralized title/message/payload →
+`createNotification` per recipient → `{ created }`.
+
+- Runs on the caller's `dbOrTx` (the domain mutation's transaction). It never catches: if the
+  recipient lookup or any insert fails, the whole domain mutation rolls back (incident row, history,
+  message, first response, SLA events).
+- `notification.type` is exactly the event type.
+- Texts are fixed Spanish strings that only interpolate the incident number (`#<incidentNumber>`):
+  never the incident title, comment bodies, names or emails.
+- Invalid events, unknown or `sla.*` event types and incidents outside the tenant are rejected
+  (`NotificationProducerError`) before anything is written.
+
+| Event                           | Title                            | Payload                                             |
+| ------------------------------- | -------------------------------- | --------------------------------------------------- |
+| `incident.assigned`             | Incidencia asignada              | `{ incidentId }`                                    |
+| `incident.unassigned`           | Incidencia desasignada           | `{ incidentId }`                                    |
+| `incident.status_changed`       | Estado de incidencia actualizado | `{ incidentId, previousStatus, newStatus }`         |
+| `incident.reopened`             | Incidencia reabierta             | `{ incidentId, previousStatus, newStatus: 'open' }` |
+| `incident.public_comment_added` | Nuevo comentario                 | `{ incidentId, commentId }`                         |
+
+The payload stays internal (never in the inbox DTO).
+
+## Domain wiring
+
+- `assignIncidentRecord`: after the update and its history row. The previous assignee comes from
+  the locked incident row, never from the request. `null → B`: `assigned(B)`; `A → null`:
+  `unassigned(A)`; `A → B`: `unassigned(A)` + `assigned(B)`. Team-only changes and no-ops emit nothing.
+- `updateIncidentRecord`: `resolved|closed → open` emits only `incident.reopened`; every other
+  status change emits `incident.status_changed`. Priority-only changes and no-ops emit nothing.
+- Public comments (`appendMessage`, visibility `public`): after the comment, first response and SLA
+  first-response history. Requester writes → assignee; anyone else → requester. Internal notes
+  never notify.
+
+The actor is always excluded; disabled preferences and inactive members simply yield
+`created: 0` without affecting the mutation. No `notification_sent` history event and no
+notification data in incident DTOs.
+
+## Not produced / pending
+
+- `sla.first_response_breached` and `sla.resolution_breached` are catalogued but not produced:
+  breaches are time-based and there is no worker/cron/scheduler. Pending a later stage.
+- No email, push, outbox, retries or deduplication across events (U-D).
+- Real multi-connection concurrency is validated in 5.4W (PGlite is single-connection).
+
+Boundary tests enforce that domain services import only `./notification-producer` and never call
+`createNotification` or the recipient resolver directly.

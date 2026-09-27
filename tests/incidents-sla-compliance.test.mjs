@@ -672,17 +672,38 @@ test('SoporteFlow — Etapa 5.4T-C: cumplimiento SLA, incumplimiento y operació
 		}
 	);
 
-	await t.test('62-63. sin generación automática de notificaciones, colas ni workers', () => {
+	await t.test('62-63. notificaciones solo vía producer; sin colas, workers ni cron', () => {
 		for (const dir of ['src/lib/server/services', 'src/routes/api'])
 			for (const file of fs.readdirSync(dir, { recursive: true }))
 				assert.ok(!/webhook|worker|cron/i.test(String(file)), String(file));
 		for (const file of fs.readdirSync('src/lib/server/services')) {
-			// the notification subsystem itself (inbox, preferences, recipient rules) is exempt; domain
-			// services must not produce or import notifications yet
+			// 5.4U-C: the notification subsystem itself is exempt; domain services may only reach it
+			// through notification-producer (never createNotification or the recipient resolver)
 			if (!file.endsWith('.ts') || /^notification(s|-[a-z-]+)\.ts$/.test(file)) continue;
 			const domain = fs.readFileSync('src/lib/server/services/' + file, 'utf8');
-			assert.ok(!/createNotification\s*\(|from ['"].*notifications/.test(domain), file);
+			assert.ok(!/createNotification|resolve(Notification|Candidate)Recipients/.test(domain), file);
+			const imports = [...domain.matchAll(/from ['"]\.\/(notification[^'"]*)['"]/g)].map(
+				(m) => m[1]
+			);
+			assert.ok(
+				imports.every((m) => m === 'notification-producer'),
+				`${file}: ${imports}`
+			);
 		}
+		// SLA breaches are time-based and not produced (no scheduler): nothing emits sla.* events
+		for (const file of ['incidents.ts', 'incident-messages.ts', 'sla-compliance.ts'])
+			assert.ok(
+				!/sla\.(first_response|resolution)_breached/.test(
+					fs.readFileSync('src/lib/server/services/' + file, 'utf8')
+				),
+				file
+			);
+		for (const file of fs.readdirSync('src/lib/server', { recursive: true }))
+			if (String(file).endsWith('.ts'))
+				assert.ok(
+					!/setInterval\s*\(/.test(fs.readFileSync('src/lib/server/' + file, 'utf8')),
+					String(file)
+				);
 		const source = fs.readFileSync('src/lib/server/services/sla-compliance.ts', 'utf8');
 		assert.ok(!/setInterval|setTimeout|import /.test(source), 'función pura, sin dependencias');
 	});

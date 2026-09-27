@@ -1,13 +1,13 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { incidents, memberships, organizations, users } from '../db/schema';
 import { isNotificationEventType, type NotificationEventType } from '../../notifications/events';
-import { IncidentServiceError, type IncidentDatabase } from './incidents';
+import type { IncidentDatabase } from './incidents';
 import { filterUsersWithNotificationEnabled } from './notification-preferences';
 
 /**
  * Notification recipient rules (5.4U-B). Given a domain event, returns WHO should receive it.
- * It never creates notifications (5.4U-C will connect it to the notification producer) and it is
- * not called by any domain service yet.
+ * It never creates notifications: since 5.4U-C its only caller is notification-producer, which
+ * domain services use inside their own transaction.
  *
  * Recipients derive from the incident's CURRENT relationships, read server-side by
  * (incidentId, organizationId): requester (incidents.client_user_id) and assignee
@@ -25,6 +25,20 @@ import { filterUsersWithNotificationEnabled } from './notification-preferences';
  * - sla.resolution_breached      -> assignee only (time-based: no actor)
  * Self-notification is never produced: the actor of an action is always excluded.
  */
+
+/**
+ * Own error type (same codes as the incident service) so this module only has type-level imports
+ * from incidents.ts: incidents.ts -> notification-producer -> this module stays acyclic.
+ */
+export class NotificationRecipientError extends Error {
+	constructor(
+		readonly code: 'INVALID_INPUT' | 'INCIDENT_NOT_FOUND',
+		message: string
+	) {
+		super(message);
+		this.name = 'NotificationRecipientError';
+	}
+}
 
 export type NotificationRecipientEvent =
 	| {
@@ -54,7 +68,7 @@ export type NotificationRecipientEvent =
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function validId(value: unknown): asserts value is string {
 	if (typeof value !== 'string' || !uuid.test(value))
-		throw new IncidentServiceError('INVALID_INPUT', 'invalid recipient event');
+		throw new NotificationRecipientError('INVALID_INPUT', 'invalid recipient event');
 }
 
 /**
@@ -66,7 +80,7 @@ export async function resolveCandidateRecipients(
 	event: NotificationRecipientEvent
 ): Promise<string[]> {
 	if (!isNotificationEventType(event?.eventType))
-		throw new IncidentServiceError('INVALID_INPUT', 'unknown notification event');
+		throw new NotificationRecipientError('INVALID_INPUT', 'unknown notification event');
 	validId(event?.organizationId);
 	validId(event.incidentId);
 	const actor = 'actorUserId' in event ? event.actorUserId : null;
@@ -83,7 +97,7 @@ export async function resolveCandidateRecipients(
 			and(eq(incidents.id, event.incidentId), eq(incidents.organizationId, event.organizationId))
 		)
 		.limit(1);
-	if (!incident) throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
+	if (!incident) throw new NotificationRecipientError('INCIDENT_NOT_FOUND', 'Incident not found');
 
 	let candidates: (string | null)[];
 	switch (event.eventType) {
@@ -107,7 +121,7 @@ export async function resolveCandidateRecipients(
 			candidates = [incident.assignee];
 			break;
 		default:
-			throw new IncidentServiceError('INVALID_INPUT', 'unknown notification event');
+			throw new NotificationRecipientError('INVALID_INPUT', 'unknown notification event');
 	}
 	return [...new Set(candidates.filter((id): id is string => id !== null && id !== actor))].sort();
 }

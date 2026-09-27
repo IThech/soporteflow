@@ -132,7 +132,7 @@ async function find(
 	if (!row) throw notFound();
 	return row;
 }
-/** Server-only producer; not exposed through POST. No domain event integration in U-A. */
+/** Server-only; not exposed through POST. Domain events reach it only via notification-producer (U-C). */
 export async function createNotification(
 	db: IncidentDatabase,
 	input: CreateNotificationInput

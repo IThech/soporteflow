@@ -852,27 +852,50 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 	// Fronteras U-C / U-D (64-65)
 	// =========================================================================
 	await t.test(
-		'64-65. sin creación de notificaciones desde el dominio; resolver no invocado; sin email/outbox',
+		'64-65. dominio solo vía producer; resolver y createNotification solo en el producer; sin email/outbox',
 		() => {
-			const files = [
-				'src/lib/server/services/incidents.ts',
-				'src/lib/server/services/incident-messages.ts',
-				'src/lib/server/services/incident-history.ts',
-				'src/lib/server/services/sla-compliance.ts',
-				'src/lib/server/services/invitations.ts',
-				'src/lib/server/services/invitation-acceptance.ts',
-				'src/lib/server/services/notification-recipients.ts',
-				'src/lib/server/services/notification-preferences.ts'
+			const read = (file) => fs.readFileSync('src/lib/server/services/' + file, 'utf8');
+			const producerImport = /from '\.\/notification-producer'/;
+			// 5.4U-C: exactly these domain services emit notifications, through the producer only
+			for (const file of ['incidents.ts', 'incident-messages.ts'])
+				assert.match(read(file), producerImport, `${file} usa el producer`);
+			for (const file of [
+				'incident-history.ts',
+				'sla-compliance.ts',
+				'invitations.ts',
+				'invitation-acceptance.ts',
+				'notification-recipients.ts',
+				'notification-preferences.ts',
+				'notifications.ts'
+			])
+				assert.doesNotMatch(read(file), producerImport, `${file} no produce notificaciones`);
+			const domain = [
+				'incidents.ts',
+				'incident-messages.ts',
+				'incident-history.ts',
+				'sla-compliance.ts',
+				'invitations.ts',
+				'invitation-acceptance.ts',
+				'notification-recipients.ts',
+				'notification-preferences.ts'
 			];
-			for (const file of files) {
-				const source = fs.readFileSync(file, 'utf8');
-				assert.ok(!source.includes('createNotification'), `${file}: createNotification`);
-			}
-			for (const file of files.slice(0, 6))
-				assert.ok(
-					!fs.readFileSync(file, 'utf8').includes('notification-recipients'),
-					`${file} no invoca el resolver`
-				);
+			for (const file of domain)
+				assert.ok(!read(file).includes('createNotification'), `${file}: createNotification`);
+			for (const file of domain.slice(0, 6))
+				assert.ok(!read(file).includes('notification-recipients'), `${file} no invoca el resolver`);
+			// the producer is the only bridge: resolver + createNotification, nothing else
+			const producer = read('notification-producer.ts');
+			assert.match(producer, /from '\.\/notifications'/);
+			assert.match(producer, /from '\.\/notification-recipients'/);
+			assert.doesNotMatch(producer, /catch\s*[({]/, 'sin catch-and-ignore');
+			for (const file of fs.readdirSync('src/routes', { recursive: true }))
+				if (/\.(ts|svelte)$/.test(String(file)))
+					assert.ok(
+						!/notification-producer|notification-recipients/.test(
+							fs.readFileSync('src/routes/' + file, 'utf8')
+						),
+						String(file)
+					);
 			for (const dir of ['src/lib/server', 'src/routes/api'])
 				for (const file of fs.readdirSync(dir, { recursive: true }))
 					assert.ok(!/outbox|mailer|push|webhook|delivery/i.test(String(file)), String(file));

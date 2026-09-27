@@ -22,6 +22,7 @@ import {
 	type SlaObjectiveStatus,
 	type SlaOverallStatus
 } from './sla-compliance';
+import { produceDomainNotification } from './notification-producer';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type IncidentDatabase = PgDatabase<any, any>;
@@ -1253,6 +1254,31 @@ export async function updateIncidentRecord(
 			historyRecords.push(priorityHistory);
 		}
 
+		// 5.4U-C: in-app notifications in the same transaction (a failure rolls everything back).
+		// Reopen emits only incident.reopened; any other status change emits incident.status_changed.
+		// Priority-only changes do not notify.
+		if (isStatusChanged) {
+			const newStatus = input.status!;
+			if ((currentStatus === 'resolved' || currentStatus === 'closed') && newStatus === 'open') {
+				await produceDomainNotification(tx, {
+					eventType: 'incident.reopened',
+					organizationId: context.organizationId,
+					incidentId,
+					actorUserId: context.actorUserId,
+					previousStatus: currentStatus
+				});
+			} else {
+				await produceDomainNotification(tx, {
+					eventType: 'incident.status_changed',
+					organizationId: context.organizationId,
+					incidentId,
+					actorUserId: context.actorUserId,
+					previousStatus: currentStatus,
+					newStatus
+				});
+			}
+		}
+
 		return { incident: updatedIncident, history: historyRecords };
 	};
 
@@ -1673,6 +1699,30 @@ export async function assignIncidentRecord(
 				}
 			})
 			.returning();
+
+		// 5.4U-C: in-app notifications in the same transaction. The previous assignee comes from the
+		// locked row (currentIncident), never from the request. A->B emits unassigned(A) + assigned(B);
+		// team-only changes (same assignee) emit nothing.
+		const previousAssigneeUserId = currentIncident.assignedToUserId;
+		if (previousAssigneeUserId !== finalAssigneeId) {
+			if (previousAssigneeUserId !== null) {
+				await produceDomainNotification(tx, {
+					eventType: 'incident.unassigned',
+					organizationId: context.organizationId,
+					incidentId,
+					actorUserId: context.actorUserId,
+					previousAssigneeUserId
+				});
+			}
+			if (finalAssigneeId !== null) {
+				await produceDomainNotification(tx, {
+					eventType: 'incident.assigned',
+					organizationId: context.organizationId,
+					incidentId,
+					actorUserId: context.actorUserId
+				});
+			}
+		}
 
 		return { incident: updatedIncident, history: historyRecord };
 	};

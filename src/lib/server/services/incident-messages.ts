@@ -8,6 +8,7 @@ import {
 	users
 } from '../db/schema';
 import { IncidentServiceError, incidentAccessAllows, type IncidentDatabase } from './incidents';
+import { produceDomainNotification } from './notification-producer';
 
 /** Message DTO: explicit allowlist, never exposes tenant, incident or author UUIDs. */
 export interface IncidentMessageItem {
@@ -343,6 +344,19 @@ async function appendMessage(
 				reason: null,
 				comment: null,
 				payload: { messageId: message.id }
+			});
+		}
+
+		// F. 5.4U-C: public comments notify (requester <-> assignee) in the same transaction, after the
+		// comment and the first-response/SLA writes. Internal notes never notify. The body never
+		// travels into the notification.
+		if (visibility === 'public') {
+			await produceDomainNotification(tx, {
+				eventType: 'incident.public_comment_added',
+				organizationId: context.organizationId,
+				incidentId: context.incidentId,
+				actorUserId: context.actorUserId,
+				commentId: message.id
 			});
 		}
 
