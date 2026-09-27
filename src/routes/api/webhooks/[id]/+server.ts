@@ -6,6 +6,7 @@ import {
 	updateWebhookSubscription
 } from '$lib/server/services/webhook-subscriptions';
 import {
+	asWebhookManager,
 	failure,
 	noContent,
 	readWebhookJson,
@@ -41,10 +42,13 @@ export const PATCH: RequestHandler = async (event) => {
 		if ('response' in ctx) return ctx.response;
 		if (!uuid.test(event.params.id ?? ''))
 			return failure(404, 'WEBHOOK_NOT_FOUND', 'Webhook not found.');
+		const id = event.params.id;
 		const body = await readWebhookJson(event.request);
 		if (!body) return failure(400, 'INVALID_INPUT', 'Invalid request.');
 		return success({
-			webhook: await updateWebhookSubscription(db, ctx.organizationId, event.params.id, body)
+			webhook: await asWebhookManager(ctx, (tx) =>
+				updateWebhookSubscription(tx, ctx.organizationId, id, body)
+			)
 		});
 	} catch (error) {
 		return webhookFailure(error);
@@ -64,7 +68,8 @@ export const DELETE: RequestHandler = async (event) => {
 			return failure(404, 'WEBHOOK_NOT_FOUND', 'Webhook not found.');
 		if (event.request.body !== null)
 			return failure(400, 'INVALID_INPUT', 'Request body is not allowed.');
-		await deactivateWebhookSubscription(db, ctx.organizationId, event.params.id);
+		const id = event.params.id;
+		await asWebhookManager(ctx, (tx) => deactivateWebhookSubscription(tx, ctx.organizationId, id));
 		return noContent();
 	} catch (error) {
 		return webhookFailure(error);

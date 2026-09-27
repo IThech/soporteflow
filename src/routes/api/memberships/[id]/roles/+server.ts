@@ -7,6 +7,7 @@ import {
 	onlyKeys,
 	readJsonObject,
 	requireDelegatingActor,
+	withActorAuthorization,
 	success,
 	toMembershipRoleDto,
 	uuid
@@ -39,12 +40,14 @@ export const POST: RequestHandler = async (event) => {
 		const body = await readJsonObject(event.request, ['roleId']);
 		if (!body || typeof body.roleId !== 'string' || !uuid.test(body.roleId))
 			return failure(400, 'INVALID_INPUT', 'Invalid request.');
-		const result = await assignRoleToMembership(
+		// 5.4W-A (H1): authority and delegation re-read inside the transaction, after the
+		// organization lock; the pre-check snapshot above is never used for the mutation.
+		const roleId = body.roleId;
+		const result = await withActorAuthorization(
 			db,
-			organizationId,
-			membershipId,
-			body.roleId,
-			auth.actorPermissions
+			{ userId: auth.userId, organizationId, permissionIds: ['roles:assign'], lock: 'update' },
+			(tx, actorPermissions) =>
+				assignRoleToMembership(tx, organizationId, membershipId, roleId, actorPermissions)
 		);
 		return success(
 			{

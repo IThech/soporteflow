@@ -278,6 +278,9 @@ Statuses: `pending → processing → sent | retry | failed`, `retry → process
   `lease_token`, `attempt_count + 1` and `next_attempt_at = now + 5 min` (lease expiry). An
   abandoned claim becomes due again after the lease; one already at the attempt limit is closed
   as `MAX_ATTEMPTS`.
+- 5.4W-A: before each provider call the worker renews the item's lease (`renewDeliveryLease`,
+  token-guarded) and skips items another worker reclaimed; each call is bounded by
+  `NOTIFICATION_EMAIL_SEND_TIMEOUT_MS` (30 s, transient `NETWORK_ERROR`).
 - Outcome updates (`markDeliverySent/Retry/Failed`) require the current lease token: a stale
   worker cannot overwrite a newer result, and a finished row cannot be marked twice.
 - Retry policy (transient errors): 1 min, 5 min, 30 min, 2 h; the 5th failed attempt is final

@@ -230,6 +230,25 @@ export async function markWebhookDeliveryFailed(
 	return rows.length === 1;
 }
 
+/**
+ * 5.4W-A (H2): atomically re-asserts ownership right before the external POST and restarts the
+ * lease from the worker's current time. A batch is sent sequentially (up to 100 x 10 s), so a
+ * single claim-time lease may expire before a later item is sent; without this check another
+ * processor could reclaim an unsent item and both would POST it. Guarded by the lease token only:
+ * if another worker reclaimed the row (new token), the UPDATE matches nothing and the caller must
+ * not send. If nobody reclaimed it, renewing is safe even after expiry (the UPDATE is atomic
+ * against a concurrent claim: whichever commits first wins).
+ */
+export async function renewWebhookLease(db: IncidentDatabase, ref: LeaseRef): Promise<boolean> {
+	const where = leased(ref);
+	const rows = await db
+		.update(webhookDeliveries)
+		.set({ nextAttemptAt: new Date(ref.now.getTime() + WEBHOOK_LEASE_MS), updatedAt: ref.now })
+		.where(where)
+		.returning({ id: webhookDeliveries.id });
+	return rows.length === 1;
+}
+
 /** Next attempt after failed attempt n, or null when exhausted. Retry-After overrides the delay. */
 export function nextWebhookAttemptAt(
 	attemptCount: number,
@@ -290,6 +309,8 @@ export function parseRetryAfter(value: string | null | undefined, now: Date): nu
 
 export type WebhookOutcome =
 	| { kind: 'sent' }
+	/** Ownership lost before sending (lease renewal refused): nothing was sent or written. */
+	| { kind: 'lost' }
 	| { kind: 'retry'; code: WebhookDeliveryErrorCode; retryAfterMs?: number | null }
 	| { kind: 'failed'; code: WebhookDeliveryErrorCode };
 
@@ -364,7 +385,9 @@ async function attempt(
 	db: IncidentDatabase,
 	delivery: ClaimedWebhookDelivery,
 	now: Date,
-	options: ProcessWebhookDeliveriesOptions
+	options: ProcessWebhookDeliveriesOptions,
+	/** Invocation time + elapsed monotonic time: the worker's current logical time. */
+	current: () => Date
 ): Promise<WebhookOutcome & AttemptInfo> {
 	const [subscription] = await db
 		.select({
@@ -428,6 +451,15 @@ async function attempt(
 		secret,
 		body: delivery.body
 	});
+	// H2: never POST an item whose lease another worker may have taken over.
+	if (
+		!(await renewWebhookLease(db, {
+			id: delivery.id,
+			leaseToken: delivery.leaseToken,
+			now: current()
+		}))
+	)
+		return { kind: 'lost' };
 	const clock = options.clock ?? (() => performance.now());
 	const started = clock();
 	try {
@@ -463,7 +495,8 @@ async function attempt(
 
 /**
  * Entry point for a future scheduler (no cron here). Bounded per call (default 25, max 100).
- * Each HTTP call is outside any transaction and limited by the timeout (default 10 s).
+ * Each HTTP call is outside any transaction and limited by the timeout (default 10 s); the lease
+ * of each item is renewed right before its POST (see renewWebhookLease).
  */
 export async function processDueWebhookDeliveries(
 	db: IncidentDatabase,
@@ -478,8 +511,15 @@ export async function processDueWebhookDeliveries(
 		failed: 0,
 		leaseLost: 0
 	};
+	const clock = options.clock ?? (() => performance.now());
+	const batchStart = clock();
+	const current = () => new Date(now.getTime() + Math.max(0, clock() - batchStart));
 	for (const delivery of claimed) {
-		const outcome = await attempt(db, delivery, now, options);
+		const outcome = await attempt(db, delivery, now, options, current);
+		if (outcome.kind === 'lost') {
+			result.leaseLost++;
+			continue;
+		}
 		const ref = {
 			id: delivery.id,
 			leaseToken: delivery.leaseToken,

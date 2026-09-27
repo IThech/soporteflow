@@ -1343,6 +1343,78 @@ test('SoporteFlow — Etapa 5.4V-B: webhooks salientes, HMAC y reintentos', asyn
 	// Fronteras
 	// =========================================================================
 	await t.test(
+		'5.4W-A H2: un ítem del lote recuperado por otro worker no se envía (renovación de lease)',
+		async () => {
+			const sub = await subscribe(A, ['incident.created']);
+			await isolate(sub.webhook.id);
+			await incident(A);
+			await incident(A);
+			let startedA;
+			const started = new Promise((r) => (startedA = r));
+			let openGate;
+			const gate = new Promise((r) => (openGate = r));
+			const callsA = [];
+			const httpA = {
+				post: async (request) => {
+					callsA.push(request.headers['X-SoporteFlow-Delivery-Id']);
+					if (callsA.length === 1) {
+						startedA();
+						await gate;
+					}
+					return { status: 200, retryAfter: null };
+				}
+			};
+			const now = future();
+			const runA = run({ httpClient: httpA, now, limit: 2 }); // A claims both
+			await started; // first POST in flight
+			const httpB = httpMock({ status: 200 }, { status: 200 });
+			const resultB = await run({
+				httpClient: httpB,
+				now: new Date(now.getTime() + proc.WEBHOOK_LEASE_MS + 1000)
+			});
+			openGate();
+			const resultA = await runA;
+			assert.deepEqual([resultB.claimed, resultB.sent], [2, 2]);
+			assert.equal(resultA.leaseLost, 2, 'A no escribe ninguno de los dos resultados');
+			assert.equal(callsA.length, 1, 'A no envía el ítem que B ya había reclamado');
+			const rows = await deliveriesOf(sub.webhook.id);
+			assert.ok(rows.every((r) => r.status === 'sent' && r.attemptCount === 2));
+		}
+	);
+
+	await t.test(
+		'5.4W-A H2: la renovación reinicia el lease desde el reloj actual del worker',
+		async () => {
+			const sub = await subscribe(A, ['incident.created']);
+			await isolate(sub.webhook.id);
+			await incident(A);
+			const [d] = await deliveriesOf(sub.webhook.id);
+			const now = future();
+			const [claim] = await proc.claimDueWebhookDeliveries(db, { now });
+			const later = new Date(now.getTime() + 4 * MIN);
+			assert.equal(
+				await proc.renewWebhookLease(db, { id: d.id, leaseToken: claim.leaseToken, now: later }),
+				true
+			);
+			assert.equal(
+				(await byId(d.id)).nextAttemptAt.getTime(),
+				later.getTime() + proc.WEBHOOK_LEASE_MS
+			);
+			// not reclaimable at the original expiry anymore
+			assert.equal(
+				(await proc.claimDueWebhookDeliveries(db, { now: new Date(now.getTime() + 6 * MIN) }))
+					.length,
+				0
+			);
+			assert.equal(
+				await proc.renewWebhookLease(db, { id: d.id, leaseToken: randomUUID(), now: later }),
+				false,
+				'otro token no renueva'
+			);
+		}
+	);
+
+	await t.test(
 		'fronteras: sin cursor por position, sin reglas/n8n/scheduler/inbound, sin logs',
 		() => {
 			const strip = (code) => code.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');

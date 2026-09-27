@@ -5,6 +5,9 @@ import { IncidentServiceError } from '$lib/server/services/incidents';
 import { resolveEffectivePermissions } from '$lib/server/auth/effective-permissions';
 import type { PermissionId } from '$lib/server/auth/permissions';
 import type { AdminRoleRecord } from '$lib/server/services/roles';
+import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
+
+export { withActorAuthorization } from '$lib/server/auth/transactional-authorization';
 
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -53,6 +56,28 @@ export async function requireCapability(
 }
 
 /**
+ * Session (401) + capability (403) BEFORE the transaction, returning the principal id. This is a
+ * fast pre-check only: administrative mutations must re-validate inside their transaction with
+ * withActorAuthorization (5.4W-A H1), which is the authoritative decision.
+ */
+export async function requireActor(
+	headers: Headers,
+	organizationId: string,
+	permissionId: PermissionId
+): Promise<{ denied: Response } | { userId: string }> {
+	const principal = await resolvePrincipal(headers);
+	if (!principal) return { denied: failure(401, 'UNAUTHORIZED', 'Authentication required.') };
+	if (!(await authorizeAction(headers, { organizationId, permissionId })))
+		return { denied: failure(403, 'FORBIDDEN', 'Permission denied.') };
+	return { userId: principal.userId };
+}
+
+/** 403 when the in-transaction re-validation rejected the actor (authority lost mid-request). */
+export function actorAuthorizationFailure(error: unknown): Response | null {
+	return isActorAuthorizationError(error) ? failure(403, 'FORBIDDEN', 'Permission denied.') : null;
+}
+
+/**
  * Session + roles:manage on the organization, then the actor's real effective permissions there
  * (used for monotonic delegation; never assumed from the role code). Resolved before the mutation,
  * so a change to the actor's own role cannot widen what it may grant in the same request.
@@ -60,21 +85,25 @@ export async function requireCapability(
 export async function requireRolesManage(
 	headers: Headers,
 	organizationId: string
-): Promise<{ denied: Response } | { actorPermissions: PermissionId[] }> {
+): Promise<{ denied: Response } | { actorPermissions: PermissionId[]; userId: string }> {
 	return requireDelegatingActor(headers, organizationId, 'roles:manage');
 }
 
-/** requireCapability + the actor's effective permissions for monotonic delegation. */
+/**
+ * requireActor + the actor's effective permissions (pre-transaction snapshot). The snapshot is
+ * only a fast pre-check: mutations re-validate and re-read the actor's capabilities inside their
+ * transaction (withActorAuthorization) and delegate with those.
+ */
 export async function requireDelegatingActor(
 	headers: Headers,
 	organizationId: string,
 	permissionId: PermissionId
-): Promise<{ denied: Response } | { actorPermissions: PermissionId[] }> {
-	const denied = await requireCapability(headers, organizationId, permissionId);
-	if (denied) return { denied };
+): Promise<{ denied: Response } | { actorPermissions: PermissionId[]; userId: string }> {
+	const actor = await requireActor(headers, organizationId, permissionId);
+	if ('denied' in actor) return actor;
 	const actorPermissions = await resolveEffectivePermissions(headers, organizationId);
 	if (!actorPermissions) return { denied: failure(403, 'FORBIDDEN', 'Permission denied.') };
-	return { actorPermissions };
+	return { actorPermissions, userId: actor.userId };
 }
 
 /**
@@ -118,6 +147,8 @@ export function toRoleDto(role: AdminRoleRecord) {
  * organization is 403.
  */
 export function roleServiceFailure(error: unknown) {
+	const revoked = actorAuthorizationFailure(error);
+	if (revoked) return revoked;
 	if (error instanceof IncidentServiceError) {
 		if (error.code === 'INVALID_INPUT') return failure(400, 'INVALID_INPUT', 'Invalid request.');
 		if (error.code === 'ROLE_NOT_FOUND') return failure(404, 'ROLE_NOT_FOUND', 'Role not found.');

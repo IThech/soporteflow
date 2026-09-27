@@ -989,6 +989,58 @@ test('SoporteFlow — Etapa 5.4U-D: entrega de notificaciones por email', async 
 		assert.equal((await deliveriesFor(local)).length, 0, 'org A sin email habilitado');
 	});
 
+	await t.test('5.4W-A H2: un email del lote recuperado por otro worker no se envía', async () => {
+		await drain();
+		await queued();
+		await queued();
+		let startedA;
+		const started = new Promise((r) => (startedA = r));
+		let openGate;
+		const gate = new Promise((r) => (openGate = r));
+		const sentA = [];
+		const senderA = {
+			sendNotification: async (message) => {
+				sentA.push(message.to);
+				if (sentA.length === 1) {
+					startedA();
+					await gate;
+				}
+				return { providerMessageId: 'a' };
+			}
+		};
+		const now = future();
+		const runA = processDueNotificationDeliveries(db, { now, sender: senderA, limit: 2 });
+		await started;
+		const senderB = new MemoryNotificationEmailSender();
+		const resultB = await processDueNotificationDeliveries(db, {
+			now: new Date(now.getTime() + NOTIFICATION_DELIVERY_LEASE_MS + 1000),
+			sender: senderB
+		});
+		openGate();
+		const resultA = await runA;
+		assert.deepEqual([resultB.claimed, resultB.sent], [2, 2]);
+		assert.equal(resultA.leaseLost, 2);
+		assert.equal(sentA.length, 1, 'A no envía el email que B ya había reclamado');
+	});
+
+	await t.test(
+		'5.4W-A H2: un proveedor colgado agota el timeout y queda en reintento',
+		async () => {
+			await drain();
+			const { d } = await queued();
+			const hung = { sendNotification: () => new Promise(() => {}) };
+			const result = await processDueNotificationDeliveries(db, {
+				now: future(),
+				sender: hung,
+				sendTimeoutMs: 50
+			});
+			assert.equal(result.retried, 1);
+			const row = await byId(d.id);
+			assert.deepEqual([row.status, row.lastErrorCode], ['retry', 'NETWORK_ERROR']);
+			assert.equal(delivery.NOTIFICATION_EMAIL_SEND_TIMEOUT_MS, 30_000);
+		}
+	);
+
 	await t.test('fronteras: sin webhooks, n8n, cron, logs de contenido ni API pública', () => {
 		const files = [
 			'src/lib/server/services/notification-deliveries.ts',
@@ -997,8 +1049,14 @@ test('SoporteFlow — Etapa 5.4U-D: entrega de notificaciones por email', async 
 		];
 		for (const file of files) {
 			const code = fs.readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
-			assert.doesNotMatch(code, /setInterval|setTimeout|cron|webhook|n8n|hmac|console\./i, file);
+			assert.doesNotMatch(code, /setInterval|cron|webhook|n8n|hmac|console\./i, file);
 			assert.doesNotMatch(code, /fetch\(/, file);
+			// 5.4W-A: the only timer allowed is the bounded provider-call timeout (no scheduling)
+			const timers = code.match(/setTimeout\(/g) ?? [];
+			if (file.endsWith('notification-deliveries.ts')) {
+				assert.equal(timers.length, 1, 'single send-timeout timer');
+				assert.match(code, /clearTimeout\(timer\)/);
+			} else assert.equal(timers.length, 0, file);
 		}
 		for (const file of fs.readdirSync('src/routes', { recursive: true }))
 			if (/\.(ts|svelte)$/.test(String(file)))

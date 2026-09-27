@@ -10,7 +10,8 @@ import {
 	roleServiceFailure,
 	success,
 	toRoleDto,
-	uuid
+	uuid,
+	withActorAuthorization
 } from '../http';
 
 /**
@@ -64,12 +65,19 @@ export const PATCH: RequestHandler = async (event) => {
 		]);
 		if (!body || Object.keys(body).length === 0)
 			return failure(400, 'INVALID_INPUT', 'Invalid request.');
-		const role = await updateCustomRole(db, organizationId, roleId, auth.actorPermissions, {
-			name: body.name,
-			description: body.description,
-			permissions: body.permissions,
-			active: body.active
-		});
+		// 5.4W-A (H1): authority and delegation re-read inside the transaction, after the
+		// organization lock (FOR UPDATE, as updateCustomRole takes it).
+		const role = await withActorAuthorization(
+			db,
+			{ userId: auth.userId, organizationId, permissionIds: ['roles:manage'], lock: 'update' },
+			(tx, actorPermissions) =>
+				updateCustomRole(tx, organizationId, roleId, actorPermissions, {
+					name: body.name,
+					description: body.description,
+					permissions: body.permissions,
+					active: body.active
+				})
+		);
 		return success({ role: toRoleDto(role) });
 	} catch (error) {
 		return roleServiceFailure(error);

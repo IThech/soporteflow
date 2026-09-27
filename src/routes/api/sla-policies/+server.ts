@@ -1,11 +1,13 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
+import { withActorAuthorization } from '$lib/server/auth/transactional-authorization';
 import { createSlaPolicy, listSlaPolicies } from '$lib/server/services/sla-policies';
 import {
 	booleanParam,
 	failure,
 	onlyKeys,
 	readJsonObject,
+	requireActor,
 	requireCapability,
 	slaServiceFailure,
 	success,
@@ -52,8 +54,8 @@ export const POST: RequestHandler = async (event) => {
 	if (!organizationId || !uuid.test(organizationId))
 		return failure(400, 'INVALID_INPUT', 'organizationId must be a valid UUID.');
 	try {
-		const denied = await requireCapability(event.request.headers, organizationId, 'sla:manage');
-		if (denied) return denied;
+		const actor = await requireActor(event.request.headers, organizationId, 'sla:manage');
+		if ('denied' in actor) return actor.denied;
 		if (!onlyKeys(params, ['organizationId']))
 			return failure(400, 'INVALID_INPUT', 'Invalid SLA policies query.');
 		const body = await readJsonObject(event.request, [
@@ -65,14 +67,25 @@ export const POST: RequestHandler = async (event) => {
 			'isDefault'
 		]);
 		if (!body) return failure(400, 'INVALID_INPUT', 'Invalid request.');
-		const policy = await createSlaPolicy(db, organizationId, {
-			code: body.code,
-			name: body.name,
-			description: body.description,
-			firstResponseMinutes: body.firstResponseMinutes,
-			resolutionMinutes: body.resolutionMinutes,
-			isDefault: body.isDefault
-		});
+		// 5.4W-A (H1): re-validated inside the transaction after the organization lock.
+		const policy = await withActorAuthorization(
+			db,
+			{
+				userId: actor.userId,
+				organizationId,
+				permissionIds: ['sla:manage'],
+				lock: 'update'
+			},
+			(tx) =>
+				createSlaPolicy(tx, organizationId, {
+					code: body.code,
+					name: body.name,
+					description: body.description,
+					firstResponseMinutes: body.firstResponseMinutes,
+					resolutionMinutes: body.resolutionMinutes,
+					isDefault: body.isDefault
+				})
+		);
 		return success({ slaPolicy: toSlaPolicyDto(policy) }, 201);
 	} catch (error) {
 		return slaServiceFailure(error);

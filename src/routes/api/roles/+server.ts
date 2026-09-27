@@ -10,7 +10,8 @@ import {
 	roleServiceFailure,
 	success,
 	toRoleDto,
-	uuid
+	uuid,
+	withActorAuthorization
 } from './http';
 
 /**
@@ -64,12 +65,19 @@ export const POST: RequestHandler = async (event) => {
 			'permissions'
 		]);
 		if (!body) return failure(400, 'INVALID_INPUT', 'Invalid request.');
-		const role = await createCustomRole(db, organizationId, auth.actorPermissions, {
-			name: body.name,
-			code: body.code,
-			description: body.description,
-			permissions: body.permissions
-		});
+		// 5.4W-A (H1): delegation checked against the actor's capabilities re-read inside the
+		// transaction (organization FOR SHARE, the lock createCustomRole itself takes).
+		const role = await withActorAuthorization(
+			db,
+			{ userId: auth.userId, organizationId, permissionIds: ['roles:manage'], lock: 'share' },
+			(tx, actorPermissions) =>
+				createCustomRole(tx, organizationId, actorPermissions, {
+					name: body.name,
+					code: body.code,
+					description: body.description,
+					permissions: body.permissions
+				})
+		);
 		return success({ role: toRoleDto(role) }, 201);
 	} catch (error) {
 		return roleServiceFailure(error);

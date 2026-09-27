@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { IncidentServiceError } from '$lib/server/services/incidents';
+import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
 import type { CategoryRecord } from '$lib/server/services/categories';
 
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -55,6 +56,8 @@ export function isDescription(value: unknown): value is string | null {
 
 /** Maps service errors to stable client messages; never forwards driver or SQL details. */
 export function categoryServiceFailure(error: unknown) {
+	// 5.4W-A: authority lost between the pre-check and the in-transaction re-validation
+	if (isActorAuthorizationError(error)) return failure(403, 'FORBIDDEN', 'Permission denied.');
 	if (error instanceof IncidentServiceError) {
 		if (error.code === 'INVALID_INPUT') return failure(400, 'INVALID_INPUT', error.message + '.');
 		if (error.code === 'CATEGORY_NOT_FOUND')

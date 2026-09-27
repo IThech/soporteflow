@@ -1,5 +1,20 @@
-import { resolveOrganizationPermissions, verifyOrganizationMembership } from './authorization';
+import {
+	resolveOrganizationPermissions,
+	verifyOrganizationMembership,
+	type PermissionGrant
+} from './authorization';
 import { PERMISSION_IDS, type PermissionId } from './permissions';
+
+/**
+ * Canonical organization-scoped capabilities from a set of grants, in catalog order. Shared by
+ * resolveEffectivePermissions and the in-transaction re-validation (transactional-authorization).
+ */
+export function organizationScopedPermissions(list: readonly PermissionGrant[]): PermissionId[] {
+	const granted = new Set(
+		list.filter((grant) => grant.scope === 'organization').map((grant) => grant.permissionId)
+	);
+	return PERMISSION_IDS.filter((permissionId) => granted.has(permissionId));
+}
 
 /**
  * Effective capabilities of the authenticated principal in one organization (5.4Q-D).
@@ -22,10 +37,7 @@ export async function resolveEffectivePermissions(
 ): Promise<PermissionId[] | null> {
 	const membership = await verifyOrganizationMembership(headers, organizationId);
 	if (!membership) return null;
-	const granted = new Set(
-		(await resolveOrganizationPermissions(headers, organizationId))
-			.filter((grant) => grant.scope === 'organization')
-			.map((grant) => grant.permissionId)
+	return organizationScopedPermissions(
+		await resolveOrganizationPermissions(headers, organizationId)
 	);
-	return PERMISSION_IDS.filter((permissionId) => granted.has(permissionId));
 }

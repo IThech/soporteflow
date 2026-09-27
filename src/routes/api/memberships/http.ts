@@ -7,6 +7,7 @@ export {
 	requireCapability,
 	requireDelegatingActor,
 	roleServiceFailure as adminServiceFailure,
+	withActorAuthorization,
 	success,
 	uuid
 } from '../roles/http';

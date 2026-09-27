@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
+import { withActorAuthorization } from '$lib/server/auth/transactional-authorization';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import { setSiteActive, updateSite } from '$lib/server/services/sites';
@@ -48,13 +49,33 @@ export const PATCH: RequestHandler = async (event) => {
 		if (payload.action === 'rename') {
 			if (keys !== 'action,name' || typeof payload.name !== 'string')
 				return failure(400, 'INVALID_INPUT', 'rename requires exactly { action, name }.');
-			const site = await updateSite(db, organizationId, siteId, { name: payload.name });
+			const name = payload.name;
+			const site = await withActorAuthorization(
+				db,
+				{
+					userId: principal.userId,
+					organizationId,
+					permissionIds: ['sites:manage'],
+					lock: 'share'
+				},
+				(tx) => updateSite(tx, organizationId, siteId, { name })
+			);
 			return success({ site: toSiteDto(site) });
 		}
 		if (payload.action === 'set_active') {
 			if (keys !== 'action,active' || typeof payload.active !== 'boolean')
 				return failure(400, 'INVALID_INPUT', 'set_active requires exactly { action, active }.');
-			const site = await setSiteActive(db, organizationId, siteId, payload.active);
+			const active = payload.active;
+			const site = await withActorAuthorization(
+				db,
+				{
+					userId: principal.userId,
+					organizationId,
+					permissionIds: ['sites:manage'],
+					lock: 'share'
+				},
+				(tx) => setSiteActive(tx, organizationId, siteId, active)
+			);
 			return success({ site: toSiteDto(site) });
 		}
 		return failure(400, 'INVALID_INPUT', "action must be 'rename' or 'set_active'.");

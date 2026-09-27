@@ -5,7 +5,9 @@ import {
 	adminServiceFailure,
 	failure,
 	onlyKeys,
+	requireActor,
 	requireCapability,
+	withActorAuthorization,
 	success,
 	toInvitationDto,
 	uuid
@@ -55,15 +57,25 @@ export const DELETE: RequestHandler = async (event) => {
 	const parsed = ids(event);
 	if ('error' in parsed) return parsed.error;
 	try {
-		const denied = await requireCapability(
+		const actor = await requireActor(
 			event.request.headers,
 			parsed.organizationId,
 			'invitations:revoke'
 		);
-		if (denied) return denied;
+		if ('denied' in actor) return actor.denied;
 		if (!onlyKeys(event.url.searchParams, ['organizationId']))
 			return failure(400, 'INVALID_INPUT', 'Invalid invitations query.');
-		await revokeInvitation(db, parsed.organizationId, parsed.invitationId);
+		// 5.4W-A (H1): re-validated inside the transaction after the organization lock.
+		await withActorAuthorization(
+			db,
+			{
+				userId: actor.userId,
+				organizationId: parsed.organizationId,
+				permissionIds: ['invitations:revoke'],
+				lock: 'update'
+			},
+			(tx) => revokeInvitation(tx, parsed.organizationId, parsed.invitationId)
+		);
 		return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
 	} catch (error) {
 		return adminServiceFailure(error);

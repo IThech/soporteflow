@@ -159,8 +159,11 @@ Same model as email delivery: one short transaction with `FOR UPDATE SKIP LOCKED
 (5 min, stored in `next_attempt_at`). The HTTP call happens outside any transaction; outcome
 updates require the current lease token, so a stale worker cannot overwrite a newer result and a
 finished row cannot be marked twice. Expired leases are reclaimed; an expired lease at the attempt
-limit is closed as `MAX_ATTEMPTS`. Real multi-connection concurrency is not proven on PGlite
-(5.4W).
+limit is closed as `MAX_ATTEMPTS`. 5.4W-A: right before each POST the worker renews the item's
+lease with a token-guarded atomic UPDATE (`renewWebhookLease`) from its current logical time; if
+another worker reclaimed the row it skips the item, so a long sequential batch can no longer make
+two workers POST an item that was never in flight. Validated with real PostgreSQL sessions in
+`tests/concurrency` (see [concurrency.md](concurrency.md)).
 
 ## SSRF protection
 

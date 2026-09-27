@@ -33,3 +33,29 @@ Las consultas de autorización y la futura operación de negocio no son una úni
 npm run test:auth-authorization ejecuta pruebas con dependencias aisladas y PGlite en memoria, aplicando las migraciones existentes únicamente allí. Las pruebas inspeccionan también SQL y parámetros para comprobar filtros previos al resultado. La sesión real se valida en las pruebas de fase B; aquí se sustituye únicamente su resultado para aislar la política organizativa. No se accede a soporteflow_dev.
 
 Antes de la fase D: definir el aprovisionamiento autorizado de pertenencias, roles y concesiones; asignar permisos de forma explícita y transaccional; decidir la política de trial y la semántica personal/asignación cuando existan recursos persistidos. No crear administradores globales implícitos, ni activar autenticación o endpoints como efecto de este módulo.
+
+## Revalidación transaccional (5.4W-A, H1)
+
+PostgreSQL real demostró un TOCTOU: las rutas administrativas autorizaban (sesión, membresía,
+permisos y la instantánea `actorPermissions` para delegación) **antes** de la transacción del
+servicio; una degradación confirmada mientras la petición esperaba el lock de la organización no se
+veía y la mutación se aplicaba con autoridad caducada.
+
+Regla desde 5.4W-A: toda mutación administrativa se ejecuta dentro de
+`withActorAuthorization(db, { userId, organizationId, permissionIds, lock }, run)`:
+
+1. bloquea primero la fila de la organización (`update` si el servicio la bloquea FOR UPDATE:
+   roles, membresías, invitaciones, políticas SLA, reglas de automatización; `share` en el resto:
+   categorías, sedes, webhooks). El modo coincide con el del servicio para no escalar locks dentro
+   de la misma transacción;
+2. revalida al actor en esa transacción con `authorizeActionInTransaction` (mismas reglas que
+   `authorizeAction`: usuario, membresía y organización activos; grants de roles activos del
+   tenant; ámbito organización; ids canónicos; lecturas FOR SHARE);
+3. ejecuta la mutación en la misma transacción con las capacidades **actuales** del actor (las que
+   usa la delegación monótona); falla cerrado con 403 `FORBIDDEN` sin escribir nada.
+
+La comprobación previa de la ruta (401/403 rápidos) se mantiene, pero ya no es la decisión
+autoritativa. Orden de locks: organización → filas del actor (FOR SHARE) → filas del recurso; es el
+mismo orden que ya seguían los servicios, por lo que no introduce ciclos. Las mutaciones operativas
+de incidencias (edit/assign/comment) siguen autorizando antes de la transacción: misma clase de
+ventana, fuera del alcance de W-A (W-B).

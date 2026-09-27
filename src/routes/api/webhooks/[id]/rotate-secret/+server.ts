@@ -1,7 +1,13 @@
 import type { RequestHandler } from '@sveltejs/kit';
-import { db } from '$lib/server/db';
 import { rotateWebhookSecret } from '$lib/server/services/webhook-subscriptions';
-import { failure, success, uuid, webhookContext, webhookFailure } from '../../http';
+import {
+	asWebhookManager,
+	failure,
+	success,
+	uuid,
+	webhookContext,
+	webhookFailure
+} from '../../http';
 
 /**
  * POST /api/webhooks/<id>/rotate-secret?organizationId=<UUID>   (webhooks:manage, same Origin,
@@ -16,7 +22,10 @@ export const POST: RequestHandler = async (event) => {
 			return failure(404, 'WEBHOOK_NOT_FOUND', 'Webhook not found.');
 		if (event.request.body !== null)
 			return failure(400, 'INVALID_INPUT', 'Request body is not allowed.');
-		return success(await rotateWebhookSecret(db, ctx.organizationId, event.params.id));
+		const id = event.params.id;
+		return success(
+			await asWebhookManager(ctx, (tx) => rotateWebhookSecret(tx, ctx.organizationId, id))
+		);
 	} catch (error) {
 		return webhookFailure(error);
 	}

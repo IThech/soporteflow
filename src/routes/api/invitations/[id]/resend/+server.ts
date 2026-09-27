@@ -8,6 +8,8 @@ import {
 	failure,
 	onlyKeys,
 	requireInvitationIssuer,
+	INVITATION_ISSUER_PERMISSIONS,
+	withActorAuthorization,
 	success,
 	toInvitationDto,
 	uuid
@@ -35,10 +37,22 @@ export const POST: RequestHandler = async (event) => {
 			return failure(400, 'INVALID_INPUT', 'Invalid invitations query.');
 		if ((await event.request.text()).trim() !== '')
 			return failure(400, 'INVALID_INPUT', 'This endpoint does not accept a body.');
-		const issued = await resendInvitation(
+		// 5.4W-A (H1): re-issued inside a transaction that re-validates the actor after the
+		// organization lock; the email is sent only after commit.
+		const issued = await withActorAuthorization(
 			db,
-			{ organizationId, actorUserId: principal.userId, actorPermissions: auth.actorPermissions },
-			invitationId
+			{
+				userId: principal.userId,
+				organizationId,
+				permissionIds: INVITATION_ISSUER_PERMISSIONS,
+				lock: 'update'
+			},
+			(tx, actorPermissions) =>
+				resendInvitation(
+					tx,
+					{ organizationId, actorUserId: principal.userId, actorPermissions },
+					invitationId
+				)
 		);
 		await deliverInvitation(getInvitationEmailSender(), issued);
 		return success({ invitation: toInvitationDto(issued.invitation) });

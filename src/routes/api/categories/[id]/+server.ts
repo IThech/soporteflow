@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
+import { withActorAuthorization } from '$lib/server/auth/transactional-authorization';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import { setCategoryActive, updateCategory } from '$lib/server/services/categories';
@@ -59,16 +60,36 @@ export const PATCH: RequestHandler = async (event) => {
 					'INVALID_INPUT',
 					'update requires { action, name?, description? } with at least one field.'
 				);
-			const category = await updateCategory(db, organizationId, categoryId, {
-				...('name' in payload ? { name: payload.name } : {}),
-				...('description' in payload ? { description: payload.description } : {})
-			});
+			const category = await withActorAuthorization(
+				db,
+				{
+					userId: principal.userId,
+					organizationId,
+					permissionIds: ['categories:manage'],
+					lock: 'share'
+				},
+				(tx) =>
+					updateCategory(tx, organizationId, categoryId, {
+						...('name' in payload ? { name: payload.name } : {}),
+						...('description' in payload ? { description: payload.description } : {})
+					})
+			);
 			return success({ category: toCategoryDto(category) });
 		}
 		if (payload.action === 'set_active') {
 			if (keys.length !== 2 || !('active' in payload) || typeof payload.active !== 'boolean')
 				return failure(400, 'INVALID_INPUT', 'set_active requires exactly { action, active }.');
-			const category = await setCategoryActive(db, organizationId, categoryId, payload.active);
+			const active = payload.active;
+			const category = await withActorAuthorization(
+				db,
+				{
+					userId: principal.userId,
+					organizationId,
+					permissionIds: ['categories:manage'],
+					lock: 'share'
+				},
+				(tx) => setCategoryActive(tx, organizationId, categoryId, active)
+			);
 			return success({ category: toCategoryDto(category) });
 		}
 		return failure(400, 'INVALID_INPUT', "action must be 'update' or 'set_active'.");

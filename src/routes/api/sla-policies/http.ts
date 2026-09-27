@@ -1,8 +1,16 @@
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import type { SlaPolicyRecord } from '$lib/server/services/sla-policies';
-import { failure } from '../roles/http';
+import { actorAuthorizationFailure, failure } from '../roles/http';
 
-export { failure, onlyKeys, readJsonObject, requireCapability, success, uuid } from '../roles/http';
+export {
+	failure,
+	onlyKeys,
+	readJsonObject,
+	requireActor,
+	requireCapability,
+	success,
+	uuid
+} from '../roles/http';
 
 /** Explicit allowlist: never organizationId or internal fields. */
 export function toSlaPolicyDto(policy: SlaPolicyRecord) {
@@ -22,6 +30,8 @@ export function toSlaPolicyDto(policy: SlaPolicyRecord) {
 
 /** Stable client messages; never SQL, constraint names or stacks. */
 export function slaServiceFailure(error: unknown) {
+	const revoked = actorAuthorizationFailure(error);
+	if (revoked) return revoked;
 	if (error instanceof IncidentServiceError) {
 		switch (error.code) {
 			case 'INVALID_INPUT':

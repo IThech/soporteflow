@@ -4,7 +4,14 @@ import {
 	createWebhookSubscription,
 	listWebhookSubscriptions
 } from '$lib/server/services/webhook-subscriptions';
-import { failure, readWebhookJson, success, webhookContext, webhookFailure } from './http';
+import {
+	asWebhookManager,
+	failure,
+	readWebhookJson,
+	success,
+	webhookContext,
+	webhookFailure
+} from './http';
 
 /**
  * GET /api/webhooks?organizationId=<UUID>   (webhooks:view)
@@ -32,10 +39,12 @@ export const POST: RequestHandler = async (event) => {
 		if ('response' in ctx) return ctx.response;
 		const body = await readWebhookJson(event.request);
 		if (!body) return failure(400, 'INVALID_INPUT', 'Invalid request.');
-		const created = await createWebhookSubscription(
-			db,
-			{ organizationId: ctx.organizationId, actorUserId: ctx.actorUserId },
-			body
+		const created = await asWebhookManager(ctx, (tx) =>
+			createWebhookSubscription(
+				tx,
+				{ organizationId: ctx.organizationId, actorUserId: ctx.actorUserId },
+				body
+			)
 		);
 		return success(created, 201);
 	} catch (error) {

@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
+import { withActorAuthorization } from '$lib/server/auth/transactional-authorization';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import { createSite, listSites } from '$lib/server/services/sites';
@@ -78,7 +79,18 @@ export const POST: RequestHandler = async (event) => {
 		if (typeof payload.name !== 'string')
 			return failure(400, 'INVALID_INPUT', 'name must be a string.');
 
-		const site = await createSite(db, organizationId, { name: payload.name });
+		// 5.4W-A (H1): re-validated inside the transaction after the organization lock.
+		const name = payload.name;
+		const site = await withActorAuthorization(
+			db,
+			{
+				userId: principal.userId,
+				organizationId,
+				permissionIds: ['sites:manage'],
+				lock: 'share'
+			},
+			(tx) => createSite(tx, organizationId, { name })
+		);
 		return success({ site: toSiteDto(site) }, 201);
 	} catch (error) {
 		return siteServiceFailure(error);

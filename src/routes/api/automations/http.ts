@@ -1,7 +1,16 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
-import { failure, success, onlyKeys, requireCapability, uuid } from '../roles/http';
+import type { AuthTransaction } from '$lib/server/auth/instance';
+import {
+	actorAuthorizationFailure,
+	failure,
+	success,
+	onlyKeys,
+	requireCapability,
+	uuid,
+	withActorAuthorization
+} from '../roles/http';
 import { AutomationRuleError } from '$lib/automation/rules';
 import * as rules from '$lib/server/services/automation-rules';
 type Operation = 'list' | 'create' | 'get' | 'patch' | 'disable' | 'executions';
@@ -63,21 +72,40 @@ export async function handle(event: RequestEvent, op: Operation): Promise<Respon
 		if (op === 'list') return success(await rules.listAutomationRules(db, org, q));
 		if (op === 'get') return success({ rule: await rules.getAutomationRule(db, org, id!) });
 		if (op === 'executions') return success(await rules.listAutomationExecutions(db, org, id!, q));
+		const principal = await resolvePrincipal(event.request.headers);
+		if (!principal) return failure(401, 'UNAUTHORIZED', 'Authentication required.');
+		// 5.4W-A (H1): authority re-validated inside the mutation transaction, after the
+		// organization lock that rule changes take (FOR UPDATE).
+		const authorized = <T>(run: (tx: AuthTransaction) => Promise<T>) =>
+			withActorAuthorization(
+				db,
+				{
+					userId: principal.userId,
+					organizationId: org,
+					permissionIds: ['automations:manage'],
+					lock: 'update'
+				},
+				(tx) => run(tx)
+			);
 		if (op === 'disable') {
-			await rules.updateAutomationRule(db, org, id!, { active: false });
+			await authorized((tx) => rules.updateAutomationRule(tx, org, id!, { active: false }));
 			return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
 		}
 		const input = await body(event.request);
 		if (!input) return failure(400, 'INVALID_INPUT', 'Invalid request.');
 		if (op === 'patch')
-			return success({ rule: await rules.updateAutomationRule(db, org, id!, input) });
-		const principal = await resolvePrincipal(event.request.headers);
-		if (!principal) return failure(401, 'UNAUTHORIZED', 'Authentication required.');
+			return success({
+				rule: await authorized((tx) => rules.updateAutomationRule(tx, org, id!, input))
+			});
 		return success(
-			{ rule: await rules.createAutomationRule(db, org, principal.userId, input) },
+			{
+				rule: await authorized((tx) => rules.createAutomationRule(tx, org, principal.userId, input))
+			},
 			201
 		);
 	} catch (error) {
+		const revoked = actorAuthorizationFailure(error);
+		if (revoked) return revoked;
 		if (error instanceof AutomationRuleError) {
 			const status =
 				error.code === 'RULE_NOT_FOUND' ? 404 : error.code === 'RULE_LIMIT_REACHED' ? 409 : 400;

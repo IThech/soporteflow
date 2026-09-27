@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql, getTableColumns } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, sql, getTableColumns } from 'drizzle-orm';
 import { automationRules, automationExecutions, organizations } from '../db/schema';
 import { parseRule, validId, AutomationRuleError, type RuleInput } from '../../automation/rules';
 import type { IncidentDatabase } from './incidents';
@@ -188,7 +188,7 @@ export async function deleteOldAutomationExecutions(
 		const rows = await tx
 			.select({ id: e.id })
 			.from(e)
-			.where(sql`${e.status} IN ('succeeded','failed','skipped') AND ${e.completedAt} < ${before}`)
+			.where(and(inArray(e.status, ['succeeded', 'failed', 'skipped']), lt(e.completedAt, before)))
 			.orderBy(asc(e.completedAt), asc(e.id))
 			.limit(limit)
 			.for('update', { skipLocked: true });

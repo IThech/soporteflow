@@ -17,6 +17,8 @@ import {
 	readJsonObject,
 	requireCapability,
 	requireInvitationIssuer,
+	INVITATION_ISSUER_PERMISSIONS,
+	withActorAuthorization,
 	success,
 	toInvitationDto,
 	uuid
@@ -77,10 +79,23 @@ export const POST: RequestHandler = async (event) => {
 		const body = await readJsonObject(event.request, ['email', 'roleId']);
 		if (!body || typeof body.email !== 'string' || typeof body.roleId !== 'string')
 			return failure(400, 'INVALID_INPUT', 'Invalid request.');
-		const issued = await createInvitation(
+		// 5.4W-A (H1): issued inside a transaction that re-validates the actor after the
+		// organization lock; the email is sent only after that transaction committed.
+		const input = { email: body.email, roleId: body.roleId };
+		const issued = await withActorAuthorization(
 			db,
-			{ organizationId, actorUserId: principal.userId, actorPermissions: auth.actorPermissions },
-			{ email: body.email, roleId: body.roleId }
+			{
+				userId: principal.userId,
+				organizationId,
+				permissionIds: INVITATION_ISSUER_PERMISSIONS,
+				lock: 'update'
+			},
+			(tx, actorPermissions) =>
+				createInvitation(
+					tx,
+					{ organizationId, actorUserId: principal.userId, actorPermissions },
+					input
+				)
 		);
 		await deliverInvitation(getInvitationEmailSender(), issued);
 		return success({ invitation: toInvitationDto(issued.invitation) }, 201);

@@ -1,8 +1,17 @@
 import type { RequestEvent } from '@sveltejs/kit';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { WebhookServiceError } from '$lib/server/services/webhook-subscriptions';
+import { db } from '$lib/server/db';
+import { withActorAuthorization } from '$lib/server/auth/transactional-authorization';
+import type { AuthTransaction } from '$lib/server/auth/instance';
 import type { PermissionId } from '$lib/server/auth/permissions';
-import { failure, onlyKeys, requireCapability, uuid } from '../roles/http';
+import {
+	actorAuthorizationFailure,
+	failure,
+	onlyKeys,
+	requireCapability,
+	uuid
+} from '../roles/http';
 
 export { failure, success, uuid } from '../roles/http';
 
@@ -32,6 +41,26 @@ export async function webhookContext(
 	const principal = await resolvePrincipal(event.request.headers);
 	if (!principal) return { response: failure(401, 'UNAUTHORIZED', 'Authentication required.') };
 	return { organizationId, actorUserId: principal.userId };
+}
+
+/**
+ * 5.4W-A (H1): webhook mutations run in a transaction that re-validates webhooks:manage for the
+ * actor after locking the organization row (FOR SHARE: the services never lock it themselves).
+ */
+export function asWebhookManager<T>(
+	ctx: { organizationId: string; actorUserId: string },
+	run: (tx: AuthTransaction) => Promise<T>
+): Promise<T> {
+	return withActorAuthorization(
+		db,
+		{
+			userId: ctx.actorUserId,
+			organizationId: ctx.organizationId,
+			permissionIds: ['webhooks:manage'],
+			lock: 'share'
+		},
+		(tx) => run(tx)
+	);
 }
 
 /** Strict small JSON object body (application/json, ≤ 8 KB). null on any violation. */
@@ -69,6 +98,8 @@ export async function readWebhookJson(request: Request): Promise<Record<string, 
 
 /** Stable client messages; never SQL, stacks, secrets or key material. */
 export function webhookFailure(error: unknown): Response {
+	const revoked = actorAuthorizationFailure(error);
+	if (revoked) return revoked;
 	if (error instanceof WebhookServiceError) {
 		switch (error.code) {
 			case 'INVALID_INPUT':

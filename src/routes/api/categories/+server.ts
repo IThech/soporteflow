@@ -1,5 +1,6 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
+import { withActorAuthorization } from '$lib/server/auth/transactional-authorization';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import { createCategory, listCategories } from '$lib/server/services/categories';
@@ -84,10 +85,21 @@ export const POST: RequestHandler = async (event) => {
 		if ('description' in payload && !isDescription(payload.description))
 			return failure(400, 'INVALID_INPUT', 'description must be a string or null.');
 
-		const category = await createCategory(db, organizationId, {
-			name: payload.name,
-			...('description' in payload ? { description: payload.description } : {})
-		});
+		// 5.4W-A (H1): re-validated inside the transaction after the organization lock.
+		const category = await withActorAuthorization(
+			db,
+			{
+				userId: principal.userId,
+				organizationId,
+				permissionIds: ['categories:manage'],
+				lock: 'share'
+			},
+			(tx) =>
+				createCategory(tx, organizationId, {
+					name: payload.name,
+					...('description' in payload ? { description: payload.description } : {})
+				})
+		);
 		return success({ category: toCategoryDto(category) }, 201);
 	} catch (error) {
 		return categoryServiceFailure(error);

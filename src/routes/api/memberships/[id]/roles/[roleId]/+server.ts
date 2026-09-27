@@ -6,6 +6,7 @@ import {
 	failure,
 	onlyKeys,
 	requireDelegatingActor,
+	withActorAuthorization,
 	uuid
 } from '../../../http';
 
@@ -32,7 +33,14 @@ export const DELETE: RequestHandler = async (event) => {
 		if ('denied' in auth) return auth.denied;
 		if (!onlyKeys(params, ['organizationId']))
 			return failure(400, 'INVALID_INPUT', 'Invalid memberships query.');
-		await revokeRoleFromMembership(db, organizationId, membershipId, roleId, auth.actorPermissions);
+		// 5.4W-A (H1, confirmed on real PostgreSQL): authority and delegation re-read inside the
+		// transaction, after the organization lock; a demotion committed meanwhile is seen here.
+		await withActorAuthorization(
+			db,
+			{ userId: auth.userId, organizationId, permissionIds: ['roles:assign'], lock: 'update' },
+			(tx, actorPermissions) =>
+				revokeRoleFromMembership(tx, organizationId, membershipId, roleId, actorPermissions)
+		);
 		return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
 	} catch (error) {
 		return adminServiceFailure(error);

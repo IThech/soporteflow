@@ -19,7 +19,10 @@
 		"test:auth-config": "node --test tests/auth-config.test.mjs",
 		"test:auth-principal": "node --test tests/auth-principal.test.mjs",
 		"test:auth-authorization": "node --test tests/auth-authorization.test.mjs",
-		"test:auth-provisioning": "node --test tests/auth-provisioning.test.mjs"
+		"test:auth-provisioning": "node --test tests/auth-provisioning.test.mjs",
+		"test:concurrency": "node tests/concurrency/run.mjs",
+		"test:concurrency:migrate": "node tests/concurrency/migrate.mjs",
+		"test:concurrency:reset": "node tests/concurrency/migrate.mjs --reset-lab-database"
 	},
 	"devDependencies": {
 		"@electric-sql/pglite": "^0.5.8",

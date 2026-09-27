@@ -10,13 +10,17 @@ export {
 	requireCapability,
 	roleServiceFailure as adminServiceFailure,
 	success,
-	uuid
+	uuid,
+	requireActor,
+	withActorAuthorization
 } from '../roles/http';
 
 /**
  * Issuing an invitation (create or resend) is a deferred role assignment, so it requires
  * invitations:create AND roles:assign, plus the actor's effective permissions for monotonic
  * delegation of the invited role (checked by the service). Never decided by role code.
+ * Pre-check only: the issuing transaction re-validates both permissions and re-reads the actor's
+ * capabilities (INVITATION_ISSUER_PERMISSIONS + withActorAuthorization, 5.4W-A H1).
  */
 export async function requireInvitationIssuer(
 	headers: Headers,
@@ -28,6 +32,9 @@ export async function requireInvitationIssuer(
 		return { denied: failure(403, 'FORBIDDEN', 'Permission denied.') };
 	return auth;
 }
+
+/** Permissions re-validated inside the issuing transaction (create and resend). */
+export const INVITATION_ISSUER_PERMISSIONS = ['invitations:create', 'roles:assign'] as const;
 
 /** Explicit allowlist: never token, token hash, organizationId or auth/session data. */
 export function toInvitationDto(invitation: InvitationRecord) {

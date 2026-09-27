@@ -51,6 +51,19 @@ async function membership(
 		? await resolveTransactionPrincipal(headers, tx)
 		: await resolvePrincipal(headers);
 	if (!principal || !validId(principal.userId)) return null;
+	return membershipForUser(principal.userId, organizationId, tx);
+}
+
+/**
+ * Active user + active membership + active organization for a known user id. Inside a
+ * transaction the rows are read FOR SHARE, so they cannot change until that transaction ends.
+ */
+async function membershipForUser(
+	userId: string,
+	organizationId: string,
+	tx?: AuthTransaction
+): Promise<OrganizationMembership | null> {
+	if (!validId(userId) || !validId(organizationId)) return null;
 	const query = (tx ?? getDb())
 		.select({ userId: users.id, organizationId: organizations.id, membershipId: memberships.id })
 		.from(memberships)
@@ -59,7 +72,7 @@ async function membership(
 		.where(
 			and(
 				eq(memberships.organizationId, organizationId),
-				eq(memberships.userId, principal.userId),
+				eq(memberships.userId, userId),
 				eq(users.active, true),
 				eq(memberships.active, true),
 				eq(organizations.status, 'active')
@@ -183,6 +196,22 @@ async function grants(
 	}
 	return result;
 }
+/**
+ * 5.4W-A (H1): the actor's grants read INSIDE a mutation transaction, for a principal already
+ * authenticated by the HTTP layer. Same rules as authorizeAction (active user, membership and
+ * organization; grants only from active roles of this tenant; allowed scopes) but on `tx` with
+ * FOR SHARE locks, so the decision is coherent with the state the mutation commits against.
+ * null when the membership/user/organization is not active. Used by transactional-authorization.
+ */
+export async function organizationGrantsInTransaction(
+	tx: AuthTransaction,
+	userId: string,
+	organizationId: string
+): Promise<PermissionGrant[] | null> {
+	const context = await membershipForUser(userId, organizationId, tx);
+	return context ? grants(context, undefined, tx) : null;
+}
+
 /** Informational grants, never a reusable authorization token or cached decision. */
 export async function resolveOrganizationPermissions(
 	headers: Headers,

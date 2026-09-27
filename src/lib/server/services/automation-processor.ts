@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, sql, asc } from 'drizzle-orm';
+import { and, eq, or, lte, asc } from 'drizzle-orm';
 import {
 	automationExecutions as executions,
 	automationRules,
@@ -82,7 +82,13 @@ export async function processAutomationExecutions(
 			.select()
 			.from(executions)
 			.where(
-				sql`${executions.status} = 'pending' OR (${executions.status} = 'processing' AND ${executions.leaseUntil} <= ${now})`
+				// Typed operators: the Date goes through the column mapper. Interpolating a JS Date in a raw
+				// sql template hands it to postgres-js unconverted (drizzle installs pass-through timestamp
+				// serializers) and fails on real PostgreSQL (5.4W-A) even though PGlite accepts it.
+				or(
+					eq(executions.status, 'pending'),
+					and(eq(executions.status, 'processing'), lte(executions.leaseUntil, now))
+				)
 			)
 			.orderBy(asc(executions.createdAt), asc(executions.sortOrder), asc(executions.id))
 			.limit(limit)

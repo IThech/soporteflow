@@ -8,6 +8,7 @@ import {
 	type NotificationDeliveryErrorCode
 } from '../db/schema';
 import {
+	NotificationEmailError,
 	TRANSIENT_EMAIL_ERROR_CODES,
 	getNotificationEmailSender,
 	type NotificationEmailErrorCode,
@@ -42,6 +43,12 @@ export const NOTIFICATION_DELIVERY_RETRY_DELAYS_MS: readonly number[] = Object.f
 ]);
 /** How long a claim is owned before another processor may take it again. */
 export const NOTIFICATION_DELIVERY_LEASE_MS = 5 * 60_000;
+/**
+ * 5.4W-A (H2): upper bound for one provider call. Adapters should enforce their own shorter
+ * timeout; this guard keeps a hung adapter from holding a batch (and outliving its lease). A timed
+ * out send is transient (NETWORK_ERROR): the provider may still deliver it (at-least-once).
+ */
+export const NOTIFICATION_EMAIL_SEND_TIMEOUT_MS = 30_000;
 export const NOTIFICATION_DELIVERY_DEFAULT_LIMIT = 25;
 export const NOTIFICATION_DELIVERY_MAX_LIMIT = 100;
 
@@ -387,14 +394,65 @@ export interface ProcessNotificationDeliveriesResult {
 }
 
 /**
+ * 5.4W-A (H2): atomically re-asserts ownership right before the provider call and restarts the
+ * lease from the worker's current time, so an item claimed in a long sequential batch cannot be
+ * sent by this worker after another worker reclaimed it. Guarded by the lease token only (see
+ * renewWebhookLease for the reasoning).
+ */
+export async function renewDeliveryLease(db: IncidentDatabase, ref: LeaseRef): Promise<boolean> {
+	const where = leased(ref);
+	const rows = await db
+		.update(notificationDeliveries)
+		.set({
+			nextAttemptAt: new Date(ref.now.getTime() + NOTIFICATION_DELIVERY_LEASE_MS),
+			updatedAt: ref.now
+		})
+		.where(where)
+		.returning({ id: notificationDeliveries.id });
+	return rows.length === 1;
+}
+
+async function sendWithTimeout(
+	sender: NotificationEmailSender,
+	message: Parameters<NotificationEmailSender['sendNotification']>[0],
+	timeoutMs: number
+) {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			sender.sendNotification(message),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() => reject(new NotificationEmailError('NETWORK_ERROR', 'send timeout')),
+					timeoutMs
+				);
+			})
+		]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
  * Entry point for a future scheduler (no cron here). Claims due deliveries, then sends each one
- * outside any transaction and records the outcome. Bounded per call (default 25, max 100).
+ * outside any transaction and records the outcome. Bounded per call (default 25, max 100); each
+ * provider call is bounded (NOTIFICATION_EMAIL_SEND_TIMEOUT_MS) and preceded by a lease renewal.
  */
 export async function processDueNotificationDeliveries(
 	db: IncidentDatabase,
-	options: { limit?: number; now?: Date; sender?: NotificationEmailSender } = {}
+	options: {
+		limit?: number;
+		now?: Date;
+		sender?: NotificationEmailSender;
+		sendTimeoutMs?: number;
+		/** Monotonic clock (ms) used to advance the worker's logical time; defaults to performance.now. */
+		clock?: () => number;
+	} = {}
 ): Promise<ProcessNotificationDeliveriesResult> {
 	const now = options.now ?? new Date();
+	const clock = options.clock ?? (() => performance.now());
+	const batchStart = clock();
+	const current = () => new Date(now.getTime() + Math.max(0, clock() - batchStart));
 	const sender = options.sender ?? getNotificationEmailSender();
 	const claimed = await claimDueDeliveries(db, { now, limit: options.limit });
 	const result: ProcessNotificationDeliveriesResult = {
@@ -415,13 +473,18 @@ export async function processDueNotificationDeliveries(
 			result[ok ? 'failed' : 'leaseLost']++;
 			continue;
 		}
+		// H2: never send an item whose lease another worker may have taken over.
+		if (!(await renewDeliveryLease(db, { ...ref, now: current() }))) {
+			result.leaseLost++;
+			continue;
+		}
 		let providerMessageId: string | null;
 		try {
-			const sent = await sender.sendNotification({
-				to: recipient.email,
-				subject: toEmailSubject(delivery.title),
-				text: delivery.message
-			});
+			const sent = await sendWithTimeout(
+				sender,
+				{ to: recipient.email, subject: toEmailSubject(delivery.title), text: delivery.message },
+				options.sendTimeoutMs ?? NOTIFICATION_EMAIL_SEND_TIMEOUT_MS
+			);
 			providerMessageId =
 				sent && typeof sent.providerMessageId === 'string' ? sent.providerMessageId : null;
 		} catch (error) {

@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { IncidentServiceError } from '$lib/server/services/incidents';
+import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
 import type { SiteRecord } from '$lib/server/services/sites';
 
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -49,6 +50,8 @@ export async function readJsonObject(
 
 /** Maps service errors to stable client messages; never forwards driver or SQL details. */
 export function siteServiceFailure(error: unknown) {
+	// 5.4W-A: authority lost between the pre-check and the in-transaction re-validation
+	if (isActorAuthorizationError(error)) return failure(403, 'FORBIDDEN', 'Permission denied.');
 	if (error instanceof IncidentServiceError) {
 		if (error.code === 'INVALID_INPUT') return failure(400, 'INVALID_INPUT', error.message + '.');
 		if (error.code === 'SITE_NOT_FOUND') return failure(404, 'SITE_NOT_FOUND', 'Site not found.');
