@@ -593,12 +593,14 @@ test('SoporteFlow — Etapa 5.4P-C: categorías reales en incidencias', async (t
 			(await change(own, { categoryId: hardware.id }, { cookie: editOwn.cookie })).status,
 			200
 		);
-		for (const [who, assignee] of [
-			[editOwn, otherTech.user.id],
-			[editOwn, null],
-			[editNone, null],
-			[viewer, null],
-			[catalogManager, null]
+		// 5.4W-B: an incident outside the caller's read scope reads as missing (404); a missing
+		// capability stays 403.
+		for (const [who, assignee, expected] of [
+			[editOwn, otherTech.user.id, 404],
+			[editOwn, null, 404],
+			[editNone, null, 403],
+			[viewer, null, 403],
+			[catalogManager, null, 403]
 		]) {
 			const target = await incident();
 			if (assignee)
@@ -608,7 +610,7 @@ test('SoporteFlow — Etapa 5.4P-C: categorías reales en incidencias', async (t
 					.where(eq(s.incidents.id, target.id));
 			const before = await snapshot(target);
 			const res = await change(target, { categoryId: hardware.id }, { cookie: who.cookie });
-			assert.equal(res.status, 403);
+			assert.equal(res.status, expected);
 			assert.deepEqual(await snapshot(target), before);
 		}
 		for (const cookie of ['', createTamperedCookie()])

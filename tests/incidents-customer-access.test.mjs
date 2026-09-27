@@ -370,11 +370,16 @@ test('SoporteFlow — Etapa 5.4S-B: acceso Customer por incidents:view_requested
 			const ok = await detail(cust1, A.org, own1.id);
 			assert.equal(ok.status, 200);
 			assert.equal(ok.json.incident.id, own1.id);
-			assert.equal(ok.json.incident.createdByUserId, tech.user.id);
+			// 5.4W-B: requester projection; the creator (a technician here) is never exposed
+			assert.equal(ok.json.incident.audience, 'requester');
+			assert.equal('createdByUserId' in ok.json.incident, false);
+			assert.equal('assignedToUserId' in ok.json.incident, false);
+			const missing = await detail(cust1, A.org, randomUUID());
 			for (const id of [other.id, nullClient.id, createdForOther.id, assignedToMulti.id]) {
+				// 5.4W-B: outside the read scope -> indistinguishable from missing
 				const res = await detail(cust1, A.org, id);
-				assert.equal(res.status, 403, id);
-				assert.deepEqual(res.json, { error: { code: 'FORBIDDEN', message: 'Permission denied.' } });
+				assert.equal(res.status, 404, id);
+				assert.deepEqual(res.json, missing.json);
 			}
 			assert.equal((await detail(cust2, A.org, createdForOther.id)).status, 200);
 			assert.equal((await detail(cust1, A.org, closedOwn.id)).status, 200, 'cerrada: legible');
@@ -396,7 +401,7 @@ test('SoporteFlow — Etapa 5.4S-B: acceso Customer por incidents:view_requested
 	await t.test('38. detalle multi-rol: asignada y solicitada, sin view_all', async () => {
 		assert.equal((await detail(multi, A.org, assignedToMulti.id)).status, 200);
 		assert.equal((await detail(multi, A.org, requestedByMulti.id)).status, 200);
-		assert.equal((await detail(multi, A.org, own1.id)).status, 403);
+		assert.equal((await detail(multi, A.org, own1.id)).status, 404);
 		assert.equal((await detail(admin, A.org, own1.id)).status, 200, 'Admin: view_all domina');
 	});
 
@@ -424,8 +429,8 @@ test('SoporteFlow — Etapa 5.4S-B: acceso Customer por incidents:view_requested
 		'34. comentarios: nunca en incidencia ajena, null, de otro tenant; cerrada 409',
 		async () => {
 			for (const id of [other.id, nullClient.id, createdForOther.id]) {
-				assert.equal((await comments(cust1, A.org, id)).status, 403, id);
-				assert.equal((await comments(cust1, A.org, id, 'intruso')).status, 403, id);
+				assert.equal((await comments(cust1, A.org, id)).status, 404, id);
+				assert.equal((await comments(cust1, A.org, id, 'intruso')).status, 404, id);
 			}
 			assert.equal((await comments(cust1, A.org, foreign.id)).status, 404);
 			assert.equal((await comments(cust1, A.org, foreign.id, 'x')).status, 404);
@@ -444,7 +449,7 @@ test('SoporteFlow — Etapa 5.4S-B: acceso Customer por incidents:view_requested
 	await t.test('34. multi-rol comenta en asignada y solicitada', async () => {
 		assert.equal((await comments(multi, A.org, assignedToMulti.id, 'a')).status, 201);
 		assert.equal((await comments(multi, A.org, requestedByMulti.id, 'b')).status, 201);
-		assert.equal((await comments(multi, A.org, own1.id, 'c')).status, 403);
+		assert.equal((await comments(multi, A.org, own1.id, 'c')).status, 404);
 	});
 
 	// =====================================================================
@@ -530,8 +535,14 @@ test('SoporteFlow — Etapa 5.4S-B: acceso Customer por incidents:view_requested
 		async () => {
 			const res = await create(cust1);
 			assert.equal(res.status, 201);
-			assert.equal(res.json.incident.createdByUserId, cust1.user.id);
+			assert.equal(res.json.incident.audience, 'requester');
+			assert.equal('createdByUserId' in res.json.incident, false);
 			assert.equal(res.json.incident.clientUserId, cust1.user.id);
+			const [stored] = await db
+				.select()
+				.from(s.incidents)
+				.where(eq(s.incidents.id, res.json.incident.id));
+			assert.equal(stored.createdByUserId, cust1.user.id);
 			assert.equal((await detail(cust1, A.org, res.json.incident.id)).status, 200);
 			const self = await create(cust1, { clientUserId: cust1.user.id });
 			assert.equal(self.status, 201);

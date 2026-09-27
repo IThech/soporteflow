@@ -4,10 +4,13 @@ import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import {
 	incidentMutationFailure,
-	resolveIncidentMutationAccess
+	resolveIncidentMutationAccess,
+	requireMutationScope,
+	withIncidentActor
 } from '$lib/server/auth/incident-access';
 import { assignIncidentRecord, IncidentServiceError } from '$lib/server/services/incidents';
-import { withSlaCompliance } from '$lib/server/services/sla-compliance';
+import { toIncidentDto } from '$lib/server/services/incident-dto';
+import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -184,24 +187,35 @@ export const POST: RequestHandler = async (event) => {
 
 	// 10. Execute assignIncidentRecord
 	try {
-		const result = await assignIncidentRecord(
+		const result = await withIncidentActor(
 			db,
-			{ organizationId, actorUserId: principal.userId, access },
-			incidentId,
-			{
-				teamId: body.teamId as string | null | undefined,
-				assignedToUserId: body.assignedToUserId as string | null | undefined,
-				reason: body.reason as string | undefined
-			}
+			{ userId: principal.userId, organizationId, permissionIds: ['incidents:assign'] },
+			(tx, scope) =>
+				assignIncidentRecord(
+					tx,
+					{
+						organizationId,
+						actorUserId: principal.userId,
+						access: requireMutationScope(scope),
+						readAccess: scope.read ?? undefined
+					},
+					incidentId,
+					{
+						teamId: body.teamId as string | null | undefined,
+						assignedToUserId: body.assignedToUserId as string | null | undefined,
+						reason: body.reason as string | undefined
+					}
+				)
 		);
 
 		return json(
 			{
-				incident: withSlaCompliance(result.incident)
+				incident: toIncidentDto(result.incident, 'staff')
 			},
 			{ status: 200 }
 		);
 	} catch (err: unknown) {
+		if (isActorAuthorizationError(err)) return incidentMutationFailure('ACTOR_NOT_AUTHORIZED')!;
 		if (err instanceof IncidentServiceError) {
 			if (err.code === 'INCIDENT_NOT_FOUND') {
 				return json(

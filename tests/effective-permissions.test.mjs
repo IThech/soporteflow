@@ -491,17 +491,32 @@ test('SoporteFlow — Etapa 5.4Q-D: permisos efectivos, /api/me y history view_o
 		// notas: permiso propio e independiente; view_own/view_all no bastan
 		assert.equal(await call(notesGET, 'internal-notes', ownTech), 403);
 		assert.equal(await call(notesGET, 'internal-notes', await member(A.org, [A.tech])), 200);
+		// 5.4W-B (B-1): el permiso de notas no amplía el alcance de incidencias; exige además
+		// view_all o view_own sobre una incidencia asignada
 		assert.equal(
 			await call(
 				notesGET,
 				'internal-notes',
 				await member(A.org, [await customRole(A.org, ['incidents:view_internal_notes'])])
 			),
-			200
+			403
 		);
-		// comentarios: acceso a la incidencia (view_own asignada sí)
+		const notesOwn = await member(A.org, [
+			await customRole(A.org, ['incidents:view_internal_notes', 'incidents:view_own'])
+		]);
+		assert.equal(await call(notesGET, 'internal-notes', notesOwn), 404, 'no asignada');
+		await db
+			.update(s.incidents)
+			.set({ assignedToUserId: notesOwn.user.id })
+			.where(eq(s.incidents.id, target.id));
+		assert.equal(await call(notesGET, 'internal-notes', notesOwn), 200, 'asignada');
+		await db
+			.update(s.incidents)
+			.set({ assignedToUserId: ownTech.user.id })
+			.where(eq(s.incidents.id, target.id));
+		// comentarios: acceso a la incidencia (view_own asignada sí; ajena 404 desde 5.4W-B)
 		assert.equal(await call(commentsGET, 'comments', ownTech), 200);
-		assert.equal(await call(commentsGET, 'comments', otherTech), 403);
+		assert.equal(await call(commentsGET, 'comments', otherTech), 404);
 	});
 
 	// =========================================================================

@@ -4,10 +4,15 @@ import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import {
 	canAccessIncident,
+	incidentAudience,
 	incidentMutationFailure,
+	requireMutationScope,
 	resolveIncidentAccess,
-	resolveIncidentMutationAccess
+	resolveIncidentMutationAccess,
+	withIncidentActor
 } from '$lib/server/auth/incident-access';
+import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
+import { toIncidentDto } from '$lib/server/services/incident-dto';
 import {
 	getIncidentById,
 	updateIncidentRecord,
@@ -15,7 +20,6 @@ import {
 	type IncidentStatus,
 	type IncidentPriority
 } from '$lib/server/services/incidents';
-import { withSlaCompliance } from '$lib/server/services/sla-compliance';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -103,23 +107,24 @@ export const GET: RequestHandler = async (event) => {
 			);
 		}
 
-		// 7. view_own only grants access to incidents assigned to the principal
+		// 7. 5.4W-B: an incident outside the caller's read scope is indistinguishable from a missing
+		// one (404), exactly like history, comments and the list.
 		if (!canAccessIncident(access, result.incident)) {
 			return json(
 				{
 					error: {
-						code: 'FORBIDDEN',
-						message: 'Permission denied.'
+						code: 'INCIDENT_NOT_FOUND',
+						message: 'Incident not found.'
 					}
 				},
-				{ status: 403 }
+				{ status: 404 }
 			);
 		}
 
-		// 8. Success response
+		// 8. Success response: canonical projection for the caller's audience (5.4W-B)
 		return json(
 			{
-				incident: withSlaCompliance(result.incident)
+				incident: toIncidentDto(result.incident, incidentAudience(access, result.incident))
 			},
 			{ status: 200 }
 		);
@@ -305,25 +310,38 @@ export const PATCH: RequestHandler = async (event) => {
 		);
 	}
 
-	// 8. Execute updateIncidentRecord
+	// 8. Execute updateIncidentRecord. 5.4W-B: capabilities re-validated inside the transaction
+	// (organization FOR SHARE -> actor -> incident FOR UPDATE); the pre-check above only answers
+	// early. Staff audience: only view_all or the assignee can mutate.
 	try {
-		const result = await updateIncidentRecord(
+		const result = await withIncidentActor(
 			db,
-			{ organizationId, actorUserId: principal.userId, access },
-			incidentId,
-			{
-				status: body.status as IncidentStatus | undefined,
-				priority: body.priority as IncidentPriority | undefined
-			}
+			{ userId: principal.userId, organizationId, permissionIds: ['incidents:edit'] },
+			(tx, scope) =>
+				updateIncidentRecord(
+					tx,
+					{
+						organizationId,
+						actorUserId: principal.userId,
+						access: requireMutationScope(scope),
+						readAccess: scope.read ?? undefined
+					},
+					incidentId,
+					{
+						status: body.status as IncidentStatus | undefined,
+						priority: body.priority as IncidentPriority | undefined
+					}
+				)
 		);
 
 		return json(
 			{
-				incident: withSlaCompliance(result.incident)
+				incident: toIncidentDto(result.incident, 'staff')
 			},
 			{ status: 200 }
 		);
 	} catch (err: unknown) {
+		if (isActorAuthorizationError(err)) return incidentMutationFailure('ACTOR_NOT_AUTHORIZED')!;
 		if (err instanceof IncidentServiceError) {
 			if (err.code === 'INCIDENT_NOT_FOUND') {
 				return json(

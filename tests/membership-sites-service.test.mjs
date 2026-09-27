@@ -398,7 +398,8 @@ test('SoporteFlow — Etapa 5.4O-D: membership_sites (pertenencia operativa)', a
 				params: { id: incident.id },
 				request: new Request(url, { headers: { cookie: session.cookieHeader } })
 			});
-			assert.equal(detail.status, 403);
+			// 5.4W-B: fuera del alcance de lectura -> 404
+			assert.equal(detail.status, 404);
 			const listUrl = new URL(
 				`http://localhost/api/incidents?organizationId=${orgA.id}&queue=mine`
 			);

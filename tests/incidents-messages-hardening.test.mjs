@@ -188,9 +188,10 @@ test('SoporteFlow — Etapa 5.4N-E: hardening de mensajes de incidencias', async
 		const expectations = [
 			// [actor, target, GET comments, POST comments]
 			[commentOnly, main, 403, 403], // 3, 8: add_comment sin acceso ni lectura
-			[ownTech, otherAssigned, 403, 403], // 4
-			[ownTech, unassigned, 403, 403], // 5
-			[client, requested, 403, 403], // 6
+			// 5.4W-B: con alcance de lectura pero fuera de él -> 404 (indistinguible de inexistente)
+			[ownTech, otherAssigned, 404, 404], // 4
+			[ownTech, unassigned, 404, 404], // 5
+			[client, requested, 404, 404], // 6
 			[reader, main, 200, 403], // 7: view_all no concede add_comment
 			[ownTech, ownAssigned, 200, 201]
 		];
@@ -769,7 +770,8 @@ test('SoporteFlow — Etapa 5.4N-E: hardening de mensajes de incidencias', async
 			headers: spoof,
 			body: { body: 'x' }
 		});
-		assert.equal(res.status, 403);
+		// 5.4W-B: sigue siendo ownTech -> la incidencia no asignada queda fuera de su alcance (404)
+		assert.equal(res.status, 404);
 		const ok = await call(comments, 'POST', {
 			id: ownAssigned.id,
 			cookie: ownTech.cookie,

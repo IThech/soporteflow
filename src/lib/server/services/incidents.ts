@@ -174,7 +174,8 @@ async function lockIncidentForMutation(
 	organizationId: string,
 	incidentId: string,
 	access: IncidentAccess | undefined,
-	rejectClosed = true
+	rejectClosed = true,
+	readAccess?: IncidentAccess
 ): Promise<IncidentRecord> {
 	const [incident] = await tx
 		.select()
@@ -186,6 +187,10 @@ async function lockIncidentForMutation(
 		throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
 	}
 	if (!incidentAccessAllows(access, incident)) {
+		// 5.4W-B: outside the caller's read scope -> same answer as a missing incident (no
+		// enumeration); visible but not mutable by this caller -> access denied (403).
+		if (readAccess !== undefined && !incidentAccessAllows(readAccess, incident))
+			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
 		throw new IncidentServiceError('INCIDENT_ACCESS_DENIED', 'Incident access denied');
 	}
 	if (rejectClosed && incident.status === 'closed') {
@@ -286,6 +291,8 @@ export interface ChangeIncidentSlaContext {
 	readonly actorUserId: string;
 	/** Mutation access (view_all / view_own; never the requester scope). */
 	readonly access?: IncidentAccess;
+	/** 5.4W-B: caller read scope, to answer 404 (not visible) instead of 403 (not mutable). */
+	readonly readAccess?: IncidentAccess;
 }
 
 /**
@@ -329,7 +336,9 @@ export async function changeIncidentSla(
 			tx,
 			context.organizationId,
 			incidentId,
-			context.access
+			context.access,
+			true,
+			context.readAccess
 		);
 		if (current.slaPolicyId === input.slaPolicyId) return { incident: current, changed: false };
 		const sla = await resolveSlaPolicyForIncident(tx, context.organizationId, input.slaPolicyId);
@@ -1023,6 +1032,8 @@ export interface UpdateIncidentContext {
 	readonly organizationId: string;
 	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
+	/** 5.4W-B: caller read scope, to answer 404 (not visible) instead of 403 (not mutable). */
+	readonly readAccess?: IncidentAccess;
 }
 
 export interface UpdateIncidentInput {
@@ -1129,7 +1140,8 @@ export async function updateIncidentRecord(
 			context.organizationId,
 			incidentId,
 			context.access,
-			false
+			false,
+			context.readAccess
 		);
 
 		const currentStatus = currentIncident.status as IncidentStatus;
@@ -1464,6 +1476,8 @@ export interface AssignIncidentContext {
 	readonly organizationId: string;
 	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
+	/** 5.4W-B: caller read scope, to answer 404 (not visible) instead of 403 (not mutable). */
+	readonly readAccess?: IncidentAccess;
 }
 
 export interface AssignIncidentInput {
@@ -1585,7 +1599,9 @@ export async function assignIncidentRecord(
 			tx,
 			context.organizationId,
 			incidentId,
-			context.access
+			context.access,
+			true,
+			context.readAccess
 		);
 
 		// D. Determine target teamId and validate team if not null
@@ -1830,6 +1846,8 @@ export interface UpdateIncidentSupportLevelContext {
 	readonly organizationId: string;
 	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
+	/** 5.4W-B: caller read scope, to answer 404 (not visible) instead of 403 (not mutable). */
+	readonly readAccess?: IncidentAccess;
 }
 
 export interface UpdateIncidentSupportLevelInput {
@@ -1944,7 +1962,9 @@ export async function updateIncidentSupportLevel(
 			tx,
 			context.organizationId,
 			incidentId,
-			context.access
+			context.access,
+			true,
+			context.readAccess
 		);
 
 		// D. No-op handling: if supportLevel is unchanged, return current incident without modifying DB
@@ -2021,6 +2041,8 @@ export interface ChangeIncidentSiteContext {
 	readonly organizationId: string;
 	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
+	/** 5.4W-B: caller read scope, to answer 404 (not visible) instead of 403 (not mutable). */
+	readonly readAccess?: IncidentAccess;
 }
 
 export interface ChangeIncidentSiteInput {
@@ -2121,7 +2143,9 @@ export async function changeIncidentSite(
 			tx,
 			context.organizationId,
 			incidentId,
-			context.access
+			context.access,
+			true,
+			context.readAccess
 		);
 
 		// D. No-op: same site (or null -> null)
@@ -2195,6 +2219,8 @@ export interface ChangeIncidentCategoryContext {
 	readonly organizationId: string;
 	readonly actorUserId: string | null;
 	readonly access?: IncidentAccess;
+	/** 5.4W-B: caller read scope, to answer 404 (not visible) instead of 403 (not mutable). */
+	readonly readAccess?: IncidentAccess;
 }
 
 export interface ChangeIncidentCategoryInput {
@@ -2297,7 +2323,9 @@ export async function changeIncidentCategory(
 			tx,
 			context.organizationId,
 			incidentId,
-			context.access
+			context.access,
+			true,
+			context.readAccess
 		);
 
 		// D. No-op: same category (or null -> null)

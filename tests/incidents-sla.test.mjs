@@ -317,13 +317,17 @@ test('SoporteFlow — Etapa 5.4T-B: SLA aplicado a incidencias', async (t) => {
 		async () => {
 			const res = await create(customer, A.org);
 			assert.equal(res.status, 201, res.text);
-			const inc = res.json.incident;
+			// 5.4W-B: el Customer recibe la proyección de solicitante (sin configuración SLA); el
+			// snapshot se comprueba en BD.
+			assert.equal(res.json.incident.audience, 'requester');
+			assert.equal('slaPolicyId' in res.json.incident, false);
+			const inc = await row(res.json.incident.id);
 			assert.equal(inc.slaPolicyId, defaultA.id);
 			assert.equal(inc.slaFirstResponseMinutes, 60);
 			assert.equal(inc.slaResolutionMinutes, 480);
-			assert.equal(inc.slaAppliedAt, inc.createdAt, 'aplicada en la creación');
-			assert.equal(inc.firstResponseDueAt, iso(Date.parse(inc.createdAt) + 60 * MIN));
-			assert.equal(inc.resolutionDueAt, iso(Date.parse(inc.createdAt) + 480 * MIN));
+			assert.equal(inc.slaAppliedAt.getTime(), inc.createdAt.getTime(), 'aplicada en la creación');
+			assert.equal(inc.firstResponseDueAt.getTime(), inc.createdAt.getTime() + 60 * MIN);
+			assert.equal(inc.resolutionDueAt.getTime(), inc.createdAt.getTime() + 480 * MIN);
 			assert.equal(inc.firstResponseAt, null);
 		}
 	);
@@ -494,13 +498,13 @@ test('SoporteFlow — Etapa 5.4T-B: SLA aplicado a incidencias', async (t) => {
 				(await changeSla(noAssign, A.org, own.id, { slaPolicyId: premiumA.id })).status,
 				403
 			);
-			// sla:assign sin acceso de mutación a esa incidencia (view_own, no asignada)
+			// sla:assign sin acceso a esa incidencia (view_own, no asignada): 5.4W-B -> 404
 			const ownScope = await member(A.org, [
 				await rawRole(A.org, ['sla:assign', 'incidents:view_own'])
 			]);
 			assert.equal(
 				(await changeSla(ownScope, A.org, own.id, { slaPolicyId: premiumA.id })).status,
-				403
+				404
 			);
 			assert.equal((await changeSla(null, A.org, own.id, { slaPolicyId: null })).status, 401);
 			const before = await row(own.id);
@@ -712,11 +716,16 @@ test('SoporteFlow — Etapa 5.4T-B: SLA aplicado a incidencias', async (t) => {
 			const inc = (await create(customer, A.org)).json.incident;
 			const d = await detail(customer, A.org, inc.id);
 			assert.equal(d.status, 200);
-			assert.equal(d.json.incident.slaPolicyId, defaultA.id);
-			assert.equal(d.json.incident.firstResponseDueAt, inc.firstResponseDueAt);
+			// 5.4W-B: el Customer ve el cumplimiento SLA, no la configuración (política, plazos)
+			assert.equal(d.json.incident.slaOverallStatus, 'on_track');
+			for (const key of ['slaPolicyId', 'firstResponseDueAt', 'resolutionDueAt'])
+				assert.equal(key in d.json.incident, false, key);
+			assert.ok(!d.text.includes(defaultA.id));
 			const l = await list(customer, A.org);
 			const item = l.json.incidents.find((i) => i.id === inc.id);
-			assert.equal(item.resolutionDueAt, inc.resolutionDueAt);
+			assert.equal(item.audience, 'requester');
+			assert.equal(item.slaOverallStatus, 'on_track');
+			assert.equal('resolutionDueAt' in item, false);
 			assert.ok(!l.text.includes(policyB.id), 'nada de otro tenant');
 			const staff = await list(admin, A.org, '&queue=all');
 			assert.ok(staff.json.incidents.every((i) => 'firstResponseAt' in i && 'slaPolicyId' in i));

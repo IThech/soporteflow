@@ -15,6 +15,13 @@ const SLA_OVERALL_STATUSES: readonly SlaOverallStatus[] = [
 ];
 
 export interface IncidentListItem {
+	/**
+	 * 5.4W-B: 'requester' for the customer projection (incident visible only through
+	 * incidents:view_requested): internal fields are then null because the server never sends them
+	 * (assignment, team, support level, SLA configuration, creator, legacy client label); the SLA
+	 * compliance statuses are part of the customer projection.
+	 */
+	audience: 'staff' | 'requester';
 	id: string;
 	organizationId: string;
 	incidentNumber: number;
@@ -22,10 +29,10 @@ export interface IncidentListItem {
 	description: string;
 	status: 'open' | 'pending' | 'resolved' | 'closed';
 	priority: 'low' | 'medium' | 'high' | 'urgent';
-	supportLevel: 'N1' | 'N2' | 'N3';
-	client: string;
+	supportLevel: 'N1' | 'N2' | 'N3' | null;
+	client: string | null;
 	clientUserId: string | null;
-	createdByUserId: string;
+	createdByUserId: string | null;
 	siteId: string | null;
 	assignedToUserId: string | null;
 	assignedToUserName?: string | null;
@@ -394,6 +401,97 @@ function normalizeSlaStatuses(item: Record<string, unknown>): boolean {
 	return keys.every((key) => (item[key] === 'not_applicable') === !hasSla);
 }
 
+const REQUESTER_KEYS = new Set([
+	'audience',
+	'id',
+	'organizationId',
+	'incidentNumber',
+	'title',
+	'description',
+	'status',
+	'priority',
+	'clientUserId',
+	'siteId',
+	'categoryId',
+	'slaOverallStatus',
+	'slaFirstResponseStatus',
+	'slaResolutionStatus',
+	'createdAt',
+	'updatedAt'
+]);
+
+/**
+ * 5.4W-B customer projection: strict allowlist (an unexpected key, e.g. an internal field, is an
+ * invalid payload), then the internal fields of IncidentListItem are filled with null /
+ * not_applicable so components can render it without special cases.
+ */
+function parseRequesterIncident(
+	item: Record<string, unknown>,
+	expectedOrgId: string,
+	expectedIncidentId: string | undefined,
+	status: number
+): IncidentListItem {
+	const invalid = () =>
+		new IncidentApiError(
+			status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	if (Object.keys(item).some((key) => !REQUESTER_KEYS.has(key))) throw invalid();
+	if (
+		typeof item.id !== 'string' ||
+		item.organizationId !== expectedOrgId ||
+		(expectedIncidentId !== undefined && item.id !== expectedIncidentId) ||
+		typeof item.incidentNumber !== 'number' ||
+		typeof item.title !== 'string' ||
+		typeof item.description !== 'string' ||
+		!['open', 'pending', 'resolved', 'closed'].includes(item.status as string) ||
+		!['low', 'medium', 'high', 'urgent'].includes(item.priority as string) ||
+		!(item.clientUserId === null || typeof item.clientUserId === 'string') ||
+		!(item.siteId === null || typeof item.siteId === 'string') ||
+		!isValidIncidentCategoryId(item.categoryId) ||
+		!SLA_OVERALL_STATUSES.includes(item.slaOverallStatus as SlaOverallStatus) ||
+		!SLA_OBJECTIVE_STATUSES.includes(item.slaFirstResponseStatus as SlaObjectiveStatus) ||
+		!SLA_OBJECTIVE_STATUSES.includes(item.slaResolutionStatus as SlaObjectiveStatus) ||
+		typeof item.createdAt !== 'string' ||
+		typeof item.updatedAt !== 'string'
+	)
+		throw invalid();
+	return {
+		audience: 'requester',
+		id: item.id,
+		organizationId: item.organizationId as string,
+		incidentNumber: item.incidentNumber,
+		title: item.title,
+		description: item.description,
+		status: item.status as IncidentListItem['status'],
+		priority: item.priority as IncidentListItem['priority'],
+		supportLevel: null,
+		client: null,
+		clientUserId: item.clientUserId as string | null,
+		createdByUserId: null,
+		siteId: item.siteId as string | null,
+		assignedToUserId: null,
+		assignedToUserName: null,
+		teamId: null,
+		teamName: null,
+		categoryId: (item.categoryId as string | null | undefined) ?? null,
+		slaPolicyId: null,
+		slaFirstResponseMinutes: null,
+		slaResolutionMinutes: null,
+		slaAppliedAt: null,
+		firstResponseDueAt: null,
+		resolutionDueAt: null,
+		firstResponseAt: null,
+		firstResolvedAt: null,
+		slaOverallStatus: item.slaOverallStatus as SlaOverallStatus,
+		slaFirstResponseStatus: item.slaFirstResponseStatus as SlaObjectiveStatus,
+		slaResolutionStatus: item.slaResolutionStatus as SlaObjectiveStatus,
+		createdAt: item.createdAt,
+		updatedAt: item.updatedAt
+	};
+}
+
 function parseAndValidateIncident(
 	rawItem: unknown,
 	expectedOrgId: string,
@@ -409,6 +507,16 @@ function parseAndValidateIncident(
 	}
 
 	const item = rawItem as Record<string, unknown>;
+	if (item.audience === 'requester')
+		return parseRequesterIncident(item, expectedOrgId, expectedIncidentId, status);
+	if (item.audience !== undefined && item.audience !== 'staff') {
+		throw new IncidentApiError(
+			status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	item.audience = 'staff';
 	const isValidStatus =
 		item.status === 'open' ||
 		item.status === 'pending' ||

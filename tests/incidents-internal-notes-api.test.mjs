@@ -60,15 +60,16 @@ test('SoporteFlow — Etapa 5.4N-C: API HTTP de notas internas', async (t) => {
 		return { user, membership, session, cookie: session.cookieHeader };
 	}
 
-	const tech = await actor(orgA, [VIEW, ADD], { name: 'Ana Técnica' });
-	const viewer = await actor(orgA, [VIEW]);
-	const writer = await actor(orgA, [ADD]);
+	// 5.4W-B: internal notes require an incident staff scope as well (view_all here)
+	const tech = await actor(orgA, [VIEW, ADD, 'incidents:view_all'], { name: 'Ana Técnica' });
+	const viewer = await actor(orgA, [VIEW, 'incidents:view_all']);
+	const writer = await actor(orgA, [ADD, 'incidents:view_all']);
 	const none = await actor(orgA, []);
 	const viewAllOnly = await actor(orgA, ['incidents:view_all', 'incidents:edit']);
 	const viewOwnOnly = await actor(orgA, ['incidents:view_own']);
 	const clientViewOwn = await actor(orgA, ['incidents:view_own', 'incidents:create']);
-	const techB = await actor(orgB, [VIEW, ADD], { name: 'Técnico B' });
-	const blank = await actor(orgA, [ADD], { name: '   ' });
+	const techB = await actor(orgB, [VIEW, ADD, 'incidents:view_all'], { name: 'Técnico B' });
+	const blank = await actor(orgA, [ADD, 'incidents:view_all'], { name: '   ' });
 
 	let incidentNumber = 100000;
 	async function incident(organization = orgA, status = 'open', values = {}) {
@@ -433,6 +434,33 @@ test('SoporteFlow — Etapa 5.4N-C: API HTTP de notas internas', async (t) => {
 		const anonymous = await post({ id: target.id, cookie: blank.cookie, body: { body: 'Anon' } });
 		assert.equal(anonymous.status, 201);
 		assert.deepEqual(anonymous.json.item.author, { name: 'Usuario no disponible' });
+	});
+
+	await t.test('5.4W-B BOLA: view_internal_notes no amplía el alcance de incidencias', async () => {
+		// Before W-B the permission alone opened the notes of ANY incident of the tenant.
+		const scoped = await actor(orgA, [VIEW, ADD, 'incidents:view_own']);
+		const requester = await actor(orgA, [VIEW, ADD, 'incidents:view_requested']);
+		const other = await incident();
+		const mine = await incident(orgA, 'open', { assignedToUserId: scoped.user.id });
+		const requested = await incident(orgA, 'open', { clientUserId: requester.user.id });
+		// view_own: only the incidents assigned to the caller; others read as missing (404)
+		assert.equal((await get({ id: other.id, cookie: scoped.cookie })).status, 404);
+		assert.equal(
+			(await post({ id: other.id, cookie: scoped.cookie, body: { body: 'x' } })).status,
+			404
+		);
+		assert.equal((await messagesOf(other)).length, 0);
+		assert.equal((await get({ id: mine.id, cookie: scoped.cookie })).status, 200);
+		assert.equal(
+			(await post({ id: mine.id, cookie: scoped.cookie, body: { body: 'ok' } })).status,
+			201
+		);
+		// the requester scope never grants internal notes, not even on the caller's own request
+		assert.equal((await get({ id: requested.id, cookie: requester.cookie })).status, 403);
+		assert.equal(
+			(await post({ id: requested.id, cookie: requester.cookie, body: { body: 'x' } })).status,
+			403
+		);
 	});
 
 	await t.test('POST 53. no hay PUT/PATCH/DELETE definidos', async () => {

@@ -4,10 +4,13 @@ import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import {
 	incidentMutationFailure,
-	resolveIncidentMutationAccess
+	resolveIncidentMutationAccess,
+	requireMutationScope,
+	withIncidentActor
 } from '$lib/server/auth/incident-access';
 import { changeIncidentCategory, IncidentServiceError } from '$lib/server/services/incidents';
-import { withSlaCompliance } from '$lib/server/services/sla-compliance';
+import { toIncidentDto } from '$lib/server/services/incident-dto';
+import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -68,17 +71,28 @@ export const PATCH: RequestHandler = async (event) => {
 		if (reason !== undefined && typeof reason !== 'string')
 			return failure(400, 'INVALID_INPUT', 'reason must be a string.');
 
-		const result = await changeIncidentCategory(
+		const result = await withIncidentActor(
 			db,
-			{ organizationId, actorUserId: principal.userId, access },
-			incidentId,
-			{ categoryId: categoryId as string | null, reason: reason as string | undefined }
+			{ userId: principal.userId, organizationId, permissionIds: ['incidents:edit'] },
+			(tx, scope) =>
+				changeIncidentCategory(
+					tx,
+					{
+						organizationId,
+						actorUserId: principal.userId,
+						access: requireMutationScope(scope),
+						readAccess: scope.read ?? undefined
+					},
+					incidentId,
+					{ categoryId: categoryId as string | null, reason: reason as string | undefined }
+				)
 		);
 		return json(
-			{ incident: withSlaCompliance(result.incident) },
+			{ incident: toIncidentDto(result.incident, 'staff') },
 			{ status: 200, headers: noStore }
 		);
 	} catch (error) {
+		if (isActorAuthorizationError(error)) return incidentMutationFailure('ACTOR_NOT_AUTHORIZED')!;
 		if (error instanceof IncidentServiceError) {
 			if (error.code === 'INVALID_INPUT') return failure(400, 'INVALID_INPUT', error.message + '.');
 			if (error.code === 'INCIDENT_NOT_FOUND')

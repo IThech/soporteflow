@@ -4,10 +4,13 @@ import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import {
 	incidentMutationFailure,
-	resolveIncidentMutationAccess
+	resolveIncidentMutationAccess,
+	requireMutationScope,
+	withIncidentActor
 } from '$lib/server/auth/incident-access';
 import { changeIncidentSla, IncidentServiceError } from '$lib/server/services/incidents';
-import { withSlaCompliance } from '$lib/server/services/sla-compliance';
+import { toIncidentDto } from '$lib/server/services/incident-dto';
+import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -61,17 +64,28 @@ export const PATCH: RequestHandler = async (event) => {
 		if (slaPolicyId !== null && (typeof slaPolicyId !== 'string' || !uuid.test(slaPolicyId)))
 			return failure(400, 'INVALID_INPUT', 'slaPolicyId must be a valid UUID or null.');
 
-		const result = await changeIncidentSla(
+		const result = await withIncidentActor(
 			db,
-			{ organizationId, actorUserId: principal.userId, access },
-			incidentId,
-			{ slaPolicyId: slaPolicyId as string | null }
+			{ userId: principal.userId, organizationId, permissionIds: ['sla:assign'] },
+			(tx, scope) =>
+				changeIncidentSla(
+					tx,
+					{
+						organizationId,
+						actorUserId: principal.userId,
+						access: requireMutationScope(scope),
+						readAccess: scope.read ?? undefined
+					},
+					incidentId,
+					{ slaPolicyId: slaPolicyId as string | null }
+				)
 		);
 		return json(
-			{ incident: withSlaCompliance(result.incident) },
+			{ incident: toIncidentDto(result.incident, 'staff') },
 			{ status: 200, headers: noStore }
 		);
 	} catch (error) {
+		if (isActorAuthorizationError(error)) return incidentMutationFailure('ACTOR_NOT_AUTHORIZED')!;
 		if (error instanceof IncidentServiceError) {
 			if (error.code === 'INVALID_INPUT') return failure(400, 'INVALID_INPUT', 'Invalid request.');
 			if (error.code === 'INCIDENT_NOT_FOUND')

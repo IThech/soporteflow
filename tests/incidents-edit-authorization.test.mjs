@@ -208,8 +208,9 @@ test('SoporteFlow — Etapa 5.4O-D: autorización de edición y closed inmutable
 				const target = await incident(values);
 				const before = await snapshot(target);
 				const res = await call(op, target, { cookie: editOwn.cookie });
-				assert.equal(res.status, 403, `${op.name} ${JSON.stringify(values)}`);
-				assert.deepEqual(res.json, { error: { code: 'FORBIDDEN', message: 'Permission denied.' } });
+				// 5.4W-B: outside the caller's read scope -> indistinguishable from missing (404)
+				assert.equal(res.status, 404, `${op.name} ${JSON.stringify(values)}`);
+				assert.equal(res.json.error.code, 'INCIDENT_NOT_FOUND');
 				await assertUnchanged(target, before);
 			}
 		}
@@ -300,7 +301,7 @@ test('SoporteFlow — Etapa 5.4O-D: autorización de edición y closed inmutable
 			const before = await snapshot(target);
 			assert.equal(
 				(await call(op, target, { cookie: editOwn.cookie, headers: spoof })).status,
-				403
+				404
 			);
 			assert.equal((await call(op, target, { headers: spoof })).status, 401);
 			await assertUnchanged(target, before);
@@ -370,10 +371,10 @@ test('SoporteFlow — Etapa 5.4O-D: autorización de edición y closed inmutable
 		await assertUnchanged(target, before);
 	});
 
-	await t.test('closed: sin acceso da 403 antes que 409 (no se revela el estado)', async () => {
+	await t.test('closed: sin acceso da 404 antes que 409 (no se revela el estado)', async () => {
 		for (const op of operations) {
 			const target = await incident({ status: 'closed', assignedToUserId: otherTech.user.id });
-			assert.equal((await call(op, target, { cookie: editOwn.cookie })).status, 403, op.name);
+			assert.equal((await call(op, target, { cookie: editOwn.cookie })).status, 404, op.name);
 		}
 	});
 
@@ -400,7 +401,7 @@ test('SoporteFlow — Etapa 5.4O-D: autorización de edición y closed inmutable
 		assert.equal(
 			(await call(operations[0], other, { cookie: editOwn.cookie, body: { status: 'open' } }))
 				.status,
-			403
+			404
 		);
 	});
 

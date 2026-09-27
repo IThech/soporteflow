@@ -218,8 +218,9 @@ test('SoporteFlow — Etapa 5.4N-D: servicio de comentarios públicos', async (t
 		assert.equal((await list(assigned, {}, orgA, own)).items[0].id, comment.id);
 
 		for (const target of [other, unassigned]) {
-			await rejectsWith(create(target, techA2, 'x', orgA, own), 'INCIDENT_ACCESS_DENIED');
-			await rejectsWith(list(target, {}, orgA, own), 'INCIDENT_ACCESS_DENIED');
+			// 5.4W-B: fuera del alcance de lectura -> INCIDENT_NOT_FOUND (sin oráculo de existencia)
+			await rejectsWith(create(target, techA2, 'x', orgA, own), 'INCIDENT_NOT_FOUND');
+			await rejectsWith(list(target, {}, orgA, own), 'INCIDENT_NOT_FOUND');
 			assert.equal((await messagesOf(target)).length, 0);
 		}
 		// Incidencia inexistente sigue siendo 404 aun con restricción

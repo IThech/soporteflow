@@ -2,7 +2,16 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
-import { resolveIncidentAccess } from '$lib/server/auth/incident-access';
+import {
+	incidentAudience,
+	resolveIncidentAccess,
+	withIncidentActor
+} from '$lib/server/auth/incident-access';
+import {
+	ActorAuthorizationError,
+	isActorAuthorizationError
+} from '$lib/server/auth/transactional-authorization';
+import { toIncidentDto } from '$lib/server/services/incident-dto';
 import {
 	createIncidentRecord,
 	listIncidents,
@@ -18,7 +27,6 @@ import {
 import {
 	SLA_OBJECTIVE_STATUSES,
 	SLA_OVERALL_STATUSES,
-	withSlaCompliance,
 	type SlaObjectiveStatus,
 	type SlaOverallStatus
 } from '$lib/server/services/sla-compliance';
@@ -189,34 +197,54 @@ export const POST: RequestHandler = async (event) => {
 		}
 	}
 
-	// 5. Execute service
+	// 5. Execute service. 5.4W-B: the checks above are pre-checks; inside the creation transaction
+	// (organization FOR SHARE) the capabilities are re-read and every decision that depended on
+	// them (create, choosing another requester, choosing the SLA) is re-validated.
 	try {
-		const result = await createIncidentRecord(
+		const { incident, audience } = await withIncidentActor(
 			db,
-			{
-				organizationId,
-				creatorUserId: principal.userId
-			},
-			{
-				title: body.title as string,
-				description: body.description as string,
-				client: body.client as string,
-				priority: body.priority as IncidentPriority | undefined,
-				clientUserId,
-				siteId: body.siteId as string | null | undefined,
-				categoryId: body.categoryId as string | null | undefined,
-				slaPolicyId: slaPolicyId as string | null | undefined
+			{ userId: principal.userId, organizationId, permissionIds: ['incidents:create'] },
+			async (tx, scope) => {
+				const choosesRequester =
+					clientUserId !== undefined && clientUserId !== null && clientUserId !== principal.userId;
+				if (choosesRequester && !scope.permissions.includes('incidents:view_all'))
+					throw new ActorAuthorizationError();
+				if (slaPolicyId !== undefined && !scope.permissions.includes('sla:assign'))
+					throw new ActorAuthorizationError();
+				const result = await createIncidentRecord(
+					tx,
+					{
+						organizationId,
+						creatorUserId: principal.userId
+					},
+					{
+						title: body.title as string,
+						description: body.description as string,
+						client: body.client as string,
+						priority: body.priority as IncidentPriority | undefined,
+						clientUserId,
+						siteId: body.siteId as string | null | undefined,
+						categoryId: body.categoryId as string | null | undefined,
+						slaPolicyId: slaPolicyId as string | null | undefined
+					}
+				);
+				return {
+					incident: result.incident,
+					audience: incidentAudience(scope.read, result.incident)
+				};
 			}
 		);
 
-		// 6. Success response
+		// 6. Success response: canonical projection for the creator's audience (5.4W-B)
 		return json(
 			{
-				incident: withSlaCompliance(result.incident)
+				incident: toIncidentDto(incident, audience)
 			},
 			{ status: 201 }
 		);
 	} catch (err: unknown) {
+		if (isActorAuthorizationError(err))
+			return json({ error: { code: 'FORBIDDEN', message: 'Permission denied.' } }, { status: 403 });
 		if (err instanceof IncidentServiceError) {
 			switch (err.code) {
 				case 'INVALID_INPUT':
@@ -464,6 +492,12 @@ export const GET: RequestHandler = async (event) => {
 		else filters.slaResolutionStatus = values[0] as SlaObjectiveStatus;
 	}
 
+	// 6.2 5.4W-B: a requester scope must not use internal fields as a filter oracle (team and support
+	// level are not part of the customer projection; SLA compliance statuses are).
+	if (scope !== undefined && (filters.teamId !== undefined || filters.supportLevel !== undefined)) {
+		return json({ error: { code: 'FORBIDDEN', message: 'Permission denied.' } }, { status: 403 });
+	}
+
 	// 7. Execute listIncidents (one reference time for SQL filters and derived DTO fields)
 	try {
 		const now = new Date();
@@ -475,7 +509,11 @@ export const GET: RequestHandler = async (event) => {
 
 		// 8. Success response
 		return json(
-			{ incidents: incidents.map((incident) => withSlaCompliance(incident, now)) },
+			{
+				incidents: incidents.map((incident) =>
+					toIncidentDto(incident, incidentAudience(access, incident), now)
+				)
+			},
 			{ status: 200 }
 		);
 	} catch (err: unknown) {

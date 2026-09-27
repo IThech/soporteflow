@@ -468,8 +468,17 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 		assert.equal(res.json.incident.organizationId, orgA.id);
 		assert.equal(res.json.incident.title, basePayloadA.title);
 		assert.equal(res.json.incident.description, basePayloadA.description);
-		assert.equal(res.json.incident.client, basePayloadA.client);
 		assert.equal(res.json.incident.priority, 'medium');
+		// 5.4W-B: this creator holds incidents:create without any read scope, so the response is the
+		// minimal requester projection (never the staff DTO); the stored row keeps every field.
+		assert.equal(res.json.incident.audience, 'requester');
+		for (const internal of ['client', 'createdByUserId', 'supportLevel', 'assignedToUserId'])
+			assert.equal(internal in res.json.incident, false, internal);
+		const [stored] = await db
+			.select()
+			.from(s.incidents)
+			.where(eq(s.incidents.id, res.json.incident.id));
+		assert.equal(stored.client, basePayloadA.client);
 
 		createdIncidentId = res.json.incident.id;
 	});
@@ -555,9 +564,14 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 			headers: { cookie: sessionA.cookieHeader }
 		});
 		assert.equal(res.status, 201);
-		// El creador registrado DEBE ser userA (de la sesión), NUNCA el del body
-		assert.equal(res.json.incident.createdByUserId, userA.id);
-		assert.notEqual(res.json.incident.createdByUserId, spoofedUserId);
+		// El creador registrado DEBE ser userA (de la sesión), NUNCA el del body (5.4W-B: comprobado en
+		// BD; la proyección del solicitante no expone createdByUserId)
+		const [stored] = await db
+			.select()
+			.from(s.incidents)
+			.where(eq(s.incidents.id, res.json.incident.id));
+		assert.equal(stored.createdByUserId, userA.id);
+		assert.notEqual(stored.createdByUserId, spoofedUserId);
 		assert.equal((await persistedHistory(db, s, res.json.incident.id))[0].actorUserId, userA.id);
 
 		// Verificación directa en base de datos: el registro persistido tiene userA.id
@@ -3479,20 +3493,22 @@ test('SoporteFlow — Etapa 5.4N-0: GET /api/incidents/[id] con incidents:view_o
 		assert.equal(res.json.incident.assignedToUserId, viewOwn.user.id);
 	});
 
-	await t.test('3. view_own + incidencia asignada a otro técnico -> 403', async () => {
+	// 5.4W-B policy: an incident outside the caller's read scope reads as missing (404), exactly
+	// like a cross-tenant one; 403 is reserved for a missing capability.
+	await t.test('3. view_own + incidencia asignada a otro técnico -> 404', async () => {
 		const res = await detail(assignedToOther.id, viewOwn.session);
-		assert.equal(res.status, 403);
-		assert.equal(res.json.error.code, 'FORBIDDEN');
+		assert.equal(res.status, 404);
+		assert.equal(res.json.error.code, 'INCIDENT_NOT_FOUND');
 		assert.equal(res.json.incident, undefined);
 	});
 
-	await t.test('4. view_own + incidencia sin asignar -> 403', async () => {
+	await t.test('4. view_own + incidencia sin asignar -> 404', async () => {
 		const res = await detail(unassigned.id, viewOwn.session);
-		assert.equal(res.status, 403);
+		assert.equal(res.status, 404);
 		assert.equal(res.json.incident, undefined);
 	});
 
-	await t.test('5. view_own + clientUserId === principal sin asignación -> 403', async () => {
+	await t.test('5. view_own + clientUserId === principal sin asignación -> 404', async () => {
 		const [row] = await db
 			.select()
 			.from(s.incidents)
@@ -3500,7 +3516,7 @@ test('SoporteFlow — Etapa 5.4N-0: GET /api/incidents/[id] con incidents:view_o
 		assert.equal(row.clientUserId, viewOwn.user.id);
 		assert.equal(row.assignedToUserId, null);
 		const res = await detail(requestedByViewOwn.id, viewOwn.session);
-		assert.equal(res.status, 403);
+		assert.equal(res.status, 404);
 		assert.equal(res.json.incident, undefined);
 	});
 

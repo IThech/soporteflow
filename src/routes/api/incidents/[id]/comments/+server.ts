@@ -2,7 +2,13 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
-import { incidentAccessRestriction, resolveIncidentAccess } from '$lib/server/auth/incident-access';
+import {
+	incidentAccessRestriction,
+	requireReadScope,
+	resolveIncidentAccess,
+	withIncidentActor
+} from '$lib/server/auth/incident-access';
+import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import {
 	createPublicComment,
@@ -30,6 +36,8 @@ const FORBIDDEN_SERVICE_CODES = new Set([
 const incidentAccess = resolveIncidentAccess;
 
 function serviceFailure(error: unknown, invalidMessage?: string) {
+	// 5.4W-B: authority lost between the pre-check and the in-transaction re-validation
+	if (isActorAuthorizationError(error)) return forbidden();
 	if (error instanceof IncidentServiceError) {
 		if (error.code === 'INVALID_INPUT')
 			return failure(400, 'INVALID_INPUT', invalidMessage ?? error.message);
@@ -108,18 +116,26 @@ export const POST: RequestHandler = async (event) => {
 		const { body } = payload as { body?: unknown };
 		if (typeof body !== 'string') return failure(400, 'INVALID_INPUT', 'body must be a string.');
 
-		const item = await createPublicComment(
+		// 5.4W-B: add_comment and the read scope are re-validated inside the comment transaction.
+		const item = await withIncidentActor(
 			db,
-			{
-				organizationId,
-				incidentId,
-				actorUserId: principal.userId,
-				...incidentAccessRestriction(access),
-				// 5.4T-B: a reply through a support scope (view_all / view_own) can be the first response;
-				// a requester-only scope (view_requested) never is.
-				supportResponse: access.viewAll === true || access.assignedToUserId !== undefined
-			},
-			body
+			{ userId: principal.userId, organizationId, permissionIds: ['incidents:add_comment'] },
+			(tx, scope) => {
+				const current = requireReadScope(scope);
+				return createPublicComment(
+					tx,
+					{
+						organizationId,
+						incidentId,
+						actorUserId: principal.userId,
+						...incidentAccessRestriction(current),
+						// 5.4T-B: a reply through a support scope (view_all / view_own) can be the first
+						// response; a requester-only scope (view_requested) never is.
+						supportResponse: current.viewAll === true || current.assignedToUserId !== undefined
+					},
+					body
+				);
+			}
 		);
 		return json(
 			{

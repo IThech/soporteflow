@@ -2,6 +2,13 @@ import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
+import {
+	incidentMutationAccessFrom,
+	requireMutationScope,
+	resolveIncidentAccess,
+	withIncidentActor
+} from '$lib/server/auth/incident-access';
+import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import {
 	createInternalNote,
@@ -48,10 +55,21 @@ export const GET: RequestHandler = async (event) => {
 			'incidents:view_internal_notes'
 		);
 		if (auth.error) return auth.error;
+		// 5.4W-B (BOLA fix): view_internal_notes never widens incident access. The caller's STAFF
+		// scope applies (view_all, or view_own on assigned incidents); the requester scope never
+		// grants internal notes. Outside the scope the incident reads as missing (404).
+		const staff = incidentMutationAccessFrom(
+			await resolveIncidentAccess(event.request.headers, organizationId, auth.principal.userId)
+		);
+		if (!staff) return failure(403, 'FORBIDDEN', 'Permission denied.');
 		parseInternalNotesQuery(event.url.searchParams);
 		const page = await listInternalNotes(
 			db,
-			{ organizationId, incidentId },
+			{
+				organizationId,
+				incidentId,
+				...(staff.viewAll === true ? {} : { assignedToUserId: staff.assignedToUserId })
+			},
 			event.url.searchParams
 		);
 		return json({ items: page.items, nextCursor: page.nextCursor }, { headers: noStore });
@@ -99,10 +117,25 @@ export const POST: RequestHandler = async (event) => {
 		const { body } = payload as { body?: unknown };
 		if (typeof body !== 'string') return failure(400, 'INVALID_INPUT', 'body must be a string.');
 
-		const item = await createInternalNote(
+		// 5.4W-B: BOLA fix (staff scope enforced) + capabilities re-validated inside the note
+		// transaction (organization FOR SHARE -> actor -> incident).
+		const actorUserId = auth.principal.userId;
+		const item = await withIncidentActor(
 			db,
-			{ organizationId, incidentId, actorUserId: auth.principal.userId },
-			body
+			{ userId: actorUserId, organizationId, permissionIds: ['incidents:add_internal_note'] },
+			(tx, scope) => {
+				const staff = requireMutationScope(scope);
+				return createInternalNote(
+					tx,
+					{
+						organizationId,
+						incidentId,
+						actorUserId,
+						...(staff.viewAll === true ? {} : { assignedToUserId: staff.assignedToUserId })
+					},
+					body
+				);
+			}
 		);
 		return json(
 			{
@@ -124,6 +157,7 @@ export const POST: RequestHandler = async (event) => {
 			if (FORBIDDEN_SERVICE_CODES.has(error.code))
 				return failure(403, 'FORBIDDEN', 'Permission denied.');
 		}
+		if (isActorAuthorizationError(error)) return failure(403, 'FORBIDDEN', 'Permission denied.');
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}
 };

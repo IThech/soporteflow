@@ -29,6 +29,26 @@ export const SAFE_HISTORY_TYPES = [
 	'sla_resolution_breached'
 ] as const;
 export type SafeIncidentHistoryType = (typeof SAFE_HISTORY_TYPES)[number];
+/**
+ * 5.4W-B: history visible to a REQUESTER (incident readable only through
+ * incidents:view_requested). Same boundary as the customer incident projection: no assignment,
+ * support level or SLA configuration events (applied/changed/cleared); the SLA results
+ * (met/breached) stay, like the compliance statuses of the projection.
+ */
+export const REQUESTER_HISTORY_TYPES = [
+	'created',
+	'status_changed',
+	'priority_changed',
+	'site_changed',
+	'category_changed',
+	'resolved',
+	'closed',
+	'reopened',
+	'sla_first_response_met',
+	'sla_first_response_breached',
+	'sla_resolution_met',
+	'sla_resolution_breached'
+] as const satisfies readonly SafeIncidentHistoryType[];
 type Status = 'open' | 'pending' | 'resolved' | 'closed';
 type Priority = 'low' | 'medium' | 'high' | 'urgent';
 type Level = 'N1' | 'N2' | 'N3';
@@ -250,10 +270,20 @@ export async function listIncidentHistory(
 		.limit(1);
 	if (!incident || !incidentAccessAllows(context.access, incident))
 		throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found.');
+	// 5.4W-B: staff = view_all or the assignee; anyone else reading it (requester scope) gets the
+	// customer-facing subset, filtered in SQL so pagination stays consistent.
+	const staff =
+		context.access === undefined ||
+		context.access.viewAll === true ||
+		(context.access.assignedToUserId !== undefined &&
+			incident.assignedToUserId === context.access.assignedToUserId);
 	const conditions = [
 		eq(incidentHistory.incidentId, context.incidentId),
 		eq(incidentHistory.organizationId, context.organizationId),
-		inArray(incidentHistory.eventType, [...SAFE_HISTORY_TYPES])
+		inArray(
+			incidentHistory.eventType,
+			staff ? [...SAFE_HISTORY_TYPES] : [...REQUESTER_HISTORY_TYPES]
+		)
 	];
 	if (cursor)
 		conditions.push(

@@ -115,6 +115,9 @@ Nothing depends on SERIALIZABLE.
 | 18  | 50   | SLA `firstResolvedAt` and `firstResponseAt` first-write-wins, one SLA event                                                         |
 | 19  | 50   | rollback under contention releases locks, no partial effects (history, events, notifications, webhook intents)                      |
 | 30  | 50   | tenant: own vs foreign site in a race; composite FK rejects cross-tenant links                                                      |
+| 31  | 60   | W-B: technician loses `incidents:edit` while `PATCH /api/incidents/[id]` waits on the org lock → 403, nothing written               |
+| 32  | 60   | W-B: membership deactivated while `POST …/comments` waits → 403, no message                                                         |
+| 33  | 60   | W-B: view_own incident reassigned to someone else while the PATCH waits on the row lock → 404, nothing written                      |
 
 ## Findings of the first real run (CT 105, PostgreSQL 17.11)
 
@@ -184,6 +187,6 @@ Each scenario prints one line such as `[#1a] A=fulfilled B=rejected:LAST_ADMIN_R
 
 ## Pending after W-A
 
-W-B global authorization review (in-transaction re-validation beyond the paths fixed in W-A),
-W-C/W-D runner/scheduler (heartbeat for very long single operations), W-E operational concerns
+W-B (prepared): operational incident mutations re-validate inside their transaction
+(`withIncidentActor`); scenarios #31-#33 must pass on CT 105. W-C/W-D runner/scheduler (heartbeat for very long single operations), W-E operational concerns
 (ambiguous commits, observability, retention jobs), W-F load and soak testing.

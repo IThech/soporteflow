@@ -351,7 +351,9 @@ test('SoporteFlow — Etapa 5.4T-C: cumplimiento SLA, incumplimiento y operació
 			const reopened = await detail(customer, A.org, inc.id);
 			assert.equal(reopened.json.incident.status, 'open');
 			assert.equal(reopened.json.incident.slaResolutionStatus, 'met', 'reopen no reinicia el SLA');
-			assert.equal(reopened.json.incident.firstResolvedAt, first.toISOString());
+			// 5.4W-B: el Customer no ve los timestamps SLA (configuración interna); se comprueba en BD
+			assert.equal('firstResolvedAt' in reopened.json.incident, false);
+			assert.equal((await row(inc.id)).firstResolvedAt.getTime(), first.getTime());
 			// 42: resolved -> reopen -> resolved -> closed: la marca no cambia
 			await setStatus(tech, A.org, inc.id, 'resolved');
 			await setStatus(tech, A.org, inc.id, 'closed');
@@ -510,8 +512,10 @@ test('SoporteFlow — Etapa 5.4T-C: cumplimiento SLA, incumplimiento y operació
 			const res = await history(customer, A.org, inc.id);
 			assert.equal(res.status, 200);
 			const types = res.json.items.map((i) => i.type);
-			for (const t2 of ['sla_applied', 'sla_first_response_met', 'sla_resolution_met'])
+			for (const t2 of ['sla_first_response_met', 'sla_resolution_met'])
 				assert.ok(types.includes(t2), t2);
+			// 5.4W-B: los eventos de configuración SLA (applied/changed/cleared) son internos
+			assert.ok(!types.includes('sla_applied'), 'sla_applied no visible al solicitante');
 			for (const item of res.json.items.filter((i) => i.type.startsWith('sla_')))
 				assert.deepEqual(Object.keys(item).sort(), ['actor', 'id', 'occurredAt', 'type']);
 			const policyId = (await row(inc.id)).slaPolicyId;
@@ -659,16 +663,13 @@ test('SoporteFlow — Etapa 5.4T-C: cumplimiento SLA, incumplimiento y operació
 			const inc = (await create(customer, A.org)).json.incident;
 			const mine = await detail(customer, A.org, inc.id);
 			assert.equal(mine.json.incident.slaOverallStatus, 'on_track');
-			assert.equal((await detail(otherCustomer, A.org, inc.id)).status, 403);
+			// 5.4W-B: ajena en la misma org -> 404; org sin membresía -> 403
+			assert.equal((await detail(otherCustomer, A.org, inc.id)).status, 404);
 			assert.equal((await detail(adminB, A.org, inc.id)).status, 403);
 			const created = await create(customer, A.org);
-			for (const key of [
-				'slaOverallStatus',
-				'slaFirstResponseStatus',
-				'slaResolutionStatus',
-				'firstResolvedAt'
-			])
+			for (const key of ['slaOverallStatus', 'slaFirstResponseStatus', 'slaResolutionStatus'])
 				assert.ok(key in created.json.incident, key);
+			assert.equal('firstResolvedAt' in created.json.incident, false, '5.4W-B: sin timestamps SLA');
 		}
 	);
 

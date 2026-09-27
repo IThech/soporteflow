@@ -57,5 +57,63 @@ Regla desde 5.4W-A: toda mutación administrativa se ejecuta dentro de
 La comprobación previa de la ruta (401/403 rápidos) se mantiene, pero ya no es la decisión
 autoritativa. Orden de locks: organización → filas del actor (FOR SHARE) → filas del recurso; es el
 mismo orden que ya seguían los servicios, por lo que no introduce ciclos. Las mutaciones operativas
-de incidencias (edit/assign/comment) siguen autorizando antes de la transacción: misma clase de
-ventana, fuera del alcance de W-A (W-B).
+de incidencias se cerraron en 5.4W-B (sección siguiente).
+
+## Incidencias: acceso, proyección y códigos HTTP (5.4W-B)
+
+### Modelo de acceso
+
+`resolveIncidentAccess` deriva el alcance de lectura de las capacidades efectivas
+(`resolveEffectivePermissions`, recalculadas en cada petición, sin caché):
+
+- `incidents:view_all` → todo el tenant (domina);
+- `incidents:view_own` → incidencias con `assigned_to_user_id` = principal;
+- `incidents:view_requested` → incidencias con `client_user_id` = principal;
+- view_own + view_requested → OR de ambas ramas; ninguna → `null` (403). Fail-closed.
+
+El alcance de **mutación** (`incidentMutationAccessFrom`) elimina la rama de solicitante: un
+Customer ve su incidencia pero nunca la muta. `incidents:view_internal_notes` /
+`add_internal_note` **no amplían** el alcance: exigen además view_all o view_own sobre una
+incidencia asignada (B-1). `add_comment` exige también alcance de lectura.
+
+### Revalidación transaccional de mutaciones
+
+Toda mutación de incidencia (PATCH detalle, assign, site, category, support-level, sla,
+comentario público, nota interna y creación) se ejecuta en
+`withIncidentActor(db, { userId, organizationId, permissionIds }, run(tx, scope))`:
+organización FOR SHARE → revalidación del actor (capacidad requerida) → alcance recalculado en la
+transacción → incidencia FOR UPDATE (`lockIncidentForMutation`, que evalúa el alcance sobre la
+fila bloqueada y confirmada). Una revocación, desactivación o reasignación confirmada mientras la
+petición esperaba se observa y la mutación falla cerrada sin escribir. Guard estático en
+`tests/security-bola-tenant.test.mjs`.
+
+### Política 401 / 403 / 404
+
+| Situación                                                                    | Código                   |
+| ---------------------------------------------------------------------------- | ------------------------ |
+| Sin sesión / sesión inválida / usuario inactivo                              | 401 `UNAUTHORIZED`       |
+| Organización sin membresía activa, suspendida o no operativa                 | 403 `FORBIDDEN`          |
+| Falta la capacidad de la operación (comprobación previa, igual para todo id) | 403 `FORBIDDEN`          |
+| Incidencia visible pero no mutable por el actor (p. ej. Customer)            | 403 `FORBIDDEN`          |
+| Autoridad perdida dentro de la transacción (`ACTOR_NOT_AUTHORIZED`)          | 403 `FORBIDDEN`          |
+| Incidencia inexistente, de otro tenant o **fuera del alcance de lectura**    | 404 `INCIDENT_NOT_FOUND` |
+
+La respuesta 404 es byte-idéntica a la de un id inexistente (sin oráculo de existencia) en
+detalle, comentarios, historial, notas internas y mutaciones.
+
+### Proyección de incidencias (DTO)
+
+`toIncidentDto(incident, incidentAudience(access, incident))` es la única proyección HTTP:
+
+- **staff** (view_all o asignada al principal): DTO operativo sin cambios;
+- **requester** (solo visible por view_requested; también la respuesta de creación de quien no
+  tiene alcance de personal): allowlist explícita con `audience: 'requester'` — id,
+  organizationId, incidentNumber, title, description, status, priority, clientUserId, siteId,
+  categoryId, slaOverallStatus, slaFirstResponseStatus, slaResolutionStatus, createdAt,
+  updatedAt. Nunca: asignado/equipo, supportLevel, política/minutos/plazos/marcas SLA,
+  createdByUserId, etiqueta `client`.
+
+El historial del solicitante se filtra en SQL a tipos seguros (sin asignación, equipo, nivel ni
+configuración SLA; los resultados SLA met/breached sí, decisión de producto 5.4T-C). Un
+solicitante no puede filtrar el listado por `teamId` ni `supportLevel` (403: evita el oráculo).
+El cliente (`src/lib/api/incidents.ts`) valida la proyección con una allowlist estricta.

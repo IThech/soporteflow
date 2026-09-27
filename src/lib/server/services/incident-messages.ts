@@ -34,6 +34,12 @@ export type PublicCommentPage = IncidentMessagePage;
 export interface InternalNoteContext {
 	readonly organizationId: string;
 	readonly incidentId: string;
+	/**
+	 * 5.4W-B: staff scope of the caller (view_own -> assigned to the principal). Omitted for
+	 * incidents:view_all and trusted internal callers (automation). The requester scope never
+	 * grants internal notes, so there is no clientUserId here.
+	 */
+	readonly assignedToUserId?: string;
 }
 export interface CreateInternalNoteContext extends InternalNoteContext {
 	readonly actorUserId: string | null;
@@ -83,8 +89,12 @@ function authorName(displayName: string | null, name: string | null): string {
 	return displayName?.trim() || name?.trim() || UNAVAILABLE_AUTHOR_NAME;
 }
 
-function accessDenied() {
-	return new IncidentServiceError('INCIDENT_ACCESS_DENIED', 'Incident access denied');
+/**
+ * 5.4W-B: an incident outside the caller's scope is indistinguishable from a missing one (404),
+ * like the incident detail, history and list.
+ */
+function notVisible() {
+	return new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
 }
 
 // Cursor helpers intentionally mirror incident-history.ts (5.4M) instead of sharing code with it.
@@ -289,7 +299,7 @@ async function appendMessage(
 			throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found');
 		}
 		if (!incidentAccessAllows(restrictionOf(context), incident)) {
-			throw accessDenied();
+			throw notVisible();
 		}
 		if (incident.status === 'closed') {
 			throw new IncidentServiceError('INCIDENT_CLOSED', 'Incident is closed');
@@ -452,7 +462,7 @@ async function listMessages(
 		)
 		.limit(1);
 	if (!incident) throw new IncidentServiceError('INCIDENT_NOT_FOUND', 'Incident not found.');
-	if (!incidentAccessAllows(restrictionOf(context), incident)) throw accessDenied();
+	if (!incidentAccessAllows(restrictionOf(context), incident)) throw notVisible();
 
 	const conditions = [
 		eq(incidentMessages.organizationId, context.organizationId),
@@ -509,7 +519,8 @@ export async function createInternalNote(
 		{
 			organizationId: context?.organizationId,
 			incidentId: context?.incidentId,
-			actorUserId: context?.actorUserId
+			actorUserId: context?.actorUserId,
+			assignedToUserId: context?.assignedToUserId
 		},
 		body,
 		'internal'
@@ -524,7 +535,11 @@ export async function listInternalNotes(
 ): Promise<InternalNotePage> {
 	return listMessages(
 		db,
-		{ organizationId: context?.organizationId, incidentId: context?.incidentId },
+		{
+			organizationId: context?.organizationId,
+			incidentId: context?.incidentId,
+			assignedToUserId: context?.assignedToUserId
+		},
 		params,
 		'internal'
 	);

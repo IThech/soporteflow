@@ -67,6 +67,12 @@ test('SoporteFlow — Etapa 5.4N-D: API HTTP de comentarios públicos', async (t
 		'incidents:view_internal_notes',
 		'incidents:add_internal_note'
 	]);
+	// 5.4W-B: las notas internas exigen también alcance de incidencia (view_all / view_own asignada)
+	const notesStaff = await actor(orgA, [
+		VIEW_ALL,
+		'incidents:view_internal_notes',
+		'incidents:add_internal_note'
+	]);
 	const managerB = await actor(orgB, [VIEW_ALL, ADD], { name: 'Gestor B' });
 	const blank = await actor(orgA, [VIEW_ALL, ADD], { name: '   ' });
 
@@ -177,14 +183,15 @@ test('SoporteFlow — Etapa 5.4N-D: API HTTP de comentarios públicos', async (t
 		assert.equal((await get({ id: assignedToOwn.id, cookie: ownTech.cookie })).status, 200);
 		assert.equal((await get({ id: assignedToOwnReader.id, cookie: ownReader.cookie })).status, 200);
 		for (const target of [assignedToOther, unassigned]) {
+			// 5.4W-B: fuera del alcance de lectura -> 404 (indistinguible de inexistente)
 			const res = await get({ id: target.id, cookie: ownTech.cookie });
-			assert.equal(res.status, 403);
-			assert.equal(res.json.error.code, 'FORBIDDEN');
+			assert.equal(res.status, 404);
+			assert.equal(res.json.error.code, 'INCIDENT_NOT_FOUND');
 			assert.equal(res.json.items, undefined);
 		}
-		// clientUserId=self sin asignación no concede acceso
+		// clientUserId=self sin asignación ni view_requested no concede acceso
 		const res = await get({ id: requestedByClient.id, cookie: client.cookie });
-		assert.equal(res.status, 403);
+		assert.equal(res.status, 404);
 	});
 
 	await t.test('GET 14-15. inexistente o cross-tenant -> 404 sin fuga', async () => {
@@ -204,7 +211,7 @@ test('SoporteFlow — Etapa 5.4N-D: API HTTP de comentarios públicos', async (t
 		assert.equal(created.status, 201);
 		const note = await request(notesRoute.POST, 'POST', {
 			id: target.id,
-			cookie: notesOnly.cookie,
+			cookie: notesStaff.cookie,
 			path: 'internal-notes',
 			body: { body: 'NOTA-INTERNA-SECRETA' }
 		});
@@ -282,7 +289,7 @@ test('SoporteFlow — Etapa 5.4N-D: API HTTP de comentarios públicos', async (t
 		}
 	});
 
-	await t.test('POST 23-29. permisos y acceso a la incidencia -> 403', async () => {
+	await t.test('POST 23-29. permisos (403) y acceso a la incidencia (404)', async () => {
 		const cases = [
 			// 23. sin add_comment (view_all no reemplaza add_comment)
 			[reader, main],
@@ -290,20 +297,20 @@ test('SoporteFlow — Etapa 5.4N-D: API HTTP de comentarios públicos', async (t
 			[none, main],
 			// 24. add_comment sin view_all/view_own
 			[commentOnly, main],
-			// 27-28. view_own + otro técnico o sin asignar
-			[ownTech, assignedToOther],
-			[ownTech, unassigned],
-			// 29. clientUserId=self sin acceso técnico
-			[client, requestedByClient],
+			// 27-28. view_own + otro técnico o sin asignar (5.4W-B: 404)
+			[ownTech, assignedToOther, 404],
+			[ownTech, unassigned, 404],
+			// 29. clientUserId=self sin acceso técnico (5.4W-B: 404)
+			[client, requestedByClient, 404],
 			// permiso solo en otra org
 			[managerB, main],
 			// permisos de notas internas no conceden comentarios
 			[notesOnly, main]
 		];
-		for (const [who, target] of cases) {
+		for (const [who, target, expected = 403] of cases) {
 			const res = await post({ id: target.id, cookie: who.cookie, body: { body: 'x' } });
-			assert.equal(res.status, 403);
-			assert.equal(res.json.error.code, 'FORBIDDEN');
+			assert.equal(res.status, expected);
+			assert.equal(res.json.error.code, expected === 403 ? 'FORBIDDEN' : 'INCIDENT_NOT_FOUND');
 		}
 		// 403 de permiso precede a la validación del body
 		assert.equal((await post({ id: main.id, cookie: reader.cookie, rawBody: '{bad' })).status, 403);
@@ -420,14 +427,14 @@ test('SoporteFlow — Etapa 5.4N-D: API HTTP de comentarios públicos', async (t
 		await post({ id: target.id, body: { body: 'COMENTARIO-PUBLICO' } });
 		const note = await request(notesRoute.POST, 'POST', {
 			id: target.id,
-			cookie: notesOnly.cookie,
+			cookie: notesStaff.cookie,
 			path: 'internal-notes',
 			body: { body: 'Nota' }
 		});
 		assert.equal(note.status, 201);
 		const notes = await request(notesRoute.GET, 'GET', {
 			id: target.id,
-			cookie: notesOnly.cookie,
+			cookie: notesStaff.cookie,
 			path: 'internal-notes'
 		});
 		assert.equal(notes.status, 200);
@@ -435,6 +442,16 @@ test('SoporteFlow — Etapa 5.4N-D: API HTTP de comentarios públicos', async (t
 			notes.json.items.map((i) => i.body),
 			['Nota']
 		);
+		// 5.4W-B (B-1): permisos de notas sin alcance de incidencia -> 403 en GET y POST
+		for (const method of ['GET', 'POST']) {
+			const res = await request(notesRoute[method], method, {
+				id: target.id,
+				cookie: notesOnly.cookie,
+				path: 'internal-notes',
+				body: method === 'POST' ? { body: 'BOLA' } : undefined
+			});
+			assert.equal(res.status, 403, method);
+		}
 		// add_comment / view_all no conceden notas internas
 		for (const who of [manager, reader, ownTech]) {
 			const res = await request(notesRoute.GET, 'GET', {
@@ -485,8 +502,8 @@ test('SoporteFlow — Etapa 5.4N-D: API HTTP de comentarios públicos', async (t
 			).status;
 		};
 		assert.equal(await detail(assignedToOwn, ownTech.cookie), 200);
-		assert.equal(await detail(assignedToOther, ownTech.cookie), 403);
-		assert.equal(await detail(requestedByClient, client.cookie), 403);
+		assert.equal(await detail(assignedToOther, ownTech.cookie), 404);
+		assert.equal(await detail(requestedByClient, client.cookie), 404);
 
 		const url = new URL(`http://localhost/api/incidents?organizationId=${orgA.id}&queue=mine`);
 		const response = await listGET({
