@@ -672,10 +672,15 @@ test('SoporteFlow — Etapa 5.4T-C: cumplimiento SLA, incumplimiento y operació
 		}
 	);
 
-	await t.test('62-63. sin notificaciones, colas ni workers', () => {
+	await t.test('62-63. sin generación automática de notificaciones, colas ni workers', () => {
 		for (const dir of ['src/lib/server/services', 'src/routes/api'])
 			for (const file of fs.readdirSync(dir, { recursive: true }))
-				assert.ok(!/notification|webhook|worker|cron/i.test(String(file)), String(file));
+				assert.ok(!/webhook|worker|cron/i.test(String(file)), String(file));
+		for (const file of fs.readdirSync('src/lib/server/services')) {
+			if (!file.endsWith('.ts') || file === 'notifications.ts') continue;
+			const domain = fs.readFileSync('src/lib/server/services/' + file, 'utf8');
+			assert.ok(!/createNotification\s*\(|from ['"].*notifications/.test(domain), file);
+		}
 		const source = fs.readFileSync('src/lib/server/services/sla-compliance.ts', 'utf8');
 		assert.ok(!/setInterval|setTimeout|import /.test(source), 'función pura, sin dependencias');
 	});
