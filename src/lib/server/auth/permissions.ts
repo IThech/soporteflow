@@ -220,6 +220,21 @@ export const PERMISSION_CATALOG = [
 		description: 'Elegir, cambiar o retirar la política SLA de incidencias accesibles.',
 		category: 'sla',
 		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	// 5.4V-B: outbound webhook administration (subscriptions, secrets, delivery history).
+	{
+		id: 'webhooks:view',
+		name: 'Ver webhooks',
+		description: 'Consultar los webhooks salientes de la organización y su historial de entregas.',
+		category: 'webhooks',
+		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	{
+		id: 'webhooks:manage',
+		name: 'Gestionar webhooks',
+		description: 'Crear, modificar, desactivar webhooks salientes y rotar sus secretos de firma.',
+		category: 'webhooks',
+		allowedScopeTypes: ORGANIZATION_ONLY
 	}
 ] as const satisfies readonly PermissionDefinition[];
 

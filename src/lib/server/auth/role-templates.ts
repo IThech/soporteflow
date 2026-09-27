@@ -55,7 +55,10 @@ export const ROLE_TEMPLATES = [
 			'incidents:view_requested',
 			'sla:view',
 			'sla:manage',
-			'sla:assign'
+			'sla:assign',
+			// 5.4V-B: technicians and customers have no webhook access by default.
+			'webhooks:view',
+			'webhooks:manage'
 		]
 	},
 	{

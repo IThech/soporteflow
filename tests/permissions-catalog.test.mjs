@@ -60,7 +60,9 @@ const EXPECTED_IDS = [
 	'invitations:revoke',
 	'sla:view',
 	'sla:manage',
-	'sla:assign' // 0018 (5.4T-B)
+	'sla:assign', // 0018 (5.4T-B)
+	'webhooks:view', // 0024 (5.4V-B)
+	'webhooks:manage'
 ];
 const ID_PATTERN = /^[a-z][a-z_]*:[a-z][a-z_]*$/;
 const SCOPES = ['organization', 'department', 'team', 'site', 'personal'];

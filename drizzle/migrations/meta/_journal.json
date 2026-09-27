@@ -169,6 +169,13 @@
 			"when": 1790505216453,
 			"tag": "0023_automation_events",
 			"breakpoints": true
+		},
+		{
+			"idx": 24,
+			"version": "7",
+			"when": 1790507145463,
+			"tag": "0024_webhooks",
+			"breakpoints": true
 		}
 	]
 }

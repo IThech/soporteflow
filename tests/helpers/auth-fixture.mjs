@@ -33,7 +33,8 @@ export const expectedMigrations = [
 	'0020_notifications.sql',
 	'0021_notification_preferences.sql',
 	'0022_notification_delivery.sql',
-	'0023_automation_events.sql'
+	'0023_automation_events.sql',
+	'0024_webhooks.sql'
 ];
 
 export const TEST_SECRET = 'synthetic-phase-b-only-secret-123456789';

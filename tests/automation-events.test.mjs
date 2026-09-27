@@ -923,8 +923,9 @@ test('SoporteFlow — Etapa 5.4V-A: eventos canónicos de automatización', asyn
 			assert.doesNotMatch(read('automation-event-producer.ts'), /from '\.\/notification/);
 			for (const file of ['automation-events.ts', 'automation-event-producer.ts']) {
 				const code = strip(read(file));
+				// 5.4V-B: the producer may only reach webhooks through the DB-only fanout (no HTTP here)
 				assert.doesNotMatch(
-					code,
+					code.replace(/fanoutWebhookDeliveries|'\.\/webhook-fanout'/g, ''),
 					/fetch\(|webhook|hmac|n8n|setInterval|setTimeout|cron|console\./i,
 					file
 				);
@@ -941,7 +942,8 @@ test('SoporteFlow — Etapa 5.4V-A: eventos canónicos de automatización', asyn
 				for (const file of fs.readdirSync(dir, { recursive: true }))
 					assert.doesNotMatch(
 						String(file),
-						/webhook|n8n|automation[-_]rule|scheduler|cron/i,
+						// 5.4V-B: outbound webhook files are expected now; rules, n8n, schedulers are not
+						/n8n|automation[-_]rule|scheduler|cron/i,
 						String(file)
 					);
 			const schema = strip(fs.readFileSync('src/lib/server/db/schema/automation.ts', 'utf8'));

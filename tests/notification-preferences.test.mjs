@@ -939,7 +939,8 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 					// and its producer (automation-events / automation-event-producer / schema automation);
 					// automation rules are V-C.
 					assert.ok(
-						!/outbox|mailer|push|webhook|n8n|automation-rule|automation_rule/i.test(String(file)),
+						// 5.4V-B: outbound webhooks are allowed; inbound webhooks, n8n and rules are not
+						!/outbox|mailer|push|inbound|n8n|automation-rule|automation_rule/i.test(String(file)),
 						String(file)
 					);
 			// the producer only persists intents: it never reaches the email adapter (no network in tx)

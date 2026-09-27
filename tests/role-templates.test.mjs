@@ -41,7 +41,9 @@ const ADMIN = [
 	'incidents:view_requested',
 	'sla:view',
 	'sla:manage',
-	'sla:assign' // 0018 (5.4T-B)
+	'sla:assign', // 0018 (5.4T-B)
+	'webhooks:view', // 0024 (5.4V-B)
+	'webhooks:manage'
 ].sort();
 /** Customer template (0015, 5.4S-A): exactly these 5 permissions. */
 const CUSTOMER = [

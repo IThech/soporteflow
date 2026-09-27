@@ -675,7 +675,8 @@ test('SoporteFlow — Etapa 5.4T-C: cumplimiento SLA, incumplimiento y operació
 	await t.test('62-63. notificaciones solo vía producer; sin colas, workers ni cron', () => {
 		for (const dir of ['src/lib/server/services', 'src/routes/api'])
 			for (const file of fs.readdirSync(dir, { recursive: true }))
-				assert.ok(!/webhook|worker|cron/i.test(String(file)), String(file));
+				// 5.4V-B adds outbound webhooks (webhook-*.ts, /api/webhooks); still no worker or cron
+				assert.ok(!/worker|cron|scheduler/i.test(String(file)), String(file));
 		for (const file of fs.readdirSync('src/lib/server/services')) {
 			// 5.4U-C: the notification subsystem itself is exempt; domain services may only reach it
 			// through notification-producer (never createNotification or the recipient resolver)

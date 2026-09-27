@@ -8,6 +8,7 @@ import type {
 } from '../../automation/events';
 import type { IncidentDatabase } from './incidents';
 import { appendAutomationEvent, type StoredAutomationEvent } from './automation-events';
+import { fanoutWebhookDeliveries } from './webhook-fanout';
 
 /**
  * Domain automation event producer (5.4V-A). The only entry point domain services use to record
@@ -20,7 +21,8 @@ import { appendAutomationEvent, type StoredAutomationEvent } from './automation-
  *   organization and incident number always come from the database row;
  * - facts are appended in the given order (e.g. unassigned before assigned) and share the
  *   mutation's occurredAt;
- * - no HTTP, webhooks, rules or n8n: consumers come in V-B/V-C/V-D.
+ * - 5.4V-B: each appended event is fanned out to webhook delivery intents (webhook-fanout, pure DB)
+ *   in the same transaction; HTTP happens later in the webhook processor. No rules or n8n (V-C/V-D).
  */
 
 type Status = AutomationIncidentStatus;
@@ -242,17 +244,19 @@ export async function recordIncidentAutomationEvents(
 	// Build every payload first: an invalid fact fails before anything is written.
 	const payloads = input.facts.map((fact) => payloadOf(fact, incident));
 	const stored: StoredAutomationEvent[] = [];
-	for (const [index, fact] of input.facts.entries())
-		stored.push(
-			await appendAutomationEvent(tx, {
-				organizationId,
-				eventType: fact.eventType,
-				aggregateType: 'incident',
-				aggregateId: incidentId,
-				actorUserId,
-				occurredAt: input.occurredAt,
-				payload: payloads[index]
-			})
-		);
+	for (const [index, fact] of input.facts.entries()) {
+		const event = await appendAutomationEvent(tx, {
+			organizationId,
+			eventType: fact.eventType,
+			aggregateType: 'incident',
+			aggregateId: incidentId,
+			actorUserId,
+			occurredAt: input.occurredAt,
+			payload: payloads[index]
+		});
+		// 5.4V-B: webhook delivery intents for this event, same transaction (DB only, no HTTP).
+		await fanoutWebhookDeliveries(tx, event);
+		stored.push(event);
+	}
 	return stored;
 }

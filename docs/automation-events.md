@@ -140,8 +140,9 @@ change bumps the version for new events and consumers serialize per version.
 ## Boundaries
 
 - V-A: store, catalog, producer, wiring, tests. Nothing else.
-- V-B: webhook subscriptions, target URLs, HMAC signing, HTTP delivery and retries (reading from
-  `position`).
+- V-B (done, see [webhooks.md](webhooks.md)): webhook delivery intents are fanned out inside the
+  producing transaction (`webhook-fanout`), **not** by scanning `position`, which is not a commit
+  order.
 - V-C: automation rules, condition evaluation, actions.
 - V-D: n8n integration.
 - Scheduler: time-based SLA breach events and retention — not created here.
