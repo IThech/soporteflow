@@ -935,8 +935,13 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 			for (const dir of ['src/lib/server', 'src/routes/api'])
 				for (const file of fs.readdirSync(dir, { recursive: true }))
 					// 5.4U-D: notification-deliveries / notification-email are the only delivery modules;
-					// no generic outbox, push, webhooks or automation (5.4V)
-					assert.ok(!/outbox|mailer|push|webhook|n8n|automation/i.test(String(file)), String(file));
+					// no generic outbox, push, webhooks or n8n. 5.4V-A adds only the automation event store
+					// and its producer (automation-events / automation-event-producer / schema automation);
+					// automation rules are V-C.
+					assert.ok(
+						!/outbox|mailer|push|webhook|n8n|automation-rule|automation_rule/i.test(String(file)),
+						String(file)
+					);
 			// the producer only persists intents: it never reaches the email adapter (no network in tx)
 			assert.doesNotMatch(producer, /\.\.\/email\/|sendNotification/);
 			assert.match(producer, /from '\.\/notification-deliveries'/);

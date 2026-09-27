@@ -9,6 +9,10 @@ import {
 } from '../db/schema';
 import { IncidentServiceError, incidentAccessAllows, type IncidentDatabase } from './incidents';
 import { produceDomainNotification } from './notification-producer';
+import {
+	recordIncidentAutomationEvents,
+	type IncidentAutomationFact
+} from './automation-event-producer';
 
 /** Message DTO: explicit allowlist, never exposes tenant, incident or author UUIDs. */
 export interface IncidentMessageItem {
@@ -297,6 +301,7 @@ async function appendMessage(
 		// D.2 First response (5.4T-B): first support reply by someone other than the requester.
 		// Idempotent, first write wins (never overwritten). Internal notes, requester comments and
 		// history never count.
+		let firstResponseFact: IncidentAutomationFact | null = null;
 		if (recordsResponse && incident.clientUserId !== context.actorUserId) {
 			const [recorded] = await tx
 				.update(incidents)
@@ -317,6 +322,12 @@ async function appendMessage(
 			// and the incident has an SLA), in the same transaction as the comment.
 			if (recorded?.slaPolicyId && recorded.firstResponseAt && recorded.firstResponseDueAt) {
 				const met = recorded.firstResponseAt.getTime() <= recorded.firstResponseDueAt.getTime();
+				firstResponseFact = {
+					eventType: met ? 'sla.first_response_met' : 'sla.first_response_breached',
+					slaPolicyId: recorded.slaPolicyId,
+					dueAt: recorded.firstResponseDueAt,
+					achievedAt: recorded.firstResponseAt
+				};
 				await tx.insert(incidentHistory).values({
 					incidentId: context.incidentId,
 					organizationId: context.organizationId,
@@ -346,6 +357,25 @@ async function appendMessage(
 				payload: { messageId: message.id }
 			});
 		}
+
+		// E.2 5.4V-A: automation events, same transaction: the message fact (id only, never the body)
+		// and, when this reply recorded the first response, the observed SLA result.
+		await recordIncidentAutomationEvents(tx, {
+			organizationId: context.organizationId,
+			incidentId: context.incidentId,
+			actorUserId: context.actorUserId,
+			occurredAt: new Date(message.createdAt),
+			facts: [
+				{
+					eventType:
+						visibility === 'public'
+							? 'incident.public_comment_added'
+							: 'incident.internal_note_added',
+					messageId: message.id
+				},
+				...(firstResponseFact ? [firstResponseFact] : [])
+			]
+		});
 
 		// F. 5.4U-C: public comments notify (requester <-> assignee) in the same transaction, after the
 		// comment and the first-response/SLA writes. Internal notes never notify. The body never

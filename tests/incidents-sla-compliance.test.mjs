@@ -690,14 +690,17 @@ test('SoporteFlow — Etapa 5.4T-C: cumplimiento SLA, incumplimiento y operació
 				`${file}: ${imports}`
 			);
 		}
-		// SLA breaches are time-based and not produced (no scheduler): nothing emits sla.* events
-		for (const file of ['incidents.ts', 'incident-messages.ts', 'sla-compliance.ts'])
-			assert.ok(
-				!/sla\.(first_response|resolution)_breached/.test(
-					fs.readFileSync('src/lib/server/services/' + file, 'utf8')
-				),
-				file
-			);
+		// Time-based SLA breach NOTIFICATIONS are not produced (no scheduler). 5.4V-A: the observed
+		// SLA result is recorded as an automation fact only, never passed to the notification producer.
+		for (const file of ['incidents.ts', 'incident-messages.ts', 'sla-compliance.ts']) {
+			const source = fs.readFileSync('src/lib/server/services/' + file, 'utf8');
+			for (const call of source.matchAll(/produceDomainNotification\([\s\S]*?\}\);/g))
+				assert.doesNotMatch(call[0], /sla\./, file);
+		}
+		assert.doesNotMatch(
+			fs.readFileSync('src/lib/server/services/sla-compliance.ts', 'utf8'),
+			/sla\.(first_response|resolution)_/
+		);
 		for (const file of fs.readdirSync('src/lib/server', { recursive: true }))
 			if (String(file).endsWith('.ts'))
 				assert.ok(

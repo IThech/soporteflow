@@ -23,6 +23,10 @@ import {
 	type SlaOverallStatus
 } from './sla-compliance';
 import { produceDomainNotification } from './notification-producer';
+import {
+	recordIncidentAutomationEvents,
+	type IncidentAutomationFact
+} from './automation-event-producer';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type IncidentDatabase = PgDatabase<any, any>;
@@ -728,6 +732,15 @@ export async function createIncidentRecord(
 			});
 		}
 
+		// I. 5.4V-A: canonical automation event, same transaction (failure rolls the creation back)
+		await recordIncidentAutomationEvents(tx, {
+			organizationId: context.organizationId,
+			incidentId: incident.id,
+			actorUserId: context.creatorUserId,
+			occurredAt: now,
+			facts: [{ eventType: 'incident.created' }]
+		});
+
 		return { incident, history };
 	};
 
@@ -1254,6 +1267,46 @@ export async function updateIncidentRecord(
 			historyRecords.push(priorityHistory);
 		}
 
+		// 5.4V-A: automation events, same transaction. One semantic event per status change
+		// (reopen emits only incident.reopened), then the observed SLA resolution result, then priority.
+		const facts: IncidentAutomationFact[] = [];
+		if (isStatusChanged) {
+			const newStatus = input.status!;
+			if ((currentStatus === 'resolved' || currentStatus === 'closed') && newStatus === 'open')
+				facts.push({ eventType: 'incident.reopened', previousStatus: currentStatus });
+			else
+				facts.push({
+					eventType: 'incident.status_changed',
+					previousStatus: currentStatus,
+					newStatus
+				});
+			if (resolvesNow && currentIncident.slaPolicyId && currentIncident.resolutionDueAt) {
+				const achievedAt = updateValues.firstResolvedAt as Date;
+				facts.push({
+					eventType:
+						achievedAt.getTime() <= currentIncident.resolutionDueAt.getTime()
+							? 'sla.resolution_met'
+							: 'sla.resolution_breached',
+					slaPolicyId: currentIncident.slaPolicyId,
+					dueAt: currentIncident.resolutionDueAt,
+					achievedAt
+				});
+			}
+		}
+		if (isPriorityChanged)
+			facts.push({
+				eventType: 'incident.priority_changed',
+				previousPriority: currentPriority,
+				newPriority: input.priority!
+			});
+		await recordIncidentAutomationEvents(tx, {
+			organizationId: context.organizationId,
+			incidentId,
+			actorUserId: context.actorUserId,
+			occurredAt: updatedIncident.updatedAt,
+			facts
+		});
+
 		// 5.4U-C: in-app notifications in the same transaction (a failure rolls everything back).
 		// Reopen emits only incident.reopened; any other status change emits incident.status_changed.
 		// Priority-only changes do not notify.
@@ -1704,6 +1757,33 @@ export async function assignIncidentRecord(
 		// locked row (currentIncident), never from the request. A->B emits unassigned(A) + assigned(B);
 		// team-only changes (same assignee) emit nothing.
 		const previousAssigneeUserId = currentIncident.assignedToUserId;
+
+		// 5.4V-A: automation events in deterministic order: team_changed, unassigned(A), assigned(B).
+		const assignmentFacts: IncidentAutomationFact[] = [];
+		if (currentIncident.teamId !== finalTeamId)
+			assignmentFacts.push({
+				eventType: 'incident.team_changed',
+				previousTeamId: currentIncident.teamId,
+				newTeamId: finalTeamId
+			});
+		if (previousAssigneeUserId !== finalAssigneeId) {
+			if (previousAssigneeUserId !== null)
+				assignmentFacts.push({ eventType: 'incident.unassigned', previousAssigneeUserId });
+			if (finalAssigneeId !== null)
+				assignmentFacts.push({
+					eventType: 'incident.assigned',
+					previousAssigneeUserId,
+					assignedToUserId: finalAssigneeId
+				});
+		}
+		await recordIncidentAutomationEvents(tx, {
+			organizationId: context.organizationId,
+			incidentId,
+			actorUserId: context.actorUserId,
+			occurredAt: updatedIncident.updatedAt,
+			facts: assignmentFacts
+		});
+
 		if (previousAssigneeUserId !== finalAssigneeId) {
 			if (previousAssigneeUserId !== null) {
 				await produceDomainNotification(tx, {
@@ -1894,6 +1974,20 @@ export async function updateIncidentSupportLevel(
 			})
 			.returning();
 
+		await recordIncidentAutomationEvents(tx, {
+			organizationId: context.organizationId,
+			incidentId,
+			actorUserId: context.actorUserId,
+			occurredAt: updatedIncident.updatedAt,
+			facts: [
+				{
+					eventType: 'incident.support_level_changed',
+					previousSupportLevel: currentIncident.supportLevel as SupportLevel,
+					newSupportLevel: input.supportLevel
+				}
+			]
+		});
+
 		return { incident: updatedIncident, history: historyRecord };
 	};
 
@@ -2052,6 +2146,16 @@ export async function changeIncidentSite(
 			})
 			.returning();
 
+		await recordIncidentAutomationEvents(tx, {
+			organizationId: context.organizationId,
+			incidentId,
+			actorUserId: context.actorUserId,
+			occurredAt: updatedIncident.updatedAt,
+			facts: [
+				{ eventType: 'incident.site_changed', previousSiteId: fromSiteId, newSiteId: targetSiteId }
+			]
+		});
+
 		return { incident: updatedIncident, history: historyRecord };
 	};
 
@@ -2209,6 +2313,20 @@ export async function changeIncidentCategory(
 				payload: { fromCategoryId, toCategoryId: targetCategoryId }
 			})
 			.returning();
+
+		await recordIncidentAutomationEvents(tx, {
+			organizationId: context.organizationId,
+			incidentId,
+			actorUserId: context.actorUserId,
+			occurredAt: updatedIncident.updatedAt,
+			facts: [
+				{
+					eventType: 'incident.category_changed',
+					previousCategoryId: fromCategoryId,
+					newCategoryId: targetCategoryId
+				}
+			]
+		});
 
 		return { incident: updatedIncident, history: historyRecord };
 	};

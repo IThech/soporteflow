@@ -7,3 +7,4 @@ export * from './incidents';
 export * from './sla';
 
 export * from './notifications';
+export * from './automation';

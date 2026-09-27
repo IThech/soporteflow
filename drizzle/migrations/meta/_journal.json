@@ -162,6 +162,13 @@
 			"when": 1790501400681,
 			"tag": "0022_notification_delivery",
 			"breakpoints": true
+		},
+		{
+			"idx": 23,
+			"version": "7",
+			"when": 1790505216453,
+			"tag": "0023_automation_events",
+			"breakpoints": true
 		}
 	]
 }
