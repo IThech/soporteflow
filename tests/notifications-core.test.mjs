@@ -21,7 +21,10 @@ test('5.4U-A notification migration is journal-idempotent and coherent', async (
 		await migrate(db, { migrationsFolder: directory });
 		const before = await pg.query('select count(*)::int as n from drizzle.__drizzle_migrations');
 		await migrate(db, { migrationsFolder: directory });
-		assert.equal(before.rows[0].n, 21);
+		// every journal entry applied once (0021+ appended by later stages); the re-run applies none
+		const journal = JSON.parse(fs.readFileSync(path.join(directory, 'meta/_journal.json'), 'utf8'));
+		assert.equal(before.rows[0].n, journal.entries.length);
+		assert.ok(journal.entries.some((e) => e.tag === '0020_notifications'));
 		assert.deepEqual(
 			await pg.query('select count(*)::int as n from drizzle.__drizzle_migrations'),
 			before

@@ -81,3 +81,68 @@ Migration execution is tested only in PGlite; generating 0020 does not apply it 
 Migration idempotence means journal-managed Drizzle re-run, not raw CREATE TABLE replay.
 U-B: preferences. U-C: typed event producers and possible deduplication. U-D: delivery/outbox,
 retries and configurable retention. None is implemented here.
+
+# Notification preferences and recipient rules — 5.4U-B
+
+## Event catalog
+
+`src/lib/notifications/events.ts` (shared by server and client, no imports) defines the canonical
+event types used by preferences and recipient rules. `notifications.type` in the database stays
+extensible; this catalog does not become a DB enum.
+
+| Event type                      | Recipients (before actor exclusion, activity and preferences)        |
+| ------------------------------- | -------------------------------------------------------------------- |
+| `incident.assigned`             | current assignee                                                     |
+| `incident.unassigned`           | previous assignee (passed by the producer, must be an active member) |
+| `incident.status_changed`       | requester (`client_user_id`) + assignee                              |
+| `incident.reopened`             | requester + assignee                                                 |
+| `incident.public_comment_added` | author is the requester: assignee; otherwise: requester              |
+| `sla.first_response_breached`   | assignee only                                                        |
+| `sla.resolution_breached`       | assignee only                                                        |
+
+Deliberately not catalogued yet: `incident.created`, priority/category/site/support-level changes
+(no clear audience or too noisy for Core v1).
+
+## Preferences
+
+Table `notification_preferences` (migration 0021): PK (organization_id, user_id, event_type),
+`in_app_enabled boolean NOT NULL`, timestamps, composite FK (organization_id, user_id) →
+memberships ON DELETE CASCADE. Rows are overrides: a missing row means the catalog default
+(**every event enabled in-app**). Both `true` and `false` overrides are stored explicitly.
+No email/push flags (U-D).
+
+Personal resource like the inbox: no `notifications:*` capability, no role codes, no admin editing
+of other users. Session + active user + active membership + active organization (rows FOR SHARE).
+Preferences are per (organization, user): muting an event in one organization never affects another.
+
+HTTP (responses `private, no-store`; mutations require matching Origin; JSON body ≤ 256 bytes):
+
+- `GET /api/notification-preferences?organizationId=` → `{ preferences: [{ eventType, inAppEnabled, isDefault }] }`
+  for every catalogued event, in catalog order (`isDefault: true` = no override stored).
+- `PUT /api/notification-preferences/<eventType>?organizationId=` body exactly `{ inAppEnabled: boolean }`
+  → upsert, idempotent (`updated_at` only moves when the value changes) → `{ preference }`.
+- `DELETE /api/notification-preferences/<eventType>?organizationId=` (no body) → removes the override,
+  idempotent 204.
+
+Unknown event types, extra body/query fields or any user id are rejected with 400.
+
+## Recipient rules
+
+`src/lib/server/services/notification-recipients.ts`:
+
+- `resolveCandidateRecipients(db, event)`: reads the incident by (incidentId, organizationId) —
+  relationships are never trusted from the caller except the previous assignee of an unassignment —
+  applies the rule, removes the actor, dedupes and sorts.
+- `resolveNotificationRecipients(db, event)`: candidates → active user + active membership + active
+  organization (one query) → enabled preference (one batched query,
+  `filterUsersWithNotificationEnabled`) → sorted user ids. Constant query count.
+
+Self-notification policy: the actor of an action is never notified (self-assignment, own comment,
+own status change, own unassignment). Time-based SLA breaches have no actor. SLA breaches go only
+to the assignee (no admin broadcast, no team/escalation fallback yet).
+
+## Boundaries
+
+U-B creates no notifications: nothing calls the resolver or `createNotification` from incidents,
+comments, SLA, history or invitations. U-C will connect domain events → resolver → notification
+producer (and decide deduplication). U-D: email/push, outbox, retries, digests, retention.

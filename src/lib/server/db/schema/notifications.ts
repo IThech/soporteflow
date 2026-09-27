@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
+	boolean,
+	primaryKey,
 	pgTable,
 	uuid,
 	varchar,
@@ -51,3 +53,38 @@ export const notifications = pgTable(
 	]
 );
 export type NotificationRecord = typeof notifications.$inferSelect;
+
+/**
+ * Personal notification preferences (5.4U-B): overrides per organization + user + event type.
+ * A missing row means the catalog default (src/lib/notifications/events.ts); a row stores an
+ * explicit boolean. The composite FK ties the preference to a membership of that organization
+ * (removed with it). event_type is validated against the catalog by the service; the database
+ * only enforces the same shape as notifications.type.
+ */
+export const notificationPreferences = pgTable(
+	'notification_preferences',
+	{
+		organizationId: uuid('organization_id').notNull(),
+		userId: uuid('user_id').notNull(),
+		eventType: varchar('event_type', { length: 80 }).notNull(),
+		inAppEnabled: boolean('in_app_enabled').notNull(),
+		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
+	},
+	(table) => [
+		primaryKey({
+			name: 'notification_preferences_pkey',
+			columns: [table.organizationId, table.userId, table.eventType]
+		}),
+		foreignKey({
+			name: 'notification_preferences_member_org_fk',
+			columns: [table.organizationId, table.userId],
+			foreignColumns: [memberships.organizationId, memberships.userId]
+		}).onDelete('cascade'),
+		check(
+			'notification_preferences_event_type_check',
+			sql`${table.eventType} ~ '^[a-z][a-z0-9]*([._-][a-z0-9]+)*$'`
+		)
+	]
+);
+export type NotificationPreferenceRecord = typeof notificationPreferences.$inferSelect;

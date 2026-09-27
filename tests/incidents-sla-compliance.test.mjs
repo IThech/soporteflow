@@ -677,7 +677,9 @@ test('SoporteFlow — Etapa 5.4T-C: cumplimiento SLA, incumplimiento y operació
 			for (const file of fs.readdirSync(dir, { recursive: true }))
 				assert.ok(!/webhook|worker|cron/i.test(String(file)), String(file));
 		for (const file of fs.readdirSync('src/lib/server/services')) {
-			if (!file.endsWith('.ts') || file === 'notifications.ts') continue;
+			// the notification subsystem itself (inbox, preferences, recipient rules) is exempt; domain
+			// services must not produce or import notifications yet
+			if (!file.endsWith('.ts') || /^notification(s|-[a-z-]+)\.ts$/.test(file)) continue;
 			const domain = fs.readFileSync('src/lib/server/services/' + file, 'utf8');
 			assert.ok(!/createNotification\s*\(|from ['"].*notifications/.test(domain), file);
 		}
