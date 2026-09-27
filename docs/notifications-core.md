@@ -109,13 +109,14 @@ Table `notification_preferences` (migration 0021): PK (organization_id, user_id,
 `in_app_enabled boolean NOT NULL`, timestamps, composite FK (organization_id, user_id) →
 memberships ON DELETE CASCADE. Rows are overrides: a missing row means the catalog default
 (**every event enabled in-app**). Both `true` and `false` overrides are stored explicitly.
-No email/push flags (U-D).
+No email/push flags in U-B (email added by U-D, see below).
 
 Personal resource like the inbox: no `notifications:*` capability, no role codes, no admin editing
 of other users. Session + active user + active membership + active organization (rows FOR SHARE).
 Preferences are per (organization, user): muting an event in one organization never affects another.
 
-HTTP (responses `private, no-store`; mutations require matching Origin; JSON body ≤ 256 bytes):
+HTTP as shipped in U-B (the body/DTO contract is superseded by the per-channel contract in U-D below;
+responses `private, no-store`; mutations require matching Origin; JSON body ≤ 256 bytes):
 
 - `GET /api/notification-preferences?organizationId=` → `{ preferences: [{ eventType, inAppEnabled, isDefault }] }`
   for every catalogued event, in catalog order (`isDefault: true` = no override stored).
@@ -195,8 +196,121 @@ notification data in incident DTOs.
 
 - `sla.first_response_breached` and `sla.resolution_breached` are catalogued but not produced:
   breaches are time-based and there is no worker/cron/scheduler. Pending a later stage.
-- No email, push, outbox, retries or deduplication across events (U-D).
+- No email in U-C (added by U-D below); no push, generic outbox or deduplication across events.
 - Real multi-connection concurrency is validated in 5.4W (PGlite is single-connection).
 
 Boundary tests enforce that domain services import only `./notification-producer` and never call
 `createNotification` or the recipient resolver directly.
+
+# Email delivery — 5.4U-D
+
+## Architecture
+
+```
+domain transaction ─┬─ in-app row (createNotification)          ← in-app ON
+                    └─ delivery intent (notification_deliveries) ← email ON
+COMMIT
+processDueNotificationDeliveries (later, outside the domain tx)
+  claim (short tx) → send (no tx) → sent | retry | failed (lease-guarded update)
+```
+
+- In-app stays the primary, local channel. Email is sent only by the processor, never inside a
+  domain transaction: no network call can roll back or block a domain mutation.
+- The intent is persisted atomically with the domain change. If inserting it fails (DB error),
+  the whole mutation rolls back, in-app notification included — the intent was part of the
+  mutation. If the _send_ fails later, only the delivery row changes.
+- `notification_deliveries` is a notification-scoped outbox, deliberately not a generic outbox or
+  job system (automation/webhooks belong to 5.4V).
+
+## Email preferences
+
+- `notification_preferences.email_enabled` (migration 0022). `in_app_enabled` became nullable:
+  each column is an independent per-channel override, `NULL` = catalog default.
+- Defaults: in-app **ON**, email **OFF** for every event, so existing users never start receiving
+  unexpected email. Existing rows keep their in-app override and get `email_enabled = NULL`.
+- A row always overrides at least one channel (`notification_preferences_override_check`); when
+  both become default the row is deleted, so "no row" = "all defaults".
+- DTO: `{ eventType, inAppEnabled, emailEnabled, inAppIsDefault, emailIsDefault }` (the U-B global
+  `isDefault` was ambiguous with two channels and was replaced).
+- `PUT /api/notification-preferences/<eventType>` body: strict subset of
+  `{ inAppEnabled: boolean | null, emailEnabled: boolean | null }`, at least one key. Only the
+  channels present change; `null` resets that channel. `DELETE` resets both channels (204).
+
+## Channel independence
+
+Recipient rules (relationship, actor exclusion, active membership) run once, before channels
+(`resolveNotificationRecipientChannels`). Then each channel applies its own preference:
+
+| in-app | email | Result                                                        |
+| ------ | ----- | ------------------------------------------------------------- |
+| ON     | OFF   | inbox row only (default)                                      |
+| ON     | ON    | inbox row + delivery (`notification_id` references the row)   |
+| OFF    | ON    | delivery only, `notification_id = NULL` — no hidden inbox row |
+| OFF    | OFF   | nothing; the domain mutation still completes                  |
+
+## Delivery model
+
+`notification_deliveries`: `organization_id`, `recipient_user_id` (composite FK to memberships,
+cascade), `notification_id` (nullable, `ON DELETE SET NULL`), `channel` (`CHECK IN ('email')`),
+snapshot `event_type` / `title` / `message`, `status`, `attempt_count`, `next_attempt_at`,
+`lease_token`, `last_attempt_at`, `sent_at`, `failed_at`, `last_error_code` (CHECK-listed safe codes),
+`provider_message_id`, timestamps.
+
+- Self-contained snapshot: sending does not depend on the inbox row, so deleting an in-app
+  notification never breaks a pending email and never erases delivery history.
+- No recipient address snapshot and no raw provider response are stored. The address is read at
+  send time from `auth_users.email` (the sign-in identity: unique, normalized); it never comes from
+  a client or payload. `email_verified` is not required yet (provisioned accounts start
+  unverified); tightening it is 5.4W debt.
+- `notification_deliveries_state_check` ties status to its columns: `next_attempt_at` set exactly
+  for pending/retry/processing, `lease_token` exactly for processing, `sent_at` for sent,
+  `failed_at` + error code for failed.
+- Indexes: due rows (`next_attempt_at, id` partial on pending/retry/processing), per recipient
+  (`organization_id, recipient_user_id, created_at`), retention (`updated_at` partial on sent/failed).
+
+Statuses: `pending → processing → sent | retry | failed`, `retry → processing → …`.
+
+## Processor, claim and retries
+
+- `processDueNotificationDeliveries(db, { limit = 25 (max 100), now, sender })` is the entry point
+  for a future scheduler. No cron, interval or worker is created here.
+- `claimDueDeliveries`: one short transaction, `FOR UPDATE SKIP LOCKED`, sets `processing`, a new
+  `lease_token`, `attempt_count + 1` and `next_attempt_at = now + 5 min` (lease expiry). An
+  abandoned claim becomes due again after the lease; one already at the attempt limit is closed
+  as `MAX_ATTEMPTS`.
+- Outcome updates (`markDeliverySent/Retry/Failed`) require the current lease token: a stale
+  worker cannot overwrite a newer result, and a finished row cannot be marked twice.
+- Retry policy (transient errors): 1 min, 5 min, 30 min, 2 h; the 5th failed attempt is final
+  (`failed`, `MAX_ATTEMPTS`). Deterministic with the injected `now`.
+- Error classification: transient `NETWORK_ERROR`, `RATE_LIMITED`, `PROVIDER_ERROR` (5xx or any
+  unknown thrown value); permanent `PROVIDER_NOT_CONFIGURED`, `RECIPIENT_INVALID` (adapter
+  rejection, missing or malformed address), `RECIPIENT_INACTIVE` (membership/user/organization
+  inactive at send time). Only the code is persisted, never messages or stacks.
+- Semantics are at-least-once: a crash after the provider accepted a message but before it was
+  marked sent resends after the lease. Exactly-once needs provider idempotency keys (5.4W).
+- Real multi-connection claim concurrency is not proven on PGlite (single connection) — 5.4W.
+
+## Email adapter and content
+
+`src/lib/server/email/notification-email.ts`, same pattern as invitations:
+`NotificationEmailSender`, `UnconfiguredNotificationEmailSender` (default; fails with
+`PROVIDER_NOT_CONFIGURED`), `MemoryNotificationEmailSender` (tests), `NotificationEmailError(code)`.
+No provider is coupled. Messages are text/plain: subject = title with control characters (CR/LF)
+collapsed, body = message. Both are the fixed producer texts (`#<incidentNumber>` only): no
+comment bodies, incident titles, names or HTML. Nothing is logged.
+
+## Retention
+
+`deleteOldNotificationDeliveries(db, { before })` deletes `sent`/`failed` rows last updated before
+the cutoff; pending/retry/processing rows are never deleted. No scheduler invokes it yet. Inbox
+retention is separate (manual clear from U-A); U-D never deletes inbox notifications.
+
+## Boundaries
+
+- No public delivery API or UI; deliveries are internal (services and tests only).
+- No webhooks, HMAC, target URLs, n8n or automation rules (5.4V). No push/SMS/chat channels.
+- SLA breach events stay catalogued but not produced: they are time-based and need a scheduler,
+  which belongs with 5.4V automation. The producer rejects `sla.*`.
+- 5.4V: scheduler invoking the processor and retention, SLA breach producer, webhooks/automation.
+- 5.4W: real two-connection claim concurrency, provider idempotency keys, `email_verified`
+  policy, global event idempotency/deduplication.

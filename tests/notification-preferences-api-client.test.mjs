@@ -9,7 +9,9 @@ const all = (over = {}) =>
 	api.NOTIFICATION_EVENT_TYPES.map((eventType) => ({
 		eventType,
 		inAppEnabled: true,
-		isDefault: true,
+		emailEnabled: false,
+		inAppIsDefault: true,
+		emailIsDefault: true,
 		...(over[eventType] ?? {})
 	}));
 function json(body, status = 200) {
@@ -37,14 +39,29 @@ async function rejectsWith(promise, { status, code }) {
 		return true;
 	});
 }
+const pref = (over) => ({
+	eventType: 'sla.resolution_breached',
+	inAppEnabled: true,
+	emailEnabled: false,
+	inAppIsDefault: true,
+	emailIsDefault: true,
+	...over
+});
 
-test('SoporteFlow — Etapa 5.4U-B: cliente de preferencias de notificación', async (t) => {
+test('SoporteFlow — Etapa 5.4U-B/D: cliente de preferencias de notificación', async (t) => {
 	await t.test('list: GET same-origin, signal, parser estricto y extras descartados', async () => {
 		const controller = new AbortController();
 		const { fetchFn, calls } = mock(() =>
 			json({
 				preferences: all({
-					'incident.assigned': { inAppEnabled: false, isDefault: false, userId: 'x' }
+					'incident.assigned': {
+						inAppEnabled: false,
+						inAppIsDefault: false,
+						emailEnabled: true,
+						emailIsDefault: false,
+						userId: 'x',
+						recipientEmail: 'x@example.test'
+					}
 				}),
 				extra: true
 			})
@@ -57,7 +74,16 @@ test('SoporteFlow — Etapa 5.4U-B: cliente de preferencias de notificación', a
 		assert.deepEqual(list[0], {
 			eventType: 'incident.assigned',
 			inAppEnabled: false,
-			isDefault: false
+			emailEnabled: true,
+			inAppIsDefault: false,
+			emailIsDefault: false
+		});
+		assert.deepEqual(list[1], {
+			eventType: 'incident.unassigned',
+			inAppEnabled: true,
+			emailEnabled: false,
+			inAppIsDefault: true,
+			emailIsDefault: true
 		});
 		assert.equal(calls[0].url, `/api/notification-preferences?organizationId=${ORG}`);
 		assert.equal(calls[0].init.method, 'GET');
@@ -67,56 +93,53 @@ test('SoporteFlow — Etapa 5.4U-B: cliente de preferencias de notificación', a
 	});
 
 	await t.test(
-		'list: payload inválido, eventos desconocidos, duplicados o incompletos -> INVALID_PAYLOAD',
+		'list: payload inválido, eventos desconocidos, duplicados, incompletos o formato U-B -> INVALID_PAYLOAD',
 		async () => {
+			const first = (over) => all().map((p, i) => (i === 0 ? { ...p, ...over } : p));
 			for (const body of [
 				{},
 				{ preferences: 'x' },
 				{ preferences: all().slice(1) },
 				{ preferences: [...all().slice(1), all()[1]] },
+				{ preferences: first({ eventType: 'incident.created' }) },
+				{ preferences: first({ inAppEnabled: 'true' }) },
+				{ preferences: first({ emailEnabled: 'false' }) },
+				{ preferences: first({ inAppIsDefault: null }) },
+				{ preferences: first({ emailIsDefault: undefined }) },
 				{
-					preferences: all().map((p, i) => (i === 0 ? { ...p, eventType: 'incident.created' } : p))
-				},
-				{ preferences: all().map((p, i) => (i === 0 ? { ...p, inAppEnabled: 'true' } : p)) },
-				{ preferences: all().map((p, i) => (i === 0 ? { ...p, isDefault: null } : p)) }
+					preferences: all().map((p, i) =>
+						i === 0 ? { eventType: p.eventType, inAppEnabled: true, isDefault: true } : p
+					)
+				}
 			])
 				await rejectsWith(
 					api.listNotificationPreferences(ORG, { customFetch: async () => json(body) }),
-					{
-						code: 'INVALID_PAYLOAD'
-					}
+					{ code: 'INVALID_PAYLOAD' }
 				);
 		}
 	);
 
 	await t.test(
-		'set: PUT con cuerpo exacto, respuesta coherente; reset: DELETE sin cuerpo y 204',
+		'set: PUT parcial por canal, respuesta coherente; reset: DELETE sin cuerpo y 204',
 		async () => {
 			const { fetchFn, calls } = mock((url, init) =>
 				init.method === 'PUT'
-					? json({
-							preference: {
-								eventType: 'sla.resolution_breached',
-								inAppEnabled: false,
-								isDefault: false
-							}
-						})
+					? json({ preference: pref({ emailEnabled: true, emailIsDefault: false }) })
 					: new Response(null, { status: 204 })
 			);
-			const p = await api.setNotificationPreference(ORG, 'sla.resolution_breached', false, {
-				customFetch: fetchFn
-			});
-			assert.deepEqual(p, {
-				eventType: 'sla.resolution_breached',
-				inAppEnabled: false,
-				isDefault: false
-			});
+			const p = await api.setNotificationPreference(
+				ORG,
+				'sla.resolution_breached',
+				{ emailEnabled: true },
+				{ customFetch: fetchFn }
+			);
+			assert.deepEqual(p, pref({ emailEnabled: true, emailIsDefault: false }));
 			assert.equal(
 				calls[0].url,
 				`/api/notification-preferences/sla.resolution_breached?organizationId=${ORG}`
 			);
 			assert.equal(calls[0].init.method, 'PUT');
-			assert.deepEqual(JSON.parse(calls[0].init.body), { inAppEnabled: false });
+			assert.deepEqual(JSON.parse(calls[0].init.body), { emailEnabled: true });
 			assert.equal(
 				await api.resetNotificationPreference(ORG, 'sla.resolution_breached', {
 					customFetch: fetchFn
@@ -125,18 +148,33 @@ test('SoporteFlow — Etapa 5.4U-B: cliente de preferencias de notificación', a
 			);
 			assert.equal(calls[1].init.method, 'DELETE');
 			assert.equal(calls[1].init.body, undefined);
-			for (const bad of [
-				{ preference: { eventType: 'incident.assigned', inAppEnabled: false, isDefault: false } },
-				{
-					preference: { eventType: 'sla.resolution_breached', inAppEnabled: true, isDefault: false }
-				},
-				{
-					preference: { eventType: 'sla.resolution_breached', inAppEnabled: false, isDefault: true }
-				}
+
+			// both channels, null = back to default; sent exactly as given
+			const both = mock(json({ preference: pref({ inAppEnabled: false, inAppIsDefault: false }) }));
+			await api.setNotificationPreference(
+				ORG,
+				'sla.resolution_breached',
+				{ inAppEnabled: false, emailEnabled: null },
+				{ customFetch: both.fetchFn }
+			);
+			assert.deepEqual(JSON.parse(both.calls[0].init.body), {
+				inAppEnabled: false,
+				emailEnabled: null
+			});
+
+			for (const [update, bad] of [
+				[
+					{ emailEnabled: true },
+					pref({ eventType: 'incident.assigned', emailEnabled: true, emailIsDefault: false })
+				],
+				[{ emailEnabled: true }, pref({ emailEnabled: false, emailIsDefault: false })],
+				[{ emailEnabled: true }, pref({ emailEnabled: true, emailIsDefault: true })],
+				[{ inAppEnabled: false }, pref({ inAppEnabled: true, inAppIsDefault: false })],
+				[{ inAppEnabled: null }, pref({ inAppEnabled: false, inAppIsDefault: false })]
 			])
 				await rejectsWith(
-					api.setNotificationPreference(ORG, 'sla.resolution_breached', false, {
-						customFetch: async () => json(bad)
+					api.setNotificationPreference(ORG, 'sla.resolution_breached', update, {
+						customFetch: async () => json({ preference: bad })
 					}),
 					{ code: 'INVALID_PAYLOAD' }
 				);
@@ -150,13 +188,20 @@ test('SoporteFlow — Etapa 5.4U-B: cliente de preferencias de notificación', a
 	);
 
 	await t.test(
-		'validación previa: org, evento desconocido y valor no booleano no llaman a fetch',
+		'validación previa: org, evento, cuerpo vacío/extra/no booleano no llaman a fetch',
 		async () => {
 			const { fetchFn, calls } = mock(json({}));
+			const set = (org, type, update) =>
+				api.setNotificationPreference(org, type, update, { customFetch: fetchFn });
 			for (const promise of [
 				api.listNotificationPreferences('x', { customFetch: fetchFn }),
-				api.setNotificationPreference(ORG, 'incident.created', false, { customFetch: fetchFn }),
-				api.setNotificationPreference(ORG, 'incident.assigned', 'false', { customFetch: fetchFn }),
+				set(ORG, 'incident.created', { inAppEnabled: false }),
+				set(ORG, 'incident.assigned', { inAppEnabled: 'false' }),
+				set(ORG, 'incident.assigned', { emailEnabled: 1 }),
+				set(ORG, 'incident.assigned', {}),
+				set(ORG, 'incident.assigned', false),
+				set(ORG, 'incident.assigned', null),
+				set(ORG, 'incident.assigned', { emailEnabled: true, userId: 'x' }),
 				api.resetNotificationPreference(ORG, '../x', { customFetch: fetchFn }),
 				api.resetNotificationPreference('', 'incident.assigned', { customFetch: fetchFn })
 			])
@@ -184,12 +229,17 @@ test('SoporteFlow — Etapa 5.4U-B: cliente de preferencias de notificación', a
 		const controller = new AbortController();
 		controller.abort();
 		await assert.rejects(
-			api.setNotificationPreference(ORG, 'incident.assigned', true, {
-				signal: controller.signal,
-				customFetch: async () => {
-					throw new DOMException('aborted', 'AbortError');
+			api.setNotificationPreference(
+				ORG,
+				'incident.assigned',
+				{ inAppEnabled: true },
+				{
+					signal: controller.signal,
+					customFetch: async () => {
+						throw new DOMException('aborted', 'AbortError');
+					}
 				}
-			}),
+			),
 			(e) => e.name === 'AbortError'
 		);
 		await rejectsWith(
@@ -207,7 +257,14 @@ test('SoporteFlow — Etapa 5.4U-B: cliente de preferencias de notificación', a
 		() => {
 			const source = fs.readFileSync('src/lib/api/notification-preferences.ts', 'utf8');
 			assert.match(source, /from '\.\.\/notifications\/events\.ts'/);
-			for (const forbidden of ['localStorage', 'sessionStorage', 'demo', 'x-user-id', 'userId'])
+			for (const forbidden of [
+				'localStorage',
+				'sessionStorage',
+				'demo',
+				'x-user-id',
+				'userId',
+				'recipientEmail'
+			])
 				assert.ok(!source.includes(forbidden), forbidden);
 		}
 	);

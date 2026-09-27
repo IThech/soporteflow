@@ -6,8 +6,9 @@
  * incident.created, priority/category/site/support-level changes. notifications.type in the
  * database stays extensible; this catalog governs preferences and recipient rules only.
  *
- * Default: every catalogued event is enabled in-app. A missing preference row means "default";
- * a stored row is an explicit override (true or false).
+ * Defaults per channel (5.4U-D): in-app ON, email OFF for every event (existing users never start
+ * receiving unexpected emails). A missing preference row, or a NULL channel column, means "default";
+ * a stored boolean is an explicit override for that channel only.
  */
 export const NOTIFICATION_EVENT_TYPES = [
 	'incident.assigned',
@@ -22,16 +23,19 @@ export const NOTIFICATION_EVENT_TYPES = [
 export type NotificationEventType = (typeof NOTIFICATION_EVENT_TYPES)[number];
 
 export const NOTIFICATION_EVENT_DEFAULTS: Readonly<
-	Record<NotificationEventType, { readonly inAppEnabled: boolean }>
+	Record<NotificationEventType, { readonly inAppEnabled: boolean; readonly emailEnabled: boolean }>
 > = Object.freeze({
-	'incident.assigned': { inAppEnabled: true },
-	'incident.unassigned': { inAppEnabled: true },
-	'incident.status_changed': { inAppEnabled: true },
-	'incident.public_comment_added': { inAppEnabled: true },
-	'incident.reopened': { inAppEnabled: true },
-	'sla.first_response_breached': { inAppEnabled: true },
-	'sla.resolution_breached': { inAppEnabled: true }
+	'incident.assigned': { inAppEnabled: true, emailEnabled: false },
+	'incident.unassigned': { inAppEnabled: true, emailEnabled: false },
+	'incident.status_changed': { inAppEnabled: true, emailEnabled: false },
+	'incident.public_comment_added': { inAppEnabled: true, emailEnabled: false },
+	'incident.reopened': { inAppEnabled: true, emailEnabled: false },
+	'sla.first_response_breached': { inAppEnabled: true, emailEnabled: false },
+	'sla.resolution_breached': { inAppEnabled: true, emailEnabled: false }
 });
+
+export const NOTIFICATION_CHANNELS = ['in_app', 'email'] as const;
+export type NotificationChannel = (typeof NOTIFICATION_CHANNELS)[number];
 
 export function isNotificationEventType(value: unknown): value is NotificationEventType {
 	return (

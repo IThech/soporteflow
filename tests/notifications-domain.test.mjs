@@ -233,7 +233,7 @@ test('SoporteFlow — Etapa 5.4U-C: generación de notificaciones desde el domin
 				db,
 				{ organizationId: A.org.id, userId: techB.user.id },
 				'incident.assigned',
-				false
+				{ inAppEnabled: false }
 			);
 			try {
 				const inc = await incident(A, admin);
@@ -594,21 +594,21 @@ test('SoporteFlow — Etapa 5.4U-C: generación de notificaciones desde el domin
 				previousStatus: 'pending',
 				newStatus: 'open'
 			}),
-			{ created: 2 }
+			{ created: 2, emailQueued: 0 }
 		);
 		assert.deepEqual(
 			await producer.produceDomainNotification(db, { ...base, eventType: 'incident.assigned' }),
-			{ created: 1 }
+			{ created: 1, emailQueued: 0 }
 		);
 	});
 
-	await t.test('sin worker, cron, email ni outbox en el producer', () => {
+	await t.test('sin worker, cron ni envío en el producer (solo intents)', () => {
 		const source = fs
 			.readFileSync('src/lib/server/services/notification-producer.ts', 'utf8')
 			.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
 		for (const forbidden of [
 			/setInterval|setTimeout|cron/i,
-			/mail|outbox|webhook|push/i,
+			/\.\.\/email\/|sendNotification|fetch\(|outbox|webhook|push/i,
 			/catch\s*[({]/,
 			/incidentHistory|incident_history/
 		])

@@ -11,11 +11,21 @@ import {
 
 export { NOTIFICATION_EVENT_TYPES, type NotificationEventType };
 
+/** Effective values per channel (5.4U-D). Defaults: in-app ON, email OFF. */
 export interface NotificationPreference {
 	eventType: NotificationEventType;
 	inAppEnabled: boolean;
-	/** true: no override stored, the value is the catalog default. */
-	isDefault: boolean;
+	emailEnabled: boolean;
+	/** true: no in-app override stored, the value is the catalog default. */
+	inAppIsDefault: boolean;
+	/** true: no email override stored, the value is the catalog default. */
+	emailIsDefault: boolean;
+}
+
+/** Partial update: boolean = override, null = back to that channel's default. At least one key. */
+export interface NotificationPreferenceUpdate {
+	inAppEnabled?: boolean | null;
+	emailEnabled?: boolean | null;
 }
 
 export interface NotificationPreferenceRequestOptions {
@@ -112,10 +122,18 @@ function parsePreference(raw: unknown, status: number): NotificationPreference {
 	if (
 		!isNotificationEventType(p.eventType) ||
 		typeof p.inAppEnabled !== 'boolean' ||
-		typeof p.isDefault !== 'boolean'
+		typeof p.emailEnabled !== 'boolean' ||
+		typeof p.inAppIsDefault !== 'boolean' ||
+		typeof p.emailIsDefault !== 'boolean'
 	)
 		throw invalidPayload(status);
-	return { eventType: p.eventType, inAppEnabled: p.inAppEnabled, isDefault: p.isDefault };
+	return {
+		eventType: p.eventType,
+		inAppEnabled: p.inAppEnabled,
+		emailEnabled: p.emailEnabled,
+		inAppIsDefault: p.inAppIsDefault,
+		emailIsDefault: p.emailIsDefault
+	};
 }
 
 function url(organizationId: string, eventType?: NotificationEventType): string {
@@ -142,29 +160,51 @@ export async function listNotificationPreferences(
 	return preferences;
 }
 
-/** PUT: stores the final value for this event (override). */
+function assertUpdate(value: unknown): asserts value is NotificationPreferenceUpdate {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidInput();
+	const entries = Object.entries(value);
+	if (
+		entries.length === 0 ||
+		entries.some(
+			([key, v]) =>
+				(key !== 'inAppEnabled' && key !== 'emailEnabled') || (v !== null && typeof v !== 'boolean')
+		)
+	)
+		throw invalidInput();
+}
+
+/** The response must reflect every channel that was sent. */
+function coherent(preference: NotificationPreference, update: NotificationPreferenceUpdate) {
+	const check = (sent: boolean | null | undefined, value: boolean, isDefault: boolean) =>
+		sent === undefined || (sent === null ? isDefault : !isDefault && value === sent);
+	return (
+		check(update.inAppEnabled, preference.inAppEnabled, preference.inAppIsDefault) &&
+		check(update.emailEnabled, preference.emailEnabled, preference.emailIsDefault)
+	);
+}
+
+/** PUT: changes only the channels present (partial, per-channel override). */
 export async function setNotificationPreference(
 	organizationId: string,
 	eventType: NotificationEventType,
-	inAppEnabled: boolean,
+	update: NotificationPreferenceUpdate,
 	options?: NotificationPreferenceRequestOptions
 ): Promise<NotificationPreference> {
 	assertOrganization(organizationId);
 	assertEventType(eventType);
-	if (typeof inAppEnabled !== 'boolean') throw invalidInput();
-	const res = await send(url(organizationId, eventType), options, 'PUT', { inAppEnabled });
+	assertUpdate(update);
+	const body: NotificationPreferenceUpdate = {};
+	if (update.inAppEnabled !== undefined) body.inAppEnabled = update.inAppEnabled;
+	if (update.emailEnabled !== undefined) body.emailEnabled = update.emailEnabled;
+	const res = await send(url(organizationId, eventType), options, 'PUT', body);
 	if (!res.ok) throw failure(res);
 	const preference = parsePreference((await readObject(res)).preference, res.status);
-	if (
-		preference.eventType !== eventType ||
-		preference.inAppEnabled !== inAppEnabled ||
-		preference.isDefault
-	)
+	if (preference.eventType !== eventType || !coherent(preference, body))
 		throw invalidPayload(res.status);
 	return preference;
 }
 
-/** DELETE: back to the catalog default (idempotent, 204). */
+/** DELETE: both channels back to the catalog defaults (idempotent, 204). */
 export async function resetNotificationPreference(
 	organizationId: string,
 	eventType: NotificationEventType,

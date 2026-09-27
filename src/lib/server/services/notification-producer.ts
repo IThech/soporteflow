@@ -2,16 +2,21 @@ import { and, eq } from 'drizzle-orm';
 import { incidents } from '../db/schema';
 import type { IncidentDatabase } from './incidents';
 import { createNotification } from './notifications';
-import { resolveNotificationRecipients } from './notification-recipients';
+import { createNotificationDelivery } from './notification-deliveries';
+import { resolveNotificationRecipientChannels } from './notification-recipients';
 
 /**
- * Domain notification producer (5.4U-C). The ONLY entry point domain services use to emit in-app
- * notifications: event -> recipients (5.4U-B rules) -> centralized title/message/payload ->
- * createNotification per recipient.
+ * Domain notification producer (5.4U-C/D). The ONLY entry point domain services use to emit
+ * notifications: event -> recipients (5.4U-B rules) -> per-channel preferences ->
+ * centralized title/message/payload -> in-app row (createNotification) and/or email delivery
+ * intent (createNotificationDelivery) per recipient. Channels are independent: a recipient with
+ * in-app OFF and email ON gets only the delivery intent (no hidden inbox row).
  *
  * Transactional contract: it runs on the caller's dbOrTx (the domain mutation's transaction) and
- * never catches errors. If resolving recipients or inserting any notification fails, the error
- * propagates and the whole domain mutation rolls back. No outbox, email, worker or retries.
+ * never catches errors. If resolving recipients or inserting any notification or delivery intent
+ * fails, the error propagates and the whole domain mutation rolls back. It never sends anything:
+ * emails are sent later by processDueNotificationDeliveries, so provider failures cannot roll back
+ * the domain.
  *
  * Content contract: fixed Spanish texts that only reference the incident number. Never the
  * incident title, comment bodies, names, emails or any other PII. Payload is minimal metadata.
@@ -148,13 +153,14 @@ function content(
 }
 
 /**
- * Emits the in-app notifications for one domain event on the caller's transaction.
- * notification.type === eventType. Returns how many notifications were created.
+ * Emits the notifications of one domain event on the caller's transaction.
+ * notification.type === delivery.event_type === eventType. Returns how many in-app notifications
+ * were created and how many email delivery intents were queued.
  */
 export async function produceDomainNotification(
 	tx: IncidentDatabase,
 	event: DomainNotificationEvent
-): Promise<{ created: number }> {
+): Promise<{ created: number; emailQueued: number }> {
 	if (!event || typeof event !== 'object') throw invalid();
 	if (typeof event.incidentId !== 'string' || !uuid.test(event.incidentId)) throw invalid();
 	if (typeof event.organizationId !== 'string' || !uuid.test(event.organizationId)) throw invalid();
@@ -170,7 +176,7 @@ export async function produceDomainNotification(
 
 	// Content first: an unsupported/invalid event fails before any recipient lookup or insert.
 	const { title, message, payload } = content(event, incident.incidentNumber);
-	const recipients = await resolveNotificationRecipients(
+	const recipients = await resolveNotificationRecipientChannels(
 		tx,
 		event.eventType === 'incident.unassigned'
 			? {
@@ -188,8 +194,9 @@ export async function produceDomainNotification(
 				}
 	);
 
-	for (const recipientUserId of recipients) {
-		await createNotification(tx, {
+	const inbox = new Map<string, string>();
+	for (const recipientUserId of recipients.inApp) {
+		const notification = await createNotification(tx, {
 			organizationId: event.organizationId,
 			recipientUserId,
 			type: event.eventType,
@@ -197,6 +204,18 @@ export async function produceDomainNotification(
 			message,
 			payload
 		});
+		inbox.set(recipientUserId, notification.id);
 	}
-	return { created: recipients.length };
+	for (const recipientUserId of recipients.email) {
+		await createNotificationDelivery(tx, {
+			organizationId: event.organizationId,
+			recipientUserId,
+			channel: 'email',
+			eventType: event.eventType,
+			title,
+			message,
+			notificationId: inbox.get(recipientUserId) ?? null
+		});
+	}
+	return { created: recipients.inApp.length, emailQueued: recipients.email.length };
 }

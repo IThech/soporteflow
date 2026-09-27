@@ -2,7 +2,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { incidents, memberships, organizations, users } from '../db/schema';
 import { isNotificationEventType, type NotificationEventType } from '../../notifications/events';
 import type { IncidentDatabase } from './incidents';
-import { filterUsersWithNotificationEnabled } from './notification-preferences';
+import { resolveNotificationChannels } from './notification-preferences';
 
 /**
  * Notification recipient rules (5.4U-B). Given a domain event, returns WHO should receive it.
@@ -151,19 +151,29 @@ async function activeMembers(
 }
 
 /**
- * Final recipients for 5.4U-C: candidates -> active members -> preference enabled. Constant query
- * count regardless of the number of candidates (incident, memberships, preferences). Sorted ids.
+ * Final recipients per channel (5.4U-D): candidates -> active members -> per-channel preference.
+ * The actor/relationship rules and the activity filter apply BEFORE channels, so both channels
+ * share them; the preferences of each channel are independent (email OFF never suppresses in-app
+ * and vice versa). Constant query count (incident, memberships, preferences). Sorted ids.
  */
-export async function resolveNotificationRecipients(
+export async function resolveNotificationRecipientChannels(
 	db: IncidentDatabase,
 	event: NotificationRecipientEvent
-): Promise<string[]> {
+): Promise<{ inApp: string[]; email: string[] }> {
 	const candidates = await resolveCandidateRecipients(db, event);
 	const active = await activeMembers(db, event.organizationId, candidates);
 	const eligible = candidates.filter((id) => active.has(id));
-	return filterUsersWithNotificationEnabled(db, {
+	return resolveNotificationChannels(db, {
 		organizationId: event.organizationId,
 		eventType: event.eventType satisfies NotificationEventType,
 		userIds: eligible
 	});
+}
+
+/** In-app recipients only (5.4U-C contract). */
+export async function resolveNotificationRecipients(
+	db: IncidentDatabase,
+	event: NotificationRecipientEvent
+): Promise<string[]> {
+	return (await resolveNotificationRecipientChannels(db, event)).inApp;
 }

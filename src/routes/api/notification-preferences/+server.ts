@@ -6,7 +6,7 @@ import { preferenceContext, preferenceFailure, success } from './http';
 /**
  * GET /api/notification-preferences?organizationId=<UUID>
  * The caller's own effective preferences for every catalogued event (defaults included), in
- * catalog order: { preferences: [{ eventType, inAppEnabled, isDefault }] }.
+ * catalog order: { preferences: [{ eventType, inAppEnabled, emailEnabled, inAppIsDefault, emailIsDefault }] }.
  */
 export const GET: RequestHandler = async (event) => {
 	try {

@@ -8,9 +8,11 @@ import { isNotificationEventType } from '$lib/notifications/events';
 import { failure, preferenceContext, preferenceFailure, readSmallJson, success } from '../http';
 
 /**
- * PUT /api/notification-preferences/<eventType>?organizationId=<UUID>   body exactly
- * { inAppEnabled: boolean }. Stores the final value for the caller (upsert, idempotent).
- * 200 { preference: { eventType, inAppEnabled, isDefault: false } }. Unknown event -> 400.
+ * PUT /api/notification-preferences/<eventType>?organizationId=<UUID>   body: a strict subset of
+ * { inAppEnabled: boolean | null, emailEnabled: boolean | null } with at least one key. Only the
+ * channels present change (boolean = override, null = back to that channel's default); idempotent.
+ * 200 { preference: { eventType, inAppEnabled, emailEnabled, inAppIsDefault, emailIsDefault } }.
+ * Unknown event, unknown key, empty body or non-boolean/null value -> 400.
  */
 export const PUT: RequestHandler = async (event) => {
 	if (!isNotificationEventType(event.params.eventType))
@@ -22,9 +24,12 @@ export const PUT: RequestHandler = async (event) => {
 		const keys = body ? Object.keys(body) : [];
 		if (
 			!body ||
-			keys.length !== 1 ||
-			keys[0] !== 'inAppEnabled' ||
-			typeof body.inAppEnabled !== 'boolean'
+			keys.length === 0 ||
+			keys.some(
+				(key) =>
+					(key !== 'inAppEnabled' && key !== 'emailEnabled') ||
+					(body[key] !== null && typeof body[key] !== 'boolean')
+			)
 		)
 			return failure(400, 'INVALID_INPUT', 'Invalid request.');
 		return success({
@@ -32,7 +37,7 @@ export const PUT: RequestHandler = async (event) => {
 				db,
 				resolved.context,
 				event.params.eventType,
-				body.inAppEnabled
+				body
 			)
 		});
 	} catch (error) {
@@ -42,7 +47,7 @@ export const PUT: RequestHandler = async (event) => {
 
 /**
  * DELETE /api/notification-preferences/<eventType>?organizationId=<UUID>   (no body)
- * Removes the caller's override: back to the catalog default. Idempotent 204.
+ * Removes the caller's overrides of both channels: back to the catalog defaults. Idempotent 204.
  */
 export const DELETE: RequestHandler = async (event) => {
 	if (!isNotificationEventType(event.params.eventType))

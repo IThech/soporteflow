@@ -257,7 +257,9 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 				NOTIFICATION_EVENT_TYPES.map((eventType) => ({
 					eventType,
 					inAppEnabled: true,
-					isDefault: true
+					emailEnabled: false,
+					inAppIsDefault: true,
+					emailIsDefault: true
 				}))
 			);
 			for (const eventType of NOTIFICATION_EVENT_TYPES)
@@ -268,11 +270,15 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 	await t.test(
 		'52-53. set false/true explícitos, idempotente; reset vuelve al default e idempotente',
 		async () => {
-			const off = await setNotificationPreference(db, tech.ctx, 'incident.assigned', false);
+			const off = await setNotificationPreference(db, tech.ctx, 'incident.assigned', {
+				inAppEnabled: false
+			});
 			assert.deepEqual(off, {
 				eventType: 'incident.assigned',
 				inAppEnabled: false,
-				isDefault: false
+				emailEnabled: false,
+				inAppIsDefault: false,
+				emailIsDefault: true
 			});
 			assert.equal(
 				await isNotificationEnabled(db, { ...tech.ctx, eventType: 'incident.assigned' }),
@@ -282,7 +288,7 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 				.select()
 				.from(s.notificationPreferences)
 				.where(eq(s.notificationPreferences.userId, tech.user.id));
-			await setNotificationPreference(db, tech.ctx, 'incident.assigned', false);
+			await setNotificationPreference(db, tech.ctx, 'incident.assigned', { inAppEnabled: false });
 			const [row2] = await db
 				.select()
 				.from(s.notificationPreferences)
@@ -292,10 +298,18 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 				row1.updatedAt.getTime(),
 				'mismo valor no mueve updatedAt'
 			);
-			const on = await setNotificationPreference(db, tech.ctx, 'incident.assigned', true);
+			const on = await setNotificationPreference(db, tech.ctx, 'incident.assigned', {
+				inAppEnabled: true
+			});
 			assert.deepEqual(
 				on,
-				{ eventType: 'incident.assigned', inAppEnabled: true, isDefault: false },
+				{
+					eventType: 'incident.assigned',
+					inAppEnabled: true,
+					emailEnabled: false,
+					inAppIsDefault: false,
+					emailIsDefault: true
+				},
 				'true explícito'
 			);
 			assert.equal(
@@ -307,12 +321,14 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 				).length,
 				1
 			);
-			await setNotificationPreference(db, tech.ctx, 'incident.assigned', false);
+			await setNotificationPreference(db, tech.ctx, 'incident.assigned', { inAppEnabled: false });
 			const reset = await resetNotificationPreference(db, tech.ctx, 'incident.assigned');
 			assert.deepEqual(reset, {
 				eventType: 'incident.assigned',
 				inAppEnabled: true,
-				isDefault: true
+				emailEnabled: false,
+				inAppIsDefault: true,
+				emailIsDefault: true
 			});
 			assert.deepEqual(await getNotificationPreference(db, tech.ctx, 'incident.assigned'), reset);
 			assert.deepEqual(
@@ -326,11 +342,11 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 	await t.test('evento desconocido y entradas inválidas: INVALID_INPUT sin escribir', async () => {
 		for (const eventType of ['incident.created', 'x', '', null])
 			await assert.rejects(
-				setNotificationPreference(db, tech.ctx, eventType, false),
+				setNotificationPreference(db, tech.ctx, eventType, { inAppEnabled: false }),
 				(e) => e.code === 'INVALID_INPUT'
 			);
 		await assert.rejects(
-			setNotificationPreference(db, tech.ctx, 'incident.assigned', 'false'),
+			setNotificationPreference(db, tech.ctx, 'incident.assigned', { inAppEnabled: 'false' }),
 			(e) => e.code === 'INVALID_INPUT'
 		);
 		await assert.rejects(
@@ -347,7 +363,9 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 		'54. mismo usuario en dos orgs: la preferencia de una no afecta a la otra',
 		async () => {
 			const shared = await member(B.org, [B.tech], { user: tech.user });
-			await setNotificationPreference(db, tech.ctx, 'incident.status_changed', false);
+			await setNotificationPreference(db, tech.ctx, 'incident.status_changed', {
+				inAppEnabled: false
+			});
 			assert.equal(
 				await isNotificationEnabled(db, { ...tech.ctx, eventType: 'incident.status_changed' }),
 				false
@@ -357,7 +375,7 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 				true
 			);
 			const listB = await listNotificationPreferences(db, shared.ctx);
-			assert.ok(listB.every((p) => p.isDefault));
+			assert.ok(listB.every((p) => p.inAppIsDefault && p.emailIsDefault));
 			await resetNotificationPreference(db, tech.ctx, 'incident.status_changed');
 		}
 	);
@@ -366,7 +384,7 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 		const idle = await member(A.org, [A.tech], { active: false });
 		await assert.rejects(listNotificationPreferences(db, idle.ctx), (e) => e.code === 'FORBIDDEN');
 		await assert.rejects(
-			setNotificationPreference(db, idle.ctx, 'incident.assigned', false),
+			setNotificationPreference(db, idle.ctx, 'incident.assigned', { inAppEnabled: false }),
 			(e) => e.code === 'FORBIDDEN'
 		);
 		const gone = await member(A.org, [A.tech]);
@@ -393,7 +411,9 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 	// API (12-16, 47-49)
 	// =========================================================================
 	await t.test('API GET: preferencias efectivas propias; no-store; 401/403', async () => {
-		await setNotificationPreference(db, customer.ctx, 'incident.public_comment_added', false);
+		await setNotificationPreference(db, customer.ctx, 'incident.public_comment_added', {
+			inAppEnabled: false
+		});
 		const res = await get(customer, A.org);
 		assert.equal(res.status, 200);
 		assert.equal(res.headers.get('cache-control'), 'private, no-store');
@@ -405,7 +425,9 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 		assert.deepEqual(comment, {
 			eventType: 'incident.public_comment_added',
 			inAppEnabled: false,
-			isDefault: false
+			emailEnabled: false,
+			inAppIsDefault: false,
+			emailIsDefault: true
 		});
 		assert.ok(!res.text.includes(customer.user.id) && !res.text.includes(A.org.id));
 		await resetNotificationPreference(db, customer.ctx, 'incident.public_comment_added');
@@ -425,7 +447,13 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 			const ok = await put(tech2, A.org, 'sla.resolution_breached', { inAppEnabled: false });
 			assert.equal(ok.status, 200, ok.text);
 			assert.deepEqual(ok.json, {
-				preference: { eventType: 'sla.resolution_breached', inAppEnabled: false, isDefault: false }
+				preference: {
+					eventType: 'sla.resolution_breached',
+					inAppEnabled: false,
+					emailEnabled: false,
+					inAppIsDefault: false,
+					emailIsDefault: true
+				}
 			});
 			assert.equal(
 				(await put(tech2, A.org, 'sla.resolution_breached', { inAppEnabled: false })).status,
@@ -490,9 +518,13 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 				'DELETE sin body'
 			);
 			const after = await get(tech2, A.org);
-			assert.ok(after.json.preferences.every((p) => p.isDefault && p.inAppEnabled));
+			assert.ok(
+				after.json.preferences.every((p) => p.inAppIsDefault && p.emailIsDefault && p.inAppEnabled)
+			);
 			// otro usuario no se ve afectado
-			assert.ok((await get(tech, A.org)).json.preferences.every((p) => p.isDefault));
+			assert.ok(
+				(await get(tech, A.org)).json.preferences.every((p) => p.inAppIsDefault && p.emailIsDefault)
+			);
 			assert.deepEqual(Object.keys(collection).sort(), ['GET']);
 			assert.deepEqual(Object.keys(item).sort(), ['DELETE', 'PUT']);
 		}
@@ -517,7 +549,7 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 				[],
 				'autoasignación'
 			);
-			await setNotificationPreference(db, tech.ctx, 'incident.assigned', false);
+			await setNotificationPreference(db, tech.ctx, 'incident.assigned', { inAppEnabled: false });
 			assert.deepEqual(await resolveNotificationRecipients(db, ev(admin.user.id)), []);
 			assert.deepEqual(
 				await resolveCandidateRecipients(db, ev(admin.user.id)),
@@ -644,7 +676,9 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 				[customer.user.id],
 				'otro staff -> solicitante'
 			);
-			await setNotificationPreference(db, customer.ctx, 'incident.public_comment_added', false);
+			await setNotificationPreference(db, customer.ctx, 'incident.public_comment_added', {
+				inAppEnabled: false
+			});
 			assert.deepEqual(await resolveNotificationRecipients(db, ev(tech.user.id)), []);
 			await resetNotificationPreference(db, customer.ctx, 'incident.public_comment_added');
 			const noRequester = await incident(A.org, admin, {}, { assignedToUserId: tech.user.id });
@@ -688,7 +722,7 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 			assert.deepEqual(await resolveNotificationRecipients(db, ev(customer.user.id)), [
 				tech.user.id
 			]);
-			await setNotificationPreference(db, tech.ctx, 'incident.reopened', false);
+			await setNotificationPreference(db, tech.ctx, 'incident.reopened', { inAppEnabled: false });
 			assert.deepEqual(await resolveNotificationRecipients(db, ev(admin.user.id)), [
 				customer.user.id
 			]);
@@ -708,7 +742,9 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 			assert.deepEqual(await resolveNotificationRecipients(db, ev), [tech.user.id], eventType);
 			assert.ok(!(await resolveNotificationRecipients(db, ev)).includes(admin.user.id));
 		}
-		await setNotificationPreference(db, tech.ctx, 'sla.resolution_breached', false);
+		await setNotificationPreference(db, tech.ctx, 'sla.resolution_breached', {
+			inAppEnabled: false
+		});
 		assert.deepEqual(
 			await resolveNotificationRecipients(db, {
 				eventType: 'sla.resolution_breached',
@@ -810,7 +846,7 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 				db,
 				{ organizationId: A.org.id, userId: users[3] },
 				'incident.reopened',
-				false
+				{ inAppEnabled: false }
 			);
 			const count = async (ids) => {
 				let n = 0;
@@ -898,9 +934,14 @@ test('SoporteFlow — Etapa 5.4U-B: preferencias y reglas de destinatarios', asy
 					);
 			for (const dir of ['src/lib/server', 'src/routes/api'])
 				for (const file of fs.readdirSync(dir, { recursive: true }))
-					assert.ok(!/outbox|mailer|push|webhook|delivery/i.test(String(file)), String(file));
+					// 5.4U-D: notification-deliveries / notification-email are the only delivery modules;
+					// no generic outbox, push, webhooks or automation (5.4V)
+					assert.ok(!/outbox|mailer|push|webhook|n8n|automation/i.test(String(file)), String(file));
+			// the producer only persists intents: it never reaches the email adapter (no network in tx)
+			assert.doesNotMatch(producer, /\.\.\/email\/|sendNotification/);
+			assert.match(producer, /from '\.\/notification-deliveries'/);
 			const schema = fs.readFileSync('src/lib/server/db/schema/notifications.ts', 'utf8');
-			assert.ok(!/email_enabled|emailEnabled/.test(schema), 'sin email en U-B');
+			assert.doesNotMatch(schema, /webhook|target_url|hmac|secret/i, 'sin webhooks en U-D');
 		}
 	);
 });
