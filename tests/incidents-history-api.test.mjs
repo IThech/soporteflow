@@ -73,6 +73,7 @@ test('5.4M-A operational history: isolated PGlite', async (t) => {
 		const url = new URL(
 			'http://localhost/api/incidents/' + id + '/history?organizationId=' + organizationId + query
 		);
+		if (method === 'POST' && handler === POST) url.search = '';
 		const headers = new Headers();
 		if (cookie) headers.set('cookie', cookie);
 		if (body) headers.set('content-type', 'application/json');

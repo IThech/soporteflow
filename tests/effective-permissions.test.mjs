@@ -265,8 +265,8 @@ test('SoporteFlow — Etapa 5.4Q-D: permisos efectivos, /api/me y history view_o
 				assert.equal(bad.status, 400, query);
 				assert.equal(bad.json.error.code, 'INVALID_INPUT');
 			}
-			// parámetros desconocidos se siguen ignorando (contrato 5.4A)
-			assert.equal((await me(who.cookie, `?userId=${randomUUID()}`)).status, 200);
+			// W-C: parámetros desconocidos se rechazan sin confiar en identidad del cliente
+			assert.equal((await me(who.cookie, `?userId=${randomUUID()}`)).status, 400);
 		}
 	);
 

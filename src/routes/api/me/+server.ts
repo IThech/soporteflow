@@ -1,3 +1,4 @@
+import { onlyKeys } from '$lib/server/security/query';
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
@@ -20,14 +21,16 @@ function failure(status: number, code: string, message: string) {
  * same 403 (no enumeration).
  */
 export const GET: RequestHandler = async (event) => {
+	if (!onlyKeys(event.url.searchParams, ['organizationId']))
+		return json({ error: { code: 'INVALID_INPUT', message: 'Invalid request.' } }, { status: 400 });
 	// 1. Authenticate with resolvePrincipal using request cookie header
 	const principal = await resolvePrincipal(event.request.headers);
 	if (!principal) {
 		return failure(401, 'UNAUTHORIZED', 'Authentication required.');
 	}
 
-	// 2. Optional organization selector: a single valid UUID. Other query parameters keep being
-	// ignored (5.4A contract): identity never comes from the query.
+	// 2. Optional organization selector: a single valid UUID. W-C rejects other query keys;
+	// identity still comes exclusively from the validated session.
 	const organizationIds = event.url.searchParams.getAll('organizationId');
 	if (
 		organizationIds.length > 1 ||

@@ -36,7 +36,8 @@ function createInstance(
 		},
 		emailAndPassword: { enabled: true, disableSignUp: true },
 		user: { changeEmail: { enabled: false }, deleteUser: { enabled: false } },
-		session: { cookieCache: { enabled: false } },
+		// Keep read-only session resolution from deleting expired sessions on GET.
+		session: { cookieCache: { enabled: false }, deferSessionRefresh: true },
 		disabledPaths: [
 			'/get-session',
 			'/sign-up/email',

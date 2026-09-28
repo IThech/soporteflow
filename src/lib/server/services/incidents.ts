@@ -839,7 +839,7 @@ export async function listIncidents(
 	const scope = incidentAccessCondition(context.access);
 	if (scope) conditions.push(scope);
 
-	if (filters?.status) {
+	if (filters?.status !== undefined) {
 		if (!VALID_STATUSES.has(filters.status)) {
 			throw new IncidentServiceError(
 				'INVALID_INPUT',
@@ -849,7 +849,7 @@ export async function listIncidents(
 		conditions.push(eq(incidents.status, filters.status));
 	}
 
-	if (filters?.priority) {
+	if (filters?.priority !== undefined) {
 		if (!VALID_PRIORITIES.has(filters.priority)) {
 			throw new IncidentServiceError(
 				'INVALID_INPUT',

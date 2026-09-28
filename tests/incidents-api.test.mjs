@@ -596,8 +596,14 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 				},
 				url: `http://localhost/api/incidents?organizationId=${orgB.id}`
 			});
-			assert.equal(res.status, 201);
-			assert.equal(res.json.incident.organizationId, orgA.id);
+			assert.equal(res.status, 400);
+			assert.equal(res.json.error.code, 'INVALID_INPUT');
+			const clean = await callPost(POST, {
+				body: { ...basePayloadA, organizationId: orgA.id },
+				headers: { cookie: sessionA.cookieHeader, 'x-organization-id': orgB.id }
+			});
+			assert.equal(clean.status, 201);
+			assert.equal(clean.json.incident.organizationId, orgA.id);
 
 			// Si no viene en el body, aunque venga en header o query, debe fallar con 400
 			const bodyWithoutOrg = {
@@ -1593,15 +1599,21 @@ test('SoporteFlow — Etapa 5.2B: Endpoint HTTP GET /api/incidents', async (t) =
 	);
 
 	await t.test(
-		'28. parámetros de query desconocidos no alteran el comportamiento ni los filtros',
+		'28. parámetros de query desconocidos se rechazan; la consulta válida conserva filtros',
 		async () => {
 			const res = await callGet(GET, {
 				url: `http://localhost/api/incidents?organizationId=${orgA.id}&page=2&search=hack&sort=desc&limit=100`,
 				headers: { cookie: sessionA.cookieHeader }
 			});
-			assert.equal(res.status, 200);
-			assert.equal(res.json.incidents.length, 4);
-			const ids = res.json.incidents.map((i) => i.id);
+			assert.equal(res.status, 400);
+			assert.equal(res.json.error.code, 'INVALID_INPUT');
+			const valid = await callGet(GET, {
+				url: `http://localhost/api/incidents?organizationId=${orgA.id}`,
+				headers: { cookie: sessionA.cookieHeader }
+			});
+			assert.equal(valid.status, 200);
+			assert.equal(valid.json.incidents.length, 4);
+			const ids = valid.json.incidents.map((i) => i.id);
 			assert.deepEqual(ids, [incA4.id, incA3.id, incA2.id, incA1.id]);
 		}
 	);
@@ -2147,8 +2159,8 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 				params: { id: incA1Created.id },
 				headers: { cookie: sessionA.cookieHeader }
 			});
-			assert.equal(resValidParam.status, 200);
-			assert.equal(resValidParam.json.incident.id, incA1Created.id);
+			assert.equal(resValidParam.status, 400);
+			assert.equal(resValidParam.json.error.code, 'INVALID_INPUT');
 		}
 	);
 
@@ -3331,11 +3343,17 @@ test('SoporteFlow — Etapa 5.4J-A: Endpoint HTTP GET /api/incidents — Colas (
 			url: `http://localhost/api/incidents?organizationId=${orgQ.id}&queue=mine&userId=${userViewAll.id}&assignedToUserId=${userViewAll.id}`,
 			headers: { cookie: sessionViewOwn.cookieHeader }
 		});
-		assert.equal(res.status, 200);
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error.code, 'INVALID_INPUT');
+		const clean = await callGet(GET, {
+			url: 'http://localhost/api/incidents?organizationId=' + orgQ.id + '&queue=mine',
+			headers: { cookie: sessionViewOwn.cookieHeader }
+		});
+		assert.equal(clean.status, 200);
 		// Debe devolver SOLO las de userViewOwn, NO las de userViewAll
-		assert.equal(res.json.incidents.length, 1);
-		assert.equal(res.json.incidents[0].id, inc2.id);
-		assert.equal(res.json.incidents[0].assignedToUserId, userViewOwn.id);
+		assert.equal(clean.json.incidents.length, 1);
+		assert.equal(clean.json.incidents[0].id, inc2.id);
+		assert.equal(clean.json.incidents[0].assignedToUserId, userViewOwn.id);
 	});
 
 	// 11. aislamiento multi-tenant en todas las colas

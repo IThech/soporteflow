@@ -315,8 +315,11 @@ test('SoporteFlow — Etapa 5.4S-B: acceso Customer por incidents:view_requested
 		assert.deepEqual(ids(await list(cust1, A.org, '&status=closed')), [closedOwn.id]);
 		// el filtro de otro cliente no existe: no se puede pedir clientUserId
 		const spoof = await list(cust1, A.org, `&clientUserId=${cust2.user.id}`);
-		assert.equal(spoof.status, 200);
-		assert.ok(ids(spoof).every((id) => [own1.id, own1Pending.id, closedOwn.id].includes(id)));
+		assert.equal(spoof.status, 400);
+		assert.equal(spoof.json.error.code, 'INVALID_INPUT');
+		const valid = await list(cust1, A.org);
+		assert.equal(valid.status, 200);
+		assert.ok(ids(valid).every((id) => [own1.id, own1Pending.id, closedOwn.id].includes(id)));
 		// status sobre incidencias ajenas: vacío
 		assert.deepEqual(ids(await list(cust2, A.org, '&priority=high')), []);
 	});

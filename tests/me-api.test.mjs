@@ -370,17 +370,14 @@ test('SoporteFlow — Etapa 5.4A: Endpoint HTTP GET /api/me (Bootstrap)', async 
 	// =========================================================================
 	// SPOOFING & ISOLATION (Tests 19 - 23)
 	// =========================================================================
-	await t.test('19. userId malicioso en query -> ignorado', async () => {
+	await t.test('19. userId malicioso en query -> rechazado (W-C)', async () => {
 		const res = await callGet(GET, {
 			url: `http://localhost/api/me?userId=${userB.id}`,
 			headers: { cookie: sessionA.cookieHeader }
 		});
-		assert.equal(res.status, 200);
-		assert.equal(
-			res.json.user.id,
-			userA.id,
-			'Debe devolver el usuario autenticado, no el del query'
-		);
+		assert.equal(res.status, 400);
+		assert.equal(res.json.error.code, 'INVALID_INPUT');
+		assert.equal(res.json.user, undefined);
 	});
 
 	await t.test('20. organizationId ajeno en query -> 403 sin revelar datos', async () => {

@@ -1,3 +1,4 @@
+import { onlyKeys } from '$lib/server/security/query';
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
@@ -38,6 +39,8 @@ function isValidUuid(value: unknown): value is string {
 }
 
 export const POST: RequestHandler = async (event) => {
+	if (!onlyKeys(event.url.searchParams, []))
+		return json({ error: { code: 'INVALID_INPUT', message: 'Invalid request.' } }, { status: 400 });
 	// 1. Parse JSON body
 	let body: Record<string, unknown>;
 	try {
@@ -325,6 +328,22 @@ export const POST: RequestHandler = async (event) => {
 };
 
 export const GET: RequestHandler = async (event) => {
+	if (
+		!onlyKeys(event.url.searchParams, [
+			'organizationId',
+			'queue',
+			'status',
+			'priority',
+			'siteId',
+			'categoryId',
+			'teamId',
+			'supportLevel',
+			'slaStatus',
+			'slaFirstResponseStatus',
+			'slaResolutionStatus'
+		])
+	)
+		return json({ error: { code: 'INVALID_INPUT', message: 'Invalid request.' } }, { status: 400 });
 	// 1. Read organizationId from query string exclusively
 	const organizationId = event.url.searchParams.get('organizationId');
 

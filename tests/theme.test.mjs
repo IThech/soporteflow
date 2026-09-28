@@ -58,7 +58,7 @@ test('Preferencia de apariencia y arranque antes de hidratar', async (t) => {
 			);
 		});
 		const template = await readFile(new URL('../src/app.html', import.meta.url), 'utf8');
-		const bootstrap = template.match(/<script>([\s\S]*?)<\/script>/)[1];
+		const bootstrap = template.match(/<script nonce="%sveltekit.nonce%">([\s\S]*?)<\/script>/)[1];
 		await t.test('Arranque temprano coincide con resolver y no afecta landing', () => {
 			for (const pathname of ['/', '/application', '/app', '/app/'])
 				for (const stored of [null, 'invalid', 'light', 'dark', 'system'])

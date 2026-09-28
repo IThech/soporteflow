@@ -143,6 +143,7 @@ test('SoporteFlow — Etapa 5.4P-C: categorías reales en incidencias', async (t
 	) {
 		const base = id === undefined ? '/api/incidents' : `/api/incidents/${id}${path}`;
 		const url = new URL(`http://localhost${base}?organizationId=${organizationId}${query}`);
+		if (method === 'POST' && id === undefined && organizationId === '') url.search = '';
 		const headers = new Headers(extra);
 		if (cookie) headers.set('cookie', cookie);
 		const init = { method, headers };
