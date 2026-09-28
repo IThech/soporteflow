@@ -14,6 +14,7 @@ import type { PermissionId } from '../auth/permissions';
 import type { InvitationEmailSender } from '../email/invitation-email';
 import { IncidentServiceError, type IncidentDatabase } from './incidents';
 import { assertDelegable, assertOperationalOrganization } from './roles';
+import { logger } from '../logging/logger';
 
 /**
  * Administrative invitations (5.4S-C). Public verification/acceptance, user creation, membership
@@ -330,20 +331,45 @@ async function assertNotMember(tx: IncidentDatabase, organizationId: string, ema
 }
 
 /**
- * Sends the invitation email for an issued invitation (after the database commit). A failure is
- * reported as EMAIL_DELIVERY_FAILED; the invitation stays pending and can be resent.
+ * 5.4W-E: upper bound for the synchronous (post-commit, in-request) invitation send. A hung
+ * provider must not hold the HTTP request; a timed-out send may still be delivered by the
+ * provider (the invitation stays pending and resend issues a fresh token).
+ */
+export const INVITATION_EMAIL_SEND_TIMEOUT_MS = 15_000;
+
+/**
+ * Sends the invitation email for an issued invitation (after the database commit). A failure or
+ * timeout is reported as EMAIL_DELIVERY_FAILED; the invitation stays pending and can be resent.
  */
 export async function deliverInvitation(
 	sender: InvitationEmailSender,
-	issued: IssuedInvitation
+	issued: IssuedInvitation,
+	options: { timeoutMs?: number } = {}
 ): Promise<void> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
-		await sender.sendInvitation({ ...issued.delivery });
-	} catch {
+		await Promise.race([
+			sender.sendInvitation({ ...issued.delivery }),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(
+					() => reject(new Error('Invitation email send timeout')),
+					options.timeoutMs ?? INVITATION_EMAIL_SEND_TIMEOUT_MS
+				);
+			})
+		]);
+	} catch (error) {
+		// 5.4W-E: invitation id and error class only. Never the token, the address or the
+		// provider message (it may echo credentials or the recipient).
+		logger.warn('email.invitation_delivery_failed', {
+			invitationId: issued.invitation.id,
+			errorName: error instanceof Error ? error.name : typeof error
+		});
 		throw new IncidentServiceError(
 			'EMAIL_DELIVERY_FAILED',
 			'The invitation was saved but the email could not be delivered'
 		);
+	} finally {
+		clearTimeout(timer);
 	}
 }
 

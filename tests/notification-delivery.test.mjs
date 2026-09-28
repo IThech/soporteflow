@@ -660,7 +660,8 @@ test('SoporteFlow — Etapa 5.4U-D: entrega de notificaciones por email', async 
 			sent: 1,
 			retried: 0,
 			failed: 0,
-			leaseLost: 0
+			leaseLost: 0,
+			errors: 0
 		});
 		assert.deepEqual(sender.sent, [
 			{
@@ -681,7 +682,8 @@ test('SoporteFlow — Etapa 5.4U-D: entrega de notificaciones por email', async 
 			sent: 0,
 			retried: 0,
 			failed: 0,
-			leaseLost: 0
+			leaseLost: 0,
+			errors: 0
 		});
 		assert.equal(sender.sent.length, 1);
 		assert.equal((await inboxFor(who, inc)).length, 1, 'sin notificación duplicada');

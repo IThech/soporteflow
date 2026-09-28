@@ -32,6 +32,7 @@ import {
 	type SlaObjectiveStatus,
 	type SlaOverallStatus
 } from '$lib/server/services/sla-compliance';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -318,6 +319,7 @@ export const POST: RequestHandler = async (event) => {
 			}
 		}
 
+		logUnexpectedError(err);
 		return json(
 			{
 				error: {
@@ -553,6 +555,7 @@ export const GET: RequestHandler = async (event) => {
 			);
 		}
 
+		logUnexpectedError(err);
 		return json(
 			{
 				error: {

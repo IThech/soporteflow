@@ -886,7 +886,14 @@ test('SoporteFlow — Etapa 5.4V-B: webhooks salientes, HMAC y reintentos', asyn
 			let tick = 0;
 			const now = future();
 			const result = await run({ httpClient: http, now, clock: () => (tick += 37) });
-			assert.deepEqual(result, { claimed: 1, sent: 1, retried: 0, failed: 0, leaseLost: 0 });
+			assert.deepEqual(result, {
+				claimed: 1,
+				sent: 1,
+				retried: 0,
+				failed: 0,
+				leaseLost: 0,
+				errors: 0
+			});
 			assert.equal(http.calls.length, 1);
 			const [req] = http.calls;
 			assert.equal(req.url, 'https://hooks.example.com/sf/events?x=1');

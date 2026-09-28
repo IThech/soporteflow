@@ -15,6 +15,8 @@ import {
 	type NotificationEmailSender
 } from '../email/notification-email';
 import type { IncidentDatabase } from './incidents';
+import { randomUUID } from 'node:crypto';
+import { logError, logger, runWithLogContext } from '../logging/logger';
 
 /**
  * External notification delivery (5.4U-D), email only.
@@ -161,7 +163,7 @@ export async function claimDueDeliveries(
 		throw invalid();
 	const leaseUntil = new Date(now.getTime() + NOTIFICATION_DELIVERY_LEASE_MS);
 	return transactional(db, async (tx) => {
-		await tx
+		const exhausted = await tx
 			.update(notificationDeliveries)
 			.set({
 				status: 'failed',
@@ -177,7 +179,11 @@ export async function claimDueDeliveries(
 					lte(notificationDeliveries.nextAttemptAt, now),
 					sql`${notificationDeliveries.attemptCount} >= ${NOTIFICATION_DELIVERY_MAX_ATTEMPTS}`
 				)
-			);
+			)
+			.returning({ id: notificationDeliveries.id });
+		// 5.4W-E: a worker died holding the last attempt; the item is now detectable as exhausted.
+		for (const row of exhausted.slice(0, 20))
+			logger.error('email.delivery_exhausted', { deliveryId: row.id, code: 'MAX_ATTEMPTS' });
 		const due = await tx
 			.select({ id: notificationDeliveries.id })
 			.from(notificationDeliveries)
@@ -391,6 +397,12 @@ export interface ProcessNotificationDeliveriesResult {
 	failed: number;
 	/** Rows whose lease was taken over before this worker finished (outcome not written). */
 	leaseLost: number;
+	/**
+	 * 5.4W-E: items whose processing threw unexpectedly (e.g. a database error). The item keeps
+	 * its lease and is reclaimed after expiry (attempt count grows until MAX_ATTEMPTS), so one
+	 * poison item never aborts the rest of the batch.
+	 */
+	errors: number;
 }
 
 /**
@@ -454,60 +466,88 @@ export async function processDueNotificationDeliveries(
 	const batchStart = clock();
 	const current = () => new Date(now.getTime() + Math.max(0, clock() - batchStart));
 	const sender = options.sender ?? getNotificationEmailSender();
-	const claimed = await claimDueDeliveries(db, { now, limit: options.limit });
-	const result: ProcessNotificationDeliveriesResult = {
-		claimed: claimed.length,
-		sent: 0,
-		retried: 0,
-		failed: 0,
-		leaseLost: 0
-	};
-	for (const delivery of claimed) {
-		const ref = { id: delivery.id, leaseToken: delivery.leaseToken, now };
-		const recipient = await recipientAddress(db, delivery);
-		if (!recipient || !isDeliverableEmailAddress(recipient.email)) {
-			const ok = await markDeliveryFailed(db, {
-				...ref,
-				errorCode: recipient ? 'RECIPIENT_INVALID' : 'RECIPIENT_INACTIVE'
-			});
-			result[ok ? 'failed' : 'leaseLost']++;
-			continue;
-		}
-		// H2: never send an item whose lease another worker may have taken over.
-		if (!(await renewDeliveryLease(db, { ...ref, now: current() }))) {
-			result.leaseLost++;
-			continue;
-		}
-		let providerMessageId: string | null;
-		try {
-			const sent = await sendWithTimeout(
-				sender,
-				{ to: recipient.email, subject: toEmailSubject(delivery.title), text: delivery.message },
-				options.sendTimeoutMs ?? NOTIFICATION_EMAIL_SEND_TIMEOUT_MS
-			);
-			providerMessageId =
-				sent && typeof sent.providerMessageId === 'string' ? sent.providerMessageId : null;
-		} catch (error) {
-			const { code, transient } = classifyEmailError(error);
-			if (transient) {
-				const status = await markDeliveryRetry(db, {
-					...ref,
-					attemptCount: delivery.attemptCount,
-					errorCode: code
+	return runWithLogContext({ jobId: randomUUID(), worker: 'notification_email' }, async () => {
+		const claimed = await claimDueDeliveries(db, { now, limit: options.limit });
+		const result: ProcessNotificationDeliveriesResult = {
+			claimed: claimed.length,
+			sent: 0,
+			retried: 0,
+			failed: 0,
+			leaseLost: 0,
+			errors: 0
+		};
+		for (const delivery of claimed) {
+			try {
+				await processOne(delivery);
+			} catch (error) {
+				result.errors++;
+				logError('email.delivery_error', error, {
+					deliveryId: delivery.id,
+					attempt: delivery.attemptCount
 				});
-				if (status === 'retry') result.retried++;
-				else if (status === 'failed') result.failed++;
-				else result.leaseLost++;
-			} else {
-				const ok = await markDeliveryFailed(db, { ...ref, errorCode: code });
-				result[ok ? 'failed' : 'leaseLost']++;
 			}
-			continue;
 		}
-		const ok = await markDeliverySent(db, { ...ref, providerMessageId });
-		result[ok ? 'sent' : 'leaseLost']++;
-	}
-	return result;
+		if (claimed.length > 0) logger.info('email.batch_completed', { ...result });
+		return result;
+
+		async function processOne(delivery: ClaimedNotificationDelivery) {
+			const ref = { id: delivery.id, leaseToken: delivery.leaseToken, now };
+			const ids = { deliveryId: delivery.id, attempt: delivery.attemptCount };
+			const recipient = await recipientAddress(db, delivery);
+			if (!recipient || !isDeliverableEmailAddress(recipient.email)) {
+				const errorCode = recipient ? 'RECIPIENT_INVALID' : 'RECIPIENT_INACTIVE';
+				const ok = await markDeliveryFailed(db, { ...ref, errorCode });
+				result[ok ? 'failed' : 'leaseLost']++;
+				if (ok) logger.warn('email.delivery_failed', { ...ids, code: errorCode });
+				return;
+			}
+			// H2: never send an item whose lease another worker may have taken over.
+			if (!(await renewDeliveryLease(db, { ...ref, now: current() }))) {
+				result.leaseLost++;
+				logger.warn('email.lease_lost', ids);
+				return;
+			}
+			let providerMessageId: string | null;
+			try {
+				const sent = await sendWithTimeout(
+					sender,
+					{ to: recipient.email, subject: toEmailSubject(delivery.title), text: delivery.message },
+					options.sendTimeoutMs ?? NOTIFICATION_EMAIL_SEND_TIMEOUT_MS
+				);
+				providerMessageId =
+					sent && typeof sent.providerMessageId === 'string' ? sent.providerMessageId : null;
+			} catch (error) {
+				// Only the safe classification is logged: never the provider message, response or
+				// credentials, the recipient address or the message content.
+				const { code, transient } = classifyEmailError(error);
+				if (transient) {
+					const status = await markDeliveryRetry(db, {
+						...ref,
+						attemptCount: delivery.attemptCount,
+						errorCode: code
+					});
+					if (status === 'retry') {
+						result.retried++;
+						logger.warn('email.delivery_retry', { ...ids, code });
+					} else if (status === 'failed') {
+						result.failed++;
+						logger.error('email.delivery_exhausted', {
+							...ids,
+							code: 'MAX_ATTEMPTS',
+							lastCode: code
+						});
+					} else result.leaseLost++;
+				} else {
+					const ok = await markDeliveryFailed(db, { ...ref, errorCode: code });
+					result[ok ? 'failed' : 'leaseLost']++;
+					if (ok) logger.warn('email.delivery_failed', { ...ids, code });
+				}
+				return;
+			}
+			const ok = await markDeliverySent(db, { ...ref, providerMessageId });
+			result[ok ? 'sent' : 'leaseLost']++;
+		}
+	});
 }
 
 /**

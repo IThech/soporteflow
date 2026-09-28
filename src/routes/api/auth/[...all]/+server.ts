@@ -1,5 +1,6 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { getAuth } from '$lib/server/auth/instance';
+import { logUnexpectedError, throttled } from '$lib/server/logging/logger';
 
 export const GET: RequestHandler = async (event) => {
 	const auth = getAuth();
@@ -39,6 +40,11 @@ export const POST: RequestHandler = async (event) => {
 
 		// Non-200 responses (e.g. 400, 401, 429) from Better Auth are preserved as-is.
 		if (response.status !== 200) {
+			// 5.4W-E: status only; the submitted email and password are never logged.
+			if (response.status === 401 || response.status === 403)
+				throttled('info', 'security.login_failed', String(response.status), {
+					status: response.status
+				});
 			return response;
 		}
 
@@ -64,7 +70,8 @@ export const POST: RequestHandler = async (event) => {
 				statusText: response.statusText,
 				headers
 			});
-		} catch {
+		} catch (error) {
+			logUnexpectedError(error, { scope: 'auth.sign_in_sanitization' });
 			// Fail-closed: Never leak the original response, body, token or session cookie on failure.
 			return json(
 				{

@@ -13,6 +13,7 @@ import {
 } from '../roles/http';
 import { AutomationRuleError } from '$lib/automation/rules';
 import * as rules from '$lib/server/services/automation-rules';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 type Operation = 'list' | 'create' | 'get' | 'patch' | 'disable' | 'executions';
 async function body(request: Request) {
 	if (!/^application\/json\s*(;|$)/i.test(request.headers.get('content-type') ?? '')) return null;
@@ -122,6 +123,7 @@ export async function handle(event: RequestEvent, op: Operation): Promise<Respon
 		// Shared cursor parser uses the incident service error; expose only its known invalid-input code.
 		if (error instanceof Error && 'code' in error && error.code === 'INVALID_INPUT')
 			return failure(400, 'INVALID_INPUT', 'Invalid request.');
+		logUnexpectedError(error);
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}
 }

@@ -3,6 +3,7 @@ import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import * as service from '$lib/server/services/notifications';
 import { failure, success, onlyKeys, uuid } from '../roles/http';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 type Action = 'list' | 'get' | 'mark' | 'readAll' | 'delete' | 'clear' | 'count';
 export async function handle(event: RequestEvent, action: Action): Promise<Response> {
 	const query = event.url.searchParams;
@@ -105,6 +106,7 @@ export async function handle(event: RequestEvent, action: Action): Promise<Respo
 				return failure(404, error.code, 'Notification not found.');
 			if (error.code === 'FORBIDDEN') return failure(403, error.code, 'Permission denied.');
 		}
+		logUnexpectedError(error);
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}
 }

@@ -21,6 +21,7 @@ import {
 	type IncidentStatus,
 	type IncidentPriority
 } from '$lib/server/services/incidents';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -144,6 +145,7 @@ export const GET: RequestHandler = async (event) => {
 			);
 		}
 
+		logUnexpectedError(err);
 		return json(
 			{
 				error: {
@@ -374,6 +376,7 @@ export const PATCH: RequestHandler = async (event) => {
 			if (mapped) return mapped;
 		}
 
+		logUnexpectedError(err);
 		return json(
 			{
 				error: {

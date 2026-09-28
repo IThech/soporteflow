@@ -13,6 +13,7 @@ import {
 	requireCapability,
 	uuid
 } from '../roles/http';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 export { failure, success, uuid } from '../roles/http';
 
@@ -121,6 +122,7 @@ export function webhookFailure(error: unknown): Response {
 				return failure(503, 'WEBHOOKS_NOT_CONFIGURED', 'Webhook signing is not configured.');
 		}
 	}
+	logUnexpectedError(error);
 	return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 }
 

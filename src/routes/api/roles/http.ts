@@ -7,6 +7,7 @@ import { resolveEffectivePermissions } from '$lib/server/auth/effective-permissi
 import type { PermissionId } from '$lib/server/auth/permissions';
 import type { AdminRoleRecord } from '$lib/server/services/roles';
 import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 export { withActorAuthorization } from '$lib/server/auth/transactional-authorization';
 
@@ -200,5 +201,6 @@ export function roleServiceFailure(error: unknown) {
 		if (error.code === 'ORGANIZATION_NOT_FOUND' || error.code === 'ORGANIZATION_NOT_OPERATIONAL')
 			return failure(403, 'FORBIDDEN', 'Permission denied.');
 	}
+	logUnexpectedError(error);
 	return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 }

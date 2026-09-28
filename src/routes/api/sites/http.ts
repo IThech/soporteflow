@@ -3,6 +3,7 @@ import { json } from '@sveltejs/kit';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
 import type { SiteRecord } from '$lib/server/services/sites';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -68,5 +69,6 @@ export function siteServiceFailure(error: unknown) {
 		if (error.code === 'ORGANIZATION_NOT_FOUND' || error.code === 'ORGANIZATION_NOT_OPERATIONAL')
 			return failure(403, 'FORBIDDEN', 'Permission denied.');
 	}
+	logUnexpectedError(error);
 	return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 }

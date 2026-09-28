@@ -7,6 +7,22 @@ export interface WebPolicy {
 	origin?: string;
 	development: boolean;
 	beforeResolve?: (event: RequestEvent) => Promise<Response | null>;
+	/**
+	 * 5.4W-E: security/operational events, injected by hooks.server.ts (structured logger). This
+	 * module stays dependency-free; without an observer nothing is logged.
+	 */
+	observer?: WebSecurityObserver;
+}
+export interface WebRejection {
+	reason: RejectReason;
+	severity: 'warn' | 'info';
+	status: number;
+	method: string;
+	route: string;
+}
+export interface WebSecurityObserver {
+	rejected(rejection: WebRejection): void;
+	unhandled(error: unknown): void;
 }
 
 /** The public origin is operator configuration, never Host or forwarded headers. */
@@ -80,6 +96,48 @@ function failure(status: number, code: string): Response {
 	);
 }
 
+/**
+ * 5.4W-E: rejected requests are reported to the observer. The reason is a server constant
+ * (never request text); method/route template are the only request-derived fields.
+ */
+export type RejectReason =
+	| 'METHOD_NOT_ALLOWED'
+	| 'METHOD_OVERRIDE'
+	| 'URI_TOO_LONG'
+	| 'DUPLICATE_QUERY_PARAMETER'
+	| 'ORIGIN_REJECTED'
+	| 'CONTENT_ENCODING'
+	| 'PAYLOAD_TOO_LARGE'
+	| 'BODY_READ_FAILED'
+	| 'UNSUPPORTED_MEDIA_TYPE'
+	| 'INVALID_JSON'
+	| 'UNSAFE_CALLBACK_URL';
+const WARN_REASONS = new Set<RejectReason>([
+	'METHOD_OVERRIDE',
+	'ORIGIN_REJECTED',
+	'UNSAFE_CALLBACK_URL',
+	'CONTENT_ENCODING'
+]);
+function rejected(
+	event: RequestEvent,
+	policy: WebPolicy,
+	reason: RejectReason,
+	response: Response
+): Response {
+	try {
+		policy.observer?.rejected({
+			reason,
+			severity: WARN_REASONS.has(reason) ? 'warn' : 'info',
+			status: response.status,
+			method: methods.has(event.request.method) ? event.request.method : 'OTHER',
+			route: event.route?.id ?? 'unmatched'
+		});
+	} catch {
+		// Observability never changes the security decision.
+	}
+	return response;
+}
+
 /** Read a bounded stream, without trusting Content-Length or buffering an unbounded clone. */
 async function boundedBody(request: Request): Promise<Uint8Array<ArrayBuffer> | Response> {
 	const length = request.headers.get('content-length');
@@ -123,38 +181,48 @@ export async function validateApiRequest(
 	policy: WebPolicy
 ): Promise<Response | null> {
 	const { request, url } = event;
-	if (!methods.has(request.method)) return failure(405, 'METHOD_NOT_ALLOWED');
+	const reject = (reason: RejectReason, status: number, code: string) =>
+		rejected(event, policy, reason, failure(status, code));
+	if (!methods.has(request.method)) return reject('METHOD_NOT_ALLOWED', 405, 'METHOD_NOT_ALLOWED');
 	if (request.headers.has('x-http-method-override') || request.headers.has('x-method-override'))
-		return failure(400, 'INVALID_INPUT');
-	if (url.search.length > 8192) return failure(414, 'URI_TOO_LONG');
+		return reject('METHOD_OVERRIDE', 400, 'INVALID_INPUT');
+	if (url.search.length > 8192) return reject('URI_TOO_LONG', 414, 'URI_TOO_LONG');
 	for (const key of url.searchParams.keys()) {
-		if (url.searchParams.getAll(key).length !== 1) return failure(400, 'INVALID_INPUT');
+		if (url.searchParams.getAll(key).length !== 1)
+			return reject('DUPLICATE_QUERY_PARAMETER', 400, 'INVALID_INPUT');
 	}
 	if (!mutations.has(request.method)) return null;
-	if (!allowsMutation(request, url, policy)) return failure(403, 'FORBIDDEN');
-	if (request.headers.has('content-encoding')) return failure(415, 'UNSUPPORTED_MEDIA_TYPE');
+	if (!allowsMutation(request, url, policy)) return reject('ORIGIN_REJECTED', 403, 'FORBIDDEN');
+	if (request.headers.has('content-encoding'))
+		return reject('CONTENT_ENCODING', 415, 'UNSUPPORTED_MEDIA_TYPE');
 	const bytes = await boundedBody(request);
-	if (bytes instanceof Response) return bytes;
+	if (bytes instanceof Response)
+		return rejected(
+			event,
+			policy,
+			bytes.status === 413 ? 'PAYLOAD_TOO_LARGE' : 'BODY_READ_FAILED',
+			bytes
+		);
 	const type = request.headers.get('content-type');
 	if (
 		(bytes.length > 0 || type !== null) &&
 		!/^application\/json(?:\s*;\s*charset=utf-8)?\s*$/i.test(type ?? '')
 	)
-		return failure(415, 'UNSUPPORTED_MEDIA_TYPE');
+		return reject('UNSUPPORTED_MEDIA_TYPE', 415, 'UNSUPPORTED_MEDIA_TYPE');
 	if (bytes.length > 0) {
 		let body: Record<string, unknown>;
 		try {
 			const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
 			if (!value || typeof value !== 'object' || Array.isArray(value))
-				return failure(400, 'INVALID_INPUT');
+				return reject('INVALID_JSON', 400, 'INVALID_INPUT');
 			body = value as Record<string, unknown>;
 		} catch {
-			return failure(400, 'INVALID_INPUT');
+			return reject('INVALID_JSON', 400, 'INVALID_INPUT');
 		}
 		if (routePath(event).startsWith('/api/auth/')) {
 			for (const key of ['callbackURL', 'newUserCallbackURL', 'errorCallbackURL']) {
 				if (body[key] !== undefined && !isInternalLocation(body[key]))
-					return failure(400, 'INVALID_INPUT');
+					return reject('UNSAFE_CALLBACK_URL', 400, 'INVALID_INPUT');
 			}
 		}
 	}
@@ -227,7 +295,13 @@ export async function handleWebRequest(
 			(api && policy.beforeResolve ? await policy.beforeResolve(event) : null) ??
 			(await resolve(event));
 		if (api && response.status === 500) response = failure(response.status, 'INTERNAL_ERROR');
-	} catch {
+	} catch (error) {
+		// 5.4W-E: the client gets the generic body; the redacted stack stays server-side.
+		try {
+			policy.observer?.unhandled(error);
+		} catch {
+			// ignore
+		}
 		response = failure(500, 'INTERNAL_ERROR');
 	}
 	const responseUrl = new URL(event.url);

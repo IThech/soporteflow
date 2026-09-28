@@ -11,6 +11,7 @@ import {
 import { changeIncidentSla, IncidentServiceError } from '$lib/server/services/incidents';
 import { toIncidentDto } from '$lib/server/services/incident-dto';
 import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -97,6 +98,7 @@ export const PATCH: RequestHandler = async (event) => {
 			const mapped = incidentMutationFailure(error.code);
 			if (mapped) return mapped;
 		}
+		logUnexpectedError(error);
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}
 };

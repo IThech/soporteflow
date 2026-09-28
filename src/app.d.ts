@@ -8,6 +8,8 @@ declare global {
 		interface Locals {
 			/** Undefined before resolution; null when resolution denies authentication. */
 			principal?: AuthenticatedPrincipal | null;
+			/** 5.4W-E: server-generated correlation id (UUID v4), also sent as X-Request-ID. */
+			requestId?: string;
 		}
 		// interface PageData {}
 		// interface PageState {}

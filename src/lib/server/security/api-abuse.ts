@@ -4,6 +4,8 @@ import type { RequestEvent } from '@sveltejs/kit';
 import { FixedWindowRateLimiter, rateLimitedResponse, type RateLimitDecision } from './rate-limit';
 import { resolvePrincipal } from '../auth/principal';
 import { verifyOrganizationMembership } from '../auth/authorization';
+import { serializeError } from '../logging/redact';
+import { throttled } from '../logging/logger';
 
 const MINUTE = 60000;
 export const ABUSE_POLICIES = {
@@ -74,10 +76,21 @@ export function createApiAbuseGuard(deps: AbuseDependencies = {}) {
 			// Consume in order; a denied IP/user never spends another identity/tenant's budget.
 			for (const [policy, key] of entries) {
 				const result = await store.consume(policy, key);
-				if (!result.allowed) return rateLimitedResponse(result.retryAfterSeconds);
+				if (!result.allowed) {
+					// 5.4W-E: policy name only; never the (HMAC) key, IP, email or user id.
+					throttled('warn', 'security.rate_limited', policy, {
+						policy,
+						retryAfterSeconds: result.retryAfterSeconds
+					});
+					return rateLimitedResponse(result.retryAfterSeconds);
+				}
 			}
 			return null;
-		} catch {
+		} catch (error) {
+			throttled('error', 'security.limiter_unavailable', closed ? 'closed' : 'open', {
+				failClosed: closed,
+				error: serializeError(error, false)
+			});
 			return closed
 				? Response.json(
 						{ error: { code: 'LIMITER_UNAVAILABLE', message: 'Service temporarily unavailable.' } },

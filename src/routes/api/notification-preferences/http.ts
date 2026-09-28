@@ -3,6 +3,7 @@ import { resolvePrincipal } from '$lib/server/auth/principal';
 import { NotificationPreferenceError } from '$lib/server/services/notification-preferences';
 import type { NotificationPreferenceContext } from '$lib/server/services/notification-preferences';
 import { failure, onlyKeys, uuid } from '../roles/http';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 export { failure, success } from '../roles/http';
 
@@ -65,5 +66,6 @@ export function preferenceFailure(error: unknown): Response {
 		if (error.code === 'INVALID_INPUT') return failure(400, 'INVALID_INPUT', 'Invalid request.');
 		if (error.code === 'FORBIDDEN') return failure(403, 'FORBIDDEN', 'Permission denied.');
 	}
+	logUnexpectedError(error);
 	return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 }

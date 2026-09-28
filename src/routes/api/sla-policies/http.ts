@@ -2,6 +2,7 @@ import { resultLimitFailure } from '$lib/server/security/bounded-read';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import type { SlaPolicyRecord } from '$lib/server/services/sla-policies';
 import { actorAuthorizationFailure, failure } from '../roles/http';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 export {
 	failure,
@@ -60,6 +61,7 @@ export function slaServiceFailure(error: unknown) {
 				return failure(403, 'FORBIDDEN', 'Permission denied.');
 		}
 	}
+	logUnexpectedError(error);
 	return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 }
 

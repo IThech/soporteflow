@@ -5,6 +5,7 @@ import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { resolveEffectivePermissions } from '$lib/server/auth/effective-permissions';
 import { getAuthenticatedUserContext } from '$lib/server/services/user-context';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -73,6 +74,7 @@ export const GET: RequestHandler = async (event) => {
 		const oversized = resultLimitFailure(error);
 		if (oversized) return oversized;
 		// Any unexpected failure or internal inconsistency after authentication returns 500
+		logUnexpectedError(error);
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}
 };

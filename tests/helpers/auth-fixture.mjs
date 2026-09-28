@@ -42,6 +42,8 @@ export const TEST_SECRET = 'synthetic-phase-b-only-secret-123456789';
 export const TEST_ORIGIN = 'http://localhost';
 
 export async function fixture(t, migrate = true) {
+	// 5.4W-E: structured logs are silent in tests unless a test (or the caller) asks for them.
+	process.env.LOG_LEVEL ??= 'silent';
 	const pg = new PGlite();
 	t.after(() => pg.close());
 

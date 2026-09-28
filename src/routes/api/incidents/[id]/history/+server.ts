@@ -4,6 +4,7 @@ import { resolvePrincipal } from '$lib/server/auth/principal';
 import { resolveIncidentAccess } from '$lib/server/auth/incident-access';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import { listIncidentHistory, parseHistoryQuery } from '$lib/server/services/incident-history';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function failure(status: number, code: string, message: string) {
@@ -41,6 +42,7 @@ export const GET: RequestHandler = async (event) => {
 			if (error.code === 'INCIDENT_NOT_FOUND')
 				return failure(404, 'INCIDENT_NOT_FOUND', 'Incident not found.');
 		}
+		logUnexpectedError(error);
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}
 };

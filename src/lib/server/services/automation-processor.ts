@@ -24,6 +24,7 @@ import {
 	type IncidentDatabase
 } from './incidents';
 import { createInternalNote } from './incident-messages';
+import { logError, logger, runWithLogContext } from '../logging/logger';
 
 async function action(tx: IncidentDatabase, org: string, id: string, a: Action) {
 	const ctx = { organizationId: org, actorUserId: null };
@@ -63,9 +64,18 @@ const terminal = (
 /** Bounded invocation, not a worker. Claims commit before actions; actions and success share one tx.
  * Expired claims can be recovered; semantic or internal failures are terminal (no hidden retries).
  */
-export async function processAutomationExecutions(
+export function processAutomationExecutions(
 	db: IncidentDatabase,
 	options: { limit?: number; now?: Date } = {}
+) {
+	return runWithLogContext({ jobId: randomUUID(), worker: 'automation' }, () =>
+		processAutomationBatch(db, options)
+	);
+}
+
+async function processAutomationBatch(
+	db: IncidentDatabase,
+	options: { limit?: number; now?: Date }
 ) {
 	const now = options.now ?? new Date(),
 		limit = options.limit ?? 25;
@@ -96,6 +106,10 @@ export async function processAutomationExecutions(
 		const claimed: { id: string; token: string }[] = [];
 		for (const row of rows) {
 			if (row.attemptCount >= 3) {
+				logger.error('automation.execution_exhausted', {
+					executionId: row.id,
+					code: 'CONCURRENCY_CONFLICT'
+				});
 				await tx
 					.update(executions)
 					.set(terminal('failed', now, 'CONCURRENCY_CONFLICT'))
@@ -206,6 +220,14 @@ export async function processAutomationExecutions(
 		} catch (error) {
 			// The failed action transaction has rolled back before recording its sanitized outcome.
 			const code = error instanceof IncidentServiceError ? 'ACTION_INVALID' : 'INTERNAL_ERROR';
+			if (code === 'INTERNAL_ERROR')
+				logError('automation.execution_error', error, { executionId: claim.id });
+			else
+				logger.warn('automation.execution_failed', {
+					executionId: claim.id,
+					code,
+					serviceCode: (error as IncidentServiceError).code
+				});
 			const rows = await db
 				.update(executions)
 				.set(terminal('failed', now, code))
@@ -220,5 +242,12 @@ export async function processAutomationExecutions(
 			if (rows.length) failed++;
 		}
 	}
+	if (claims.length > 0)
+		logger.info('automation.batch_completed', {
+			claimed: claims.length,
+			succeeded,
+			skipped,
+			failed
+		});
 	return { claimed: claims.length, succeeded, skipped, failed };
 }

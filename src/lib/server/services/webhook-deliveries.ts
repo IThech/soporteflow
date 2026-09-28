@@ -25,6 +25,8 @@ import {
 	type WebhookHttpClient
 } from '../webhooks/http-client';
 import type { IncidentDatabase } from './incidents';
+import { randomUUID } from 'node:crypto';
+import { logError, logger, runWithLogContext } from '../logging/logger';
 
 /**
  * Outbound webhook delivery processor (5.4V-B). Same shape as notification-deliveries:
@@ -96,7 +98,7 @@ export async function claimDueWebhookDeliveries(
 	if (!Number.isInteger(limit) || limit < 1 || limit > WEBHOOK_MAX_LIMIT) throw invalid();
 	const leaseUntil = new Date(now.getTime() + WEBHOOK_LEASE_MS);
 	return db.transaction(async (tx) => {
-		await tx
+		const exhausted = await tx
 			.update(webhookDeliveries)
 			.set({
 				status: 'failed',
@@ -112,7 +114,11 @@ export async function claimDueWebhookDeliveries(
 					lte(webhookDeliveries.nextAttemptAt, now),
 					sql`${webhookDeliveries.attemptCount} >= ${WEBHOOK_MAX_ATTEMPTS}`
 				)
-			);
+			)
+			.returning({ id: webhookDeliveries.id });
+		// 5.4W-E: a worker died holding the last attempt; the item is now detectable as exhausted.
+		for (const row of exhausted.slice(0, 20))
+			logger.error('webhook.delivery_exhausted', { deliveryId: row.id, code: 'MAX_ATTEMPTS' });
 		const due = await tx
 			.select({ id: webhookDeliveries.id })
 			.from(webhookDeliveries)
@@ -359,6 +365,8 @@ export interface ProcessWebhookDeliveriesResult {
 	retried: number;
 	failed: number;
 	leaseLost: number;
+	/** 5.4W-E: items that threw unexpectedly; they keep their lease and are reclaimed later. */
+	errors: number;
 }
 
 /** Headers of one attempt. The signature covers `${timestamp}.${body}` exactly as sent. */
@@ -503,51 +511,85 @@ export async function processDueWebhookDeliveries(
 	options: ProcessWebhookDeliveriesOptions = {}
 ): Promise<ProcessWebhookDeliveriesResult> {
 	const now = options.now ?? new Date();
-	const claimed = await claimDueWebhookDeliveries(db, { now, limit: options.limit });
-	const result: ProcessWebhookDeliveriesResult = {
-		claimed: claimed.length,
-		sent: 0,
-		retried: 0,
-		failed: 0,
-		leaseLost: 0
-	};
-	const clock = options.clock ?? (() => performance.now());
-	const batchStart = clock();
-	const current = () => new Date(now.getTime() + Math.max(0, clock() - batchStart));
-	for (const delivery of claimed) {
-		const outcome = await attempt(db, delivery, now, options, current);
-		if (outcome.kind === 'lost') {
-			result.leaseLost++;
-			continue;
-		}
-		const ref = {
-			id: delivery.id,
-			leaseToken: delivery.leaseToken,
-			now,
-			statusCode: outcome.statusCode,
-			responseTimeMs: outcome.responseTimeMs
+	return runWithLogContext({ jobId: randomUUID(), worker: 'webhook' }, async () => {
+		const claimed = await claimDueWebhookDeliveries(db, { now, limit: options.limit });
+		const result: ProcessWebhookDeliveriesResult = {
+			claimed: claimed.length,
+			sent: 0,
+			retried: 0,
+			failed: 0,
+			leaseLost: 0,
+			errors: 0
 		};
-		if (outcome.kind === 'sent') {
-			result[(await markWebhookDeliverySent(db, ref)) ? 'sent' : 'leaseLost']++;
-		} else if (outcome.kind === 'failed') {
-			result[
-				(await markWebhookDeliveryFailed(db, { ...ref, errorCode: outcome.code }))
-					? 'failed'
-					: 'leaseLost'
-			]++;
-		} else {
-			const status = await markWebhookDeliveryRetry(db, {
-				...ref,
-				attemptCount: delivery.attemptCount,
-				errorCode: outcome.code,
-				retryAfterMs: outcome.retryAfterMs ?? null
-			});
-			if (status === 'retry') result.retried++;
-			else if (status === 'failed') result.failed++;
-			else result.leaseLost++;
+		const clock = options.clock ?? (() => performance.now());
+		const batchStart = clock();
+		const current = () => new Date(now.getTime() + Math.max(0, clock() - batchStart));
+		for (const delivery of claimed) {
+			try {
+				await processOne(delivery);
+			} catch (error) {
+				result.errors++;
+				logError('webhook.delivery_error', error, {
+					deliveryId: delivery.id,
+					subscriptionId: delivery.subscriptionId,
+					attempt: delivery.attemptCount
+				});
+			}
 		}
-	}
-	return result;
+		if (claimed.length > 0) logger.info('webhook.batch_completed', { ...result });
+		return result;
+
+		// Logged: ids, attempt, event type, safe code and HTTP status. Never the target URL (it may
+		// carry receiver credentials), headers, signature, secret or body.
+		async function processOne(delivery: ClaimedWebhookDelivery) {
+			const ids = {
+				deliveryId: delivery.id,
+				subscriptionId: delivery.subscriptionId,
+				eventType: delivery.eventType,
+				attempt: delivery.attemptCount
+			};
+			const outcome = await attempt(db, delivery, now, options, current);
+			if (outcome.kind === 'lost') {
+				result.leaseLost++;
+				logger.warn('webhook.lease_lost', ids);
+				return;
+			}
+			const ref = {
+				id: delivery.id,
+				leaseToken: delivery.leaseToken,
+				now,
+				statusCode: outcome.statusCode,
+				responseTimeMs: outcome.responseTimeMs
+			};
+			const statusCode = outcome.statusCode ?? null;
+			if (outcome.kind === 'sent') {
+				result[(await markWebhookDeliverySent(db, ref)) ? 'sent' : 'leaseLost']++;
+			} else if (outcome.kind === 'failed') {
+				const ok = await markWebhookDeliveryFailed(db, { ...ref, errorCode: outcome.code });
+				result[ok ? 'failed' : 'leaseLost']++;
+				if (ok) logger.warn('webhook.delivery_failed', { ...ids, code: outcome.code, statusCode });
+			} else {
+				const status = await markWebhookDeliveryRetry(db, {
+					...ref,
+					attemptCount: delivery.attemptCount,
+					errorCode: outcome.code,
+					retryAfterMs: outcome.retryAfterMs ?? null
+				});
+				if (status === 'retry') {
+					result.retried++;
+					logger.warn('webhook.delivery_retry', { ...ids, code: outcome.code, statusCode });
+				} else if (status === 'failed') {
+					result.failed++;
+					logger.error('webhook.delivery_exhausted', {
+						...ids,
+						code: 'MAX_ATTEMPTS',
+						lastCode: outcome.code,
+						statusCode
+					});
+				} else result.leaseLost++;
+			}
+		}
+	});
 }
 
 /**

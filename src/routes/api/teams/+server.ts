@@ -6,6 +6,7 @@ import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
 import { getActiveTeams } from '$lib/server/services/teams';
 import { IncidentServiceError } from '$lib/server/services/incidents';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -88,6 +89,7 @@ export const GET: RequestHandler = async (event) => {
 			);
 		}
 
+		logUnexpectedError(err);
 		return json(
 			{
 				error: {

@@ -62,6 +62,8 @@ async function createLabServer(target) {
 export async function createLab(t) {
 	const target = labTarget();
 	process.env.WEBHOOK_SECRET_ENCRYPTION_KEY ??= randomBytes(32).toString('hex');
+	// 5.4W-E: keep the lab output readable; LOG_LEVEL=info shows worker/security events.
+	process.env.LOG_LEVEL ??= 'silent';
 	const server = await createLabServer(target);
 	const load = (p) => server.ssrLoadModule(p);
 	// Cleanup is registered before any connection so a failed preflight never leaves the process

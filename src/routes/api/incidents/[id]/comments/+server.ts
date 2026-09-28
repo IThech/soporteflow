@@ -15,6 +15,7 @@ import {
 	listPublicComments,
 	parsePublicCommentsQuery
 } from '$lib/server/services/incident-messages';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -51,6 +52,7 @@ function serviceFailure(error: unknown, invalidMessage?: string) {
 			);
 		if (FORBIDDEN_SERVICE_CODES.has(error.code)) return forbidden();
 	}
+	logUnexpectedError(error);
 	return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 }
 

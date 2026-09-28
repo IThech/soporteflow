@@ -15,6 +15,7 @@ import {
 	listInternalNotes,
 	parseInternalNotesQuery
 } from '$lib/server/services/incident-messages';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const noStore = { 'Cache-Control': 'private, no-store' };
@@ -80,6 +81,7 @@ export const GET: RequestHandler = async (event) => {
 			if (error.code === 'INCIDENT_NOT_FOUND')
 				return failure(404, 'INCIDENT_NOT_FOUND', 'Incident not found.');
 		}
+		logUnexpectedError(error);
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}
 };
@@ -158,6 +160,7 @@ export const POST: RequestHandler = async (event) => {
 				return failure(403, 'FORBIDDEN', 'Permission denied.');
 		}
 		if (isActorAuthorizationError(error)) return failure(403, 'FORBIDDEN', 'Permission denied.');
+		logUnexpectedError(error);
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}
 };

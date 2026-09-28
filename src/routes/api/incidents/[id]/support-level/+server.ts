@@ -17,6 +17,7 @@ import {
 } from '$lib/server/services/incidents';
 import { toIncidentDto } from '$lib/server/services/incident-dto';
 import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
+import { logUnexpectedError } from '$lib/server/logging/logger';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -225,6 +226,7 @@ export const PATCH: RequestHandler = async (event) => {
 			if (mapped) return mapped;
 		}
 
+		logUnexpectedError(err);
 		return json(
 			{
 				error: {
