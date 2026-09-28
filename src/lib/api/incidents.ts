@@ -1,3 +1,5 @@
+import { ApiError, type ApiErrorMeta } from './errors.ts';
+
 /** 5.4T-C derived SLA compliance (computed by the server at request time). */
 export type SlaObjectiveStatus = 'not_applicable' | 'pending' | 'met' | 'breached';
 export type SlaOverallStatus = 'not_applicable' | 'on_track' | 'met' | 'breached';
@@ -71,15 +73,15 @@ function isValidIncidentCategoryId(value: unknown): boolean {
 	);
 }
 
-export class IncidentApiError extends Error {
-	readonly status: number;
-	readonly code: string;
-
-	constructor(status: number, code: string, message: string) {
-		super(message);
+/**
+ * UI-1A (FE-06): incident client error, a specialization of the common ApiError (keeps
+ * Retry-After / X-Request-ID when built from a response). Existing (status, code, message)
+ * callers are unchanged.
+ */
+export class IncidentApiError extends ApiError {
+	constructor(status: number, code: string, message: string, meta: ApiErrorMeta = {}) {
+		super(status, code, message, meta);
 		this.name = 'IncidentApiError';
-		this.status = status;
-		this.code = code;
 	}
 }
 
@@ -213,7 +215,8 @@ export async function listIncidents(
 		);
 	}
 
-	for (const inc of incidents) {
+	for (let index = 0; index < incidents.length; index++) {
+		const inc = incidents[index];
 		if (!inc || typeof inc !== 'object') {
 			throw new IncidentApiError(
 				res.status,
@@ -222,6 +225,12 @@ export async function listIncidents(
 			);
 		}
 		const item = inc as Record<string, unknown>;
+		// UI-1A (FE-04): the requester projection has no `client` (nor any internal field); it is
+		// validated by its own strict allowlist instead of being rejected.
+		if (item.audience === 'requester') {
+			incidents[index] = parseAndValidateIncident(item, organizationId, undefined, res.status);
+			continue;
+		}
 		if (
 			typeof item.id !== 'string' ||
 			typeof item.organizationId !== 'string' ||
@@ -492,7 +501,8 @@ function parseRequesterIncident(
 	};
 }
 
-function parseAndValidateIncident(
+/** UI-1A: shared incident payload validator (staff or requester), used by the paged client. */
+export function parseAndValidateIncident(
 	rawItem: unknown,
 	expectedOrgId: string,
 	expectedIncidentId?: string,

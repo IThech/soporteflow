@@ -459,56 +459,59 @@ test('Fase 2D.1 — Carga de catálogos V2, sincronización y validaciones', asy
 		);
 
 		// -------------------------------------------------------------------------
-		// N. Verificación del código en src/routes/app/+page.svelte
+		// N. Verificación del código en src/routes/app/demo/+page.svelte
 		// -------------------------------------------------------------------------
-		await suite.test('N. Verificación estructural de src/routes/app/+page.svelte', async (t) => {
-			const source = await readFile(
-				new URL('../src/routes/app/+page.svelte', import.meta.url),
-				'utf8'
-			);
+		await suite.test(
+			'N. Verificación estructural de src/routes/app/demo/+page.svelte',
+			async (t) => {
+				const source = await readFile(
+					new URL('../src/routes/app/demo/+page.svelte', import.meta.url),
+					'utf8'
+				);
 
-			await t.test('Importa constantes y funciones de carga V2', () => {
-				assert.ok(source.includes('SUBCATEGORIES_STORAGE_KEY'));
-				assert.ok(source.includes('loadSubcategoriesResult'));
-				assert.ok(source.includes('PRIORITY_MATRICES_STORAGE_KEY'));
-				assert.ok(source.includes('loadPriorityMatricesResult'));
-				assert.ok(source.includes('SubcategoryLoadResult'));
-				assert.ok(source.includes('PriorityMatricesCatalogLoadResult'));
-			});
+				await t.test('Importa constantes y funciones de carga V2', () => {
+					assert.ok(source.includes('SUBCATEGORIES_STORAGE_KEY'));
+					assert.ok(source.includes('loadSubcategoriesResult'));
+					assert.ok(source.includes('PRIORITY_MATRICES_STORAGE_KEY'));
+					assert.ok(source.includes('loadPriorityMatricesResult'));
+					assert.ok(source.includes('SubcategoryLoadResult'));
+					assert.ok(source.includes('PriorityMatricesCatalogLoadResult'));
+				});
 
-			await t.test('Declara estado reactivo para catálogos V2', () => {
-				assert.ok(source.includes('subcategoriesState'));
-				assert.ok(source.includes('subcategoriesReady'));
-				assert.ok(source.includes('subcategoriesError'));
-				assert.ok(source.includes('subcategoriesSnapshot'));
-				assert.ok(source.includes('priorityMatricesState'));
-				assert.ok(source.includes('priorityMatricesReady'));
-				assert.ok(source.includes('priorityMatricesError'));
-				assert.ok(source.includes('priorityMatricesSnapshot'));
-			});
+				await t.test('Declara estado reactivo para catálogos V2', () => {
+					assert.ok(source.includes('subcategoriesState'));
+					assert.ok(source.includes('subcategoriesReady'));
+					assert.ok(source.includes('subcategoriesError'));
+					assert.ok(source.includes('subcategoriesSnapshot'));
+					assert.ok(source.includes('priorityMatricesState'));
+					assert.ok(source.includes('priorityMatricesReady'));
+					assert.ok(source.includes('priorityMatricesError'));
+					assert.ok(source.includes('priorityMatricesSnapshot'));
+				});
 
-			await t.test(
-				'Define funciones de recarga reloadSubcategories y reloadPriorityMatrices',
-				() => {
-					assert.ok(source.includes('function reloadSubcategories('));
-					assert.ok(source.includes('function reloadPriorityMatrices('));
-				}
-			);
+				await t.test(
+					'Define funciones de recarga reloadSubcategories y reloadPriorityMatrices',
+					() => {
+						assert.ok(source.includes('function reloadSubcategories('));
+						assert.ok(source.includes('function reloadPriorityMatrices('));
+					}
+				);
 
-			await t.test('Registra listener de storage en window y lo desregistra en cleanup', () => {
-				assert.ok(source.includes("window.addEventListener('storage', handleStorage)"));
-				assert.ok(source.includes("window.removeEventListener('storage', handleStorage)"));
-			});
+				await t.test('Registra listener de storage en window y lo desregistra en cleanup', () => {
+					assert.ok(source.includes("window.addEventListener('storage', handleStorage)"));
+					assert.ok(source.includes("window.removeEventListener('storage', handleStorage)"));
+				});
 
-			await t.test(
-				'Restricciones de fase: En 2D.2 se integran selectores de subcategoría e impacto',
-				() => {
-					assert.ok(source.includes('newSubcategoryId'));
-					assert.ok(source.includes('newImpact'));
-					assert.ok(source.includes('classificationPreview'));
-				}
-			);
-		});
+				await t.test(
+					'Restricciones de fase: En 2D.2 se integran selectores de subcategoría e impacto',
+					() => {
+						assert.ok(source.includes('newSubcategoryId'));
+						assert.ok(source.includes('newImpact'));
+						assert.ok(source.includes('classificationPreview'));
+					}
+				);
+			}
+		);
 	} finally {
 		await server.close();
 	}

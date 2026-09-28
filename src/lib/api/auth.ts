@@ -1,3 +1,11 @@
+import {
+	ApiError,
+	DEFAULT_RETRY_AFTER_SECONDS,
+	parseRetryAfter,
+	readRequestId,
+	type ApiErrorMeta
+} from './errors.ts';
+
 export interface SignInCredentials {
 	email: string;
 	password: string;
@@ -71,13 +79,10 @@ function parseActiveOrganization(
 	return { id: org.id, name: org.name, slug: org.slug, capabilities: [...capabilities] };
 }
 
-export class AuthApiError extends Error {
-	constructor(
-		public readonly status: number,
-		public readonly code: string,
-		message: string
-	) {
-		super(message);
+/** UI-1A (FE-06): auth client error, a specialization of the common ApiError. */
+export class AuthApiError extends ApiError {
+	constructor(status: number, code: string, message: string, meta: ApiErrorMeta = {}) {
+		super(status, code, message, meta);
 		this.name = 'AuthApiError';
 	}
 }
@@ -183,7 +188,13 @@ export async function getMe(
 			const message =
 				res.status === 401 ? 'Sesión no válida o expirada.' : 'Error al obtener usuario.';
 
-			throw new AuthApiError(res.status, code, message);
+			throw new AuthApiError(res.status, code, message, {
+				requestId: readRequestId(res.headers),
+				retryAfterSeconds:
+					res.status === 429 || res.status === 503
+						? (parseRetryAfter(res.headers.get('retry-after')) ?? DEFAULT_RETRY_AFTER_SECONDS)
+						: undefined
+			});
 		}
 
 		const data: AuthenticatedUserContext = await res.json();

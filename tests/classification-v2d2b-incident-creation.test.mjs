@@ -744,12 +744,12 @@ test('Fase 2D.2B — Integración de Clasificación V2 en la creación de incide
 		);
 
 		// =========================================================================
-		// 25. Verificación estructural del componente src/routes/app/+page.svelte
+		// 25. Verificación estructural del componente src/routes/app/demo/+page.svelte
 		// =========================================================================
 		await suite.test(
 			'25. Verificación estructural de +page.svelte para Clasificación V2',
 			async () => {
-				const content = await readFile('src/routes/app/+page.svelte', 'utf-8');
+				const content = await readFile('src/routes/app/demo/+page.svelte', 'utf-8');
 
 				// Importaciones requeridas
 				assert.ok(

@@ -59,13 +59,13 @@ test('Clasificación V2D.3: historial de creación y prioridad protegida', async
 		await suite.test('mantiene la edición manual V1 e incluye urgent en el selector', async () => {
 			const v1 = { ...v2, classification: undefined, priority: 'medium' };
 			assert.equal(resolveEditedIncidentPriority(v1, 'urgent'), 'urgent');
-			const page = await readFile('src/routes/app/+page.svelte', 'utf8');
+			const page = await readFile('src/routes/app/demo/+page.svelte', 'utf8');
 			assert.match(page, /\{#if editingIncident\.classification\}/);
 			assert.match(page, /<option value="urgent">Urgente<\/option>/);
 		});
 
 		await suite.test('la creación persiste incidencia e historial conjuntamente', async () => {
-			const page = await readFile('src/routes/app/+page.svelte', 'utf8');
+			const page = await readFile('src/routes/app/demo/+page.svelte', 'utf8');
 			assert.match(page, /buildCreatedHistoryEntry\(incidentWithSla, activeUser\.id\)/);
 			assert.match(page, /const nextHistory = \[\.\.\.history, createdEvent\]/);
 			assert.match(page, /commitAssignment\([\s\S]*?nextIncidents,[\s\S]*?nextHistory/);

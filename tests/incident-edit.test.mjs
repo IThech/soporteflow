@@ -50,7 +50,7 @@ test('Edición y selector: persistencia confirmada, historial y notificaciones',
 		};
 		// Execute the actual page handlers after TypeScript transpilation, with isolated browser dependencies.
 		// This covers orchestration rather than duplicating it in a mock implementation.
-		const page = readFileSync('src/routes/app/+page.svelte', 'utf8')
+		const page = readFileSync('src/routes/app/demo/+page.svelte', 'utf8')
 			.split('<script lang="ts">')[1]
 			.split('</script>')[0];
 		const ast = ts.createSourceFile(

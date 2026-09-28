@@ -756,7 +756,7 @@ test('Evolución de Routing: Categorías, Capacidad, Asignación y Clasificació
 			});
 
 			await st.test('31. columnas Categoría y Nivel están integradas', () => {
-				const pageContent = fs.readFileSync('src/routes/app/+page.svelte', 'utf8');
+				const pageContent = fs.readFileSync('src/routes/app/demo/+page.svelte', 'utf8');
 				assert.ok(
 					pageContent.includes('<th scope="col" class="px-6 py-4 font-medium">Categoría</th>')
 				);
@@ -944,7 +944,7 @@ test('Evolución de Routing: Categorías, Capacidad, Asignación y Clasificació
 			});
 
 			await st.test('42. UI de advertencia integrada en +page.svelte y theme.css', () => {
-				const pageSrc = fs.readFileSync('src/routes/app/+page.svelte', 'utf8');
+				const pageSrc = fs.readFileSync('src/routes/app/demo/+page.svelte', 'utf8');
 				assert.ok(pageSrc.includes('incompatibility-warning'));
 				assert.ok(pageSrc.includes('Responsable por debajo del nivel requerido'));
 				assert.ok(pageSrc.includes('btn-reassign-emphasis'));

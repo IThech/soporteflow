@@ -1,0 +1,184 @@
+/*
+ * SoporteFlow design tokens (UI-1B, refined in UI-1C). Light workspace + navy sidebar + cyan accent.
+ *
+ * Scoped to [data-sf-ui] (the new app shell) so the legacy demo and its theme.css overrides of
+ * Tailwind colors never affect new components, and vice versa. New components use only these
+ * variables (no scattered hex values).
+ *
+ * Contrast notes (WCAG AA):
+ * - body/label text uses --text-primary / --text-secondary / --text-muted (all ≥ 7:1 on white);
+ *   --text-subtle (#94a3b8) is for decorative strokes/placeholders only, never for readable text;
+ * - bright cyan (--sf-cyan-400/500) is used for glows, indicators and icons; filled controls
+ *   with white text use --accent (#0e7490, 5.4:1);
+ * - --border is for cards/dividers; form controls use --border-strong.
+ */
+[data-sf-ui] {
+	/* Navy (sidebar, dark in every theme) */
+	--sf-navy-950: #070d1e;
+	--sf-navy-900: #0b132b;
+	--sf-navy-800: #132247;
+	--sf-navy-700: #1c2f5e;
+	--sf-navy-border: rgb(255 255 255 / 0.08);
+	--sf-navy-text-muted: #8a9bbd;
+	--sf-navy-text-active: #ffffff;
+
+	/* Cyan accent family */
+	--sf-cyan-400: #22d3ee;
+	--sf-cyan-500: #06b6d4;
+	--sf-cyan-600: #0891b2;
+	--sf-cyan-glow: rgb(6 182 212 / 0.15);
+	--sf-cyan-border: rgb(6 182 212 / 0.35);
+	--sf-cyan-faint: rgb(6 182 212 / 0.05);
+	--sf-cyan-halo: rgb(6 182 212 / 0.18);
+	--sf-navy-hover: rgb(255 255 255 / 0.04);
+	--sf-highlight: rgb(255 255 255 / 0.12);
+
+	/* Surfaces & text */
+	--canvas: #f8fafc;
+	--surface: #ffffff;
+	--surface-card: #ffffff;
+	--surface-subtle: #f1f5f9;
+	--surface-muted: var(--surface-subtle);
+	--border: #e2e8f0;
+	--border-subtle: #f1f5f9;
+	--border-strong: #cbd5e1;
+	--text-primary: #0f172a;
+	--text-secondary: #475569;
+	--text-muted: #475569;
+	--text-subtle: #94a3b8;
+	--text: var(--text-primary);
+
+	/* Sidebar aliases (kept for compatibility) */
+	--sidebar: var(--sf-navy-900);
+	--sidebar-text: #e2e8f0;
+	--sidebar-muted: var(--sf-navy-text-muted);
+	--sidebar-active: var(--sf-navy-800);
+
+	/* Semantic */
+	--accent: #0e7490;
+	--accent-strong: #155e75;
+	--accent-contrast: #ffffff;
+	--success: #166534;
+	--warning: #92400e;
+	--danger: #b91c1c;
+	--info: #1d4ed8;
+	/* Soft backgrounds for badges/alerts (paired with the semantic text colors above) */
+	--success-soft: #dcfce7;
+	--warning-soft: #fef3c7;
+	--danger-soft: #fee2e2;
+	--info-soft: #dbeafe;
+	--accent-soft: #ecfeff;
+
+	/* Spacing scale */
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.5rem;
+	--space-6: 2rem;
+	--space-7: 2.5rem;
+	--space-8: 3.5rem;
+
+	/* Radius & elevation */
+	--radius-sm: 0.375rem;
+	--radius: 0.5rem;
+	--radius-lg: 0.75rem;
+	--radius-xl: 1rem;
+	--radius-pill: 999px;
+	--shadow-sm: 0 1px 2px rgb(15 23 42 / 0.05);
+	--shadow: 0 8px 24px -6px rgb(15 23 42 / 0.12);
+	--sf-shadow-card: 0 4px 20px -2px rgb(15 23 42 / 0.05), 0 2px 6px -1px rgb(15 23 42 / 0.03);
+	--sf-shadow-card-hover:
+		0 10px 25px -3px rgb(15 23 42 / 0.08), 0 4px 10px -2px rgb(15 23 42 / 0.04);
+	--sf-shadow-glow: 0 0 24px -4px rgb(6 182 212 / 0.25);
+	--sf-shadow-glow-nav: 0 0 18px -8px rgb(6 182 212 / 0.45);
+	--overlay: rgb(7 13 30 / 0.55);
+
+	/* Focus ring: visible on every surface (light and navy sidebar) */
+	--focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--sf-cyan-600);
+	--focus-ring-sidebar: 0 0 0 2px var(--sidebar), 0 0 0 4px var(--sf-cyan-400);
+
+	/* Typography */
+	--font-sans:
+		ui-sans-serif, system-ui, -apple-system, 'Segoe UI Variable', 'Segoe UI', Roboto,
+		'Helvetica Neue', sans-serif;
+	--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	--text-2xs: 0.6875rem;
+	--text-xs: 0.75rem;
+	--text-sm: 0.875rem;
+	--text-base: 1rem;
+	--text-lg: 1.125rem;
+	--text-xl: 1.375rem;
+	--text-2xl: 1.625rem;
+	--tracking-tight: -0.015em;
+	--tracking-wide: 0.08em;
+
+	/* Motion */
+	--ease: cubic-bezier(0.2, 0, 0, 1);
+	--duration: 140ms;
+
+	color: var(--text);
+	background: var(--canvas);
+	font-family: var(--font-sans);
+	-webkit-font-smoothing: antialiased;
+}
+
+/*
+ * Existing appearance preference (light/dark/system, resolved into html[data-app-theme]) is
+ * preserved: dark variant of the workspace surfaces. The sidebar is navy in both themes.
+ */
+html[data-app-theme='dark'] [data-sf-ui] {
+	--canvas: #070d1e;
+	--surface: #0e1629;
+	--surface-card: #0e1629;
+	--surface-subtle: #16213a;
+	--border: #1f2c47;
+	--border-subtle: #16213a;
+	--border-strong: #2c3b5c;
+	--text-primary: #e2e8f0;
+	--text-secondary: #a8b5cc;
+	--text-muted: #a8b5cc;
+	--text-subtle: #64748b;
+	--sidebar: var(--sf-navy-950);
+	--sidebar-active: var(--sf-navy-800);
+	--accent: #22d3ee;
+	--accent-strong: #67e8f9;
+	--accent-contrast: #062330;
+	--success: #86efac;
+	--warning: #fcd34d;
+	--danger: #fca5a5;
+	--info: #93c5fd;
+	--success-soft: #052e16;
+	--warning-soft: #451a03;
+	--danger-soft: #450a0a;
+	--info-soft: #172554;
+	--accent-soft: #082f3a;
+	--shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+	--shadow: 0 8px 24px -6px rgb(0 0 0 / 0.5);
+	--sf-shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 4px 20px -2px rgb(0 0 0 / 0.35);
+	--sf-shadow-card-hover: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 10px 25px -3px rgb(0 0 0 / 0.45);
+	--focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--sf-cyan-400);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-sf-ui] *,
+	[data-sf-ui] *::before,
+	[data-sf-ui] *::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}
+
+/* Visually hidden but available to assistive technology. */
+[data-sf-ui] .sf-sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}

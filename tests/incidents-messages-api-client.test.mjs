@@ -425,7 +425,12 @@ test('SoporteFlow — Etapa 5.4N-F: cliente API de mensajes', async (t) => {
 				'innerHTML'
 			])
 				assert.ok(!block.includes(forbidden), `no debe contener ${forbidden}`);
-			assert.ok(!/^import /m.test(source), 'el cliente no importa módulos (ni demo ni stores)');
+			// UI-1A (FE-06): the only allowed import is the shared, pure API error model.
+			const imports = source.match(/^import .*$/gm) ?? [];
+			assert.ok(
+				imports.every((line) => /from '\.\/errors\.ts';$/.test(line)),
+				'el cliente no importa módulos (ni demo ni stores), salvo el modelo de error común'
+			);
 			assert.equal(
 				fs.readdirSync(new URL('../src', import.meta.url), { recursive: true }).filter((file) => {
 					if (!/\.(svelte|ts)$/.test(file)) return false;

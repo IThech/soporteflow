@@ -874,7 +874,10 @@ test('5.4D organization selection and persistence', async (t) => {
 		}
 		assert.equal(JSON.stringify(demo), snapshot);
 		assert.equal(h.state().user, context.user);
-		const app = fs.readFileSync(new URL('../src/routes/app/+page.svelte', import.meta.url), 'utf8');
+		const app = fs.readFileSync(
+			new URL('../src/routes/app/demo/+page.svelte', import.meta.url),
+			'utf8'
+		);
 		assert.ok(app.includes('Incidencias en modo demo'));
 		assert.equal(app.includes('/api/incidents'), false);
 		assert.match(app, /onchange=\{\(id\) => \{\s*session.setActiveOrganization\(id\);\s*\}\}/);

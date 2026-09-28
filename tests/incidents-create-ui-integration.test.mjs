@@ -1629,7 +1629,7 @@ test('Etapa 5.4G — Integración de Creación Real de Incidencias', async (t) =
 	// =========================================================================
 
 	await t.test('54. enlace "Nueva incidencia" existe en bloque real de /app/+page.svelte', () => {
-		const appPagePath = path.join(root, 'src/routes/app/+page.svelte');
+		const appPagePath = path.join(root, 'src/routes/app/demo/+page.svelte');
 		const content = fs.readFileSync(appPagePath, 'utf-8');
 
 		assert.ok(content.includes('Nueva incidencia'));
@@ -1637,7 +1637,7 @@ test('Etapa 5.4G — Integración de Creación Real de Incidencias', async (t) =
 	});
 
 	await t.test('55. "Nueva incidencia" solo aparece con organización activa', () => {
-		const appPagePath = path.join(root, 'src/routes/app/+page.svelte');
+		const appPagePath = path.join(root, 'src/routes/app/demo/+page.svelte');
 		const content = fs.readFileSync(appPagePath, 'utf-8');
 
 		const realSection = content.substring(
@@ -1650,7 +1650,7 @@ test('Etapa 5.4G — Integración de Creación Real de Incidencias', async (t) =
 	});
 
 	await t.test('56. enlace apunta a /app/incidents/new?organizationId=...', () => {
-		const appPagePath = path.join(root, 'src/routes/app/+page.svelte');
+		const appPagePath = path.join(root, 'src/routes/app/demo/+page.svelte');
 		const content = fs.readFileSync(appPagePath, 'utf-8');
 
 		assert.ok(
@@ -1659,14 +1659,14 @@ test('Etapa 5.4G — Integración de Creación Real de Incidencias', async (t) =
 	});
 
 	await t.test('57. "Nueva incidencia demo" sigue existiendo en la sección demo', () => {
-		const appPagePath = path.join(root, 'src/routes/app/+page.svelte');
+		const appPagePath = path.join(root, 'src/routes/app/demo/+page.svelte');
 		const content = fs.readFileSync(appPagePath, 'utf-8');
 
 		assert.ok(content.includes('Nueva incidencia demo'));
 	});
 
 	await t.test('58. el enlace real no llama handler demo (isFormOpen)', () => {
-		const appPagePath = path.join(root, 'src/routes/app/+page.svelte');
+		const appPagePath = path.join(root, 'src/routes/app/demo/+page.svelte');
 		const content = fs.readFileSync(appPagePath, 'utf-8');
 
 		const realSection = content.substring(

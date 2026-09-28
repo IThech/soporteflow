@@ -497,7 +497,7 @@ test('SoporteFlow — Fase D.1: Sedes y ubicaciones V1', async (t) => {
 				'src/lib/components/settings/SettingsView.svelte',
 				'utf-8'
 			);
-			const pageCode = readFileSync('src/routes/app/+page.svelte', 'utf-8');
+			const pageCode = readFileSync('src/routes/app/demo/+page.svelte', 'utf-8');
 
 			// SiteManagement
 			assert.ok(
@@ -697,7 +697,7 @@ test('SoporteFlow — Fase D.1: Sedes y ubicaciones V1', async (t) => {
 				await st.test(
 					'8.3 createIncident en +page.svelte: flujo de validación, preservación de borrador y resiliencia',
 					async () => {
-						const pageSource = readFileSync('src/routes/app/+page.svelte', 'utf8');
+						const pageSource = readFileSync('src/routes/app/demo/+page.svelte', 'utf8');
 						const scriptContent = pageSource.split('<script lang="ts">')[1].split('</script>')[0];
 						const ast = ts.createSourceFile(
 							'page.ts',

@@ -39,7 +39,7 @@ function makeSampleIncident(overrides = {}) {
 }
 
 /**
- * Simulates the coordinator state machine implemented in src/routes/app/+page.svelte.
+ * Simulates the coordinator state machine implemented in src/routes/app/demo/+page.svelte.
  */
 function createCoordinator(options = {}) {
 	const fetchFn = options.fetchFn ?? globalThis.fetch;
@@ -1064,7 +1064,7 @@ test('SoporteFlow — Etapa 5.4E: Integración UI Incidencias Reales', async (t)
 	});
 
 	await t.test('33. botón demo en header dice "Nueva incidencia demo"', () => {
-		const pageSource = fs.readFileSync(path.join(root, 'src/routes/app/+page.svelte'), 'utf8');
+		const pageSource = fs.readFileSync(path.join(root, 'src/routes/app/demo/+page.svelte'), 'utf8');
 		assert.ok(
 			pageSource.includes('Nueva incidencia demo'),
 			'El botón demo en el header debe tener el texto "Nueva incidencia demo"'

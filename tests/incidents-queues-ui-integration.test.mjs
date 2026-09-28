@@ -41,7 +41,7 @@ function makeSampleIncident(overrides = {}) {
 }
 
 /**
- * Simulates the coordinator state machine implemented in src/routes/app/+page.svelte
+ * Simulates the coordinator state machine implemented in src/routes/app/demo/+page.svelte
  * with reactive queue support from URL and race condition protection.
  */
 function createQueueCoordinator(options = {}) {
@@ -203,7 +203,7 @@ test('SoporteFlow — Etapa 5.4J-B: Integración UI de Colas Reales de Incidenci
 	// =========================================================================
 
 	await t.test('1. aparecen las tres colas en el bloque real de /app/+page.svelte', () => {
-		const pagePath = path.join(root, 'src/routes/app/+page.svelte');
+		const pagePath = path.join(root, 'src/routes/app/demo/+page.svelte');
 		const content = fs.readFileSync(pagePath, 'utf8');
 
 		assert.ok(content.includes('Mis incidencias'), 'Debe contener pestaña "Mis incidencias"');
@@ -674,7 +674,7 @@ test('SoporteFlow — Etapa 5.4J-B: Integración UI de Colas Reales de Incidenci
 	});
 
 	await t.test('20. demo permanece aislada de las colas reales', () => {
-		const pagePath = path.join(root, 'src/routes/app/+page.svelte');
+		const pagePath = path.join(root, 'src/routes/app/demo/+page.svelte');
 		const content = fs.readFileSync(pagePath, 'utf8');
 
 		const realSection = content.substring(
@@ -688,7 +688,7 @@ test('SoporteFlow — Etapa 5.4J-B: Integración UI de Colas Reales de Incidenci
 	});
 
 	await t.test('21. no usa roles/demoUsers para inferir permisos u ocultar tabs', () => {
-		const pagePath = path.join(root, 'src/routes/app/+page.svelte');
+		const pagePath = path.join(root, 'src/routes/app/demo/+page.svelte');
 		const content = fs.readFileSync(pagePath, 'utf8');
 
 		const tablistArea = content.substring(

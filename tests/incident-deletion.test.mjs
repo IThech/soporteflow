@@ -518,7 +518,7 @@ test('SoporteFlow — Consistencia de eliminación de incidencias', async (suite
 		await suite.test(
 			'11. Orquestador Svelte: cancelación de confirmación no altera memoria ni storage',
 			async () => {
-				const pageSource = readFileSync('src/routes/app/+page.svelte', 'utf8');
+				const pageSource = readFileSync('src/routes/app/demo/+page.svelte', 'utf8');
 				const scriptContent = pageSource.split('<script lang="ts">')[1].split('</script>')[0];
 				const ast = ts.createSourceFile(
 					'page.ts',
@@ -603,7 +603,7 @@ test('SoporteFlow — Consistencia de eliminación de incidencias', async (suite
 		await suite.test(
 			'12. Orquestador Svelte: confirmación exitosa actualiza memoria, snapshot y cierra modal',
 			async () => {
-				const pageSource = readFileSync('src/routes/app/+page.svelte', 'utf8');
+				const pageSource = readFileSync('src/routes/app/demo/+page.svelte', 'utf8');
 				const scriptContent = pageSource.split('<script lang="ts">')[1].split('</script>')[0];
 				const ast = ts.createSourceFile(
 					'page.ts',
@@ -688,7 +688,7 @@ test('SoporteFlow — Consistencia de eliminación de incidencias', async (suite
 		await suite.test(
 			'13. Orquestador Svelte: fallo de persistencia conserva memoria intacta y no cierra modal',
 			async () => {
-				const pageSource = readFileSync('src/routes/app/+page.svelte', 'utf8');
+				const pageSource = readFileSync('src/routes/app/demo/+page.svelte', 'utf8');
 				const scriptContent = pageSource.split('<script lang="ts">')[1].split('</script>')[0];
 				const ast = ts.createSourceFile(
 					'page.ts',
@@ -780,7 +780,7 @@ test('SoporteFlow — Consistencia de eliminación de incidencias', async (suite
 		await suite.test(
 			'14. Verificación estática: saveIncidents eliminado y no existen referencias huérfanas',
 			() => {
-				const pageSource = readFileSync('src/routes/app/+page.svelte', 'utf8');
+				const pageSource = readFileSync('src/routes/app/demo/+page.svelte', 'utf8');
 
 				assert.ok(
 					!pageSource.includes('function saveIncidents'),
