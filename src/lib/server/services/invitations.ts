@@ -1,3 +1,4 @@
+import { boundedRows } from '../security/bounded-read';
 import { createHash, randomBytes } from 'node:crypto';
 import { and, desc, eq, gt, lte, or, sql, type SQL } from 'drizzle-orm';
 import {
@@ -238,9 +239,11 @@ export async function listInvitations(
 	}
 	if (filters.email !== undefined)
 		conditions.push(eq(invitations.email, normalizeInvitationEmail(filters.email)));
-	const rows = await selectInvitations(db, and(...conditions)).orderBy(
-		desc(invitations.createdAt),
-		desc(invitations.id)
+	const rows = await boundedRows(
+		selectInvitations(db, and(...conditions)).orderBy(
+			desc(invitations.createdAt),
+			desc(invitations.id)
+		)
 	);
 	return rows.map((row) => toRecord(row, now));
 }

@@ -1,3 +1,4 @@
+import { boundedRows } from '../security/bounded-read';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import {
 	memberships,
@@ -242,11 +243,13 @@ export async function listOrganizationRoles(
 	assertUuid(organizationId, 'organizationId');
 	const conditions = [eq(roles.organizationId, organizationId)];
 	if (options.activeOnly === true) conditions.push(eq(roles.active, true));
-	const rows = await db
-		.select(adminRoleColumns)
-		.from(roles)
-		.where(and(...conditions))
-		.orderBy(asc(roles.code), asc(roles.id));
+	const rows = await boundedRows(
+		db
+			.select(adminRoleColumns)
+			.from(roles)
+			.where(and(...conditions))
+			.orderBy(asc(roles.code), asc(roles.id))
+	);
 	const permissions = await permissionsByRole(
 		db,
 		rows.map((row) => row.id)

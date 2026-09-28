@@ -1,3 +1,4 @@
+import { resultLimitFailure } from '$lib/server/security/bounded-read';
 import type { RequestEvent } from '@sveltejs/kit';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { WebhookServiceError } from '$lib/server/services/webhook-subscriptions';
@@ -98,6 +99,8 @@ export async function readWebhookJson(request: Request): Promise<Record<string, 
 
 /** Stable client messages; never SQL, stacks, secrets or key material. */
 export function webhookFailure(error: unknown): Response {
+	const oversized = resultLimitFailure(error);
+	if (oversized) return oversized;
 	const revoked = actorAuthorizationFailure(error);
 	if (revoked) return revoked;
 	if (error instanceof WebhookServiceError) {

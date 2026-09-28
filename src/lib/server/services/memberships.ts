@@ -1,3 +1,4 @@
+import { boundedRows } from '../security/bounded-read';
 import { and, asc, eq, inArray } from 'drizzle-orm';
 import {
 	memberships,
@@ -86,24 +87,26 @@ async function rolesByMembership(
 ): Promise<Map<string, MembershipRoleRecord[]>> {
 	const result = new Map<string, MembershipRoleRecord[]>();
 	if (membershipIds.length === 0) return result;
-	const rows = await db
-		.select({ membershipId: roleAssignments.membershipId, ...membershipRoleColumns })
-		.from(roleAssignments)
-		.innerJoin(
-			roles,
-			and(
-				eq(roles.id, roleAssignments.roleId),
-				eq(roles.organizationId, roleAssignments.organizationId)
+	const rows = await boundedRows(
+		db
+			.select({ membershipId: roleAssignments.membershipId, ...membershipRoleColumns })
+			.from(roleAssignments)
+			.innerJoin(
+				roles,
+				and(
+					eq(roles.id, roleAssignments.roleId),
+					eq(roles.organizationId, roleAssignments.organizationId)
+				)
 			)
-		)
-		.where(
-			and(
-				eq(roleAssignments.organizationId, organizationId),
-				inArray(roleAssignments.membershipId, membershipIds),
-				eq(roleAssignments.scopeType, 'organization')
+			.where(
+				and(
+					eq(roleAssignments.organizationId, organizationId),
+					inArray(roleAssignments.membershipId, membershipIds),
+					eq(roleAssignments.scopeType, 'organization')
+				)
 			)
-		)
-		.orderBy(asc(roles.code), asc(roles.id));
+			.orderBy(asc(roles.code), asc(roles.id))
+	);
 	for (const { membershipId, ...role } of rows) {
 		const list = result.get(membershipId) ?? [];
 		list.push(role);
@@ -117,25 +120,27 @@ async function selectMemberships(
 	organizationId: string,
 	membershipId?: string
 ): Promise<MembershipRecord[]> {
-	const rows = await db
-		.select({
-			id: memberships.id,
-			active: memberships.active,
-			userId: users.id,
-			userName: users.name,
-			userActive: users.active,
-			email: userEmails.email
-		})
-		.from(memberships)
-		.innerJoin(users, eq(users.id, memberships.userId))
-		.leftJoin(userEmails, and(eq(userEmails.userId, users.id), eq(userEmails.isPrimary, true)))
-		.where(
-			and(
-				eq(memberships.organizationId, organizationId),
-				membershipId === undefined ? undefined : eq(memberships.id, membershipId)
+	const rows = await boundedRows(
+		db
+			.select({
+				id: memberships.id,
+				active: memberships.active,
+				userId: users.id,
+				userName: users.name,
+				userActive: users.active,
+				email: userEmails.email
+			})
+			.from(memberships)
+			.innerJoin(users, eq(users.id, memberships.userId))
+			.leftJoin(userEmails, and(eq(userEmails.userId, users.id), eq(userEmails.isPrimary, true)))
+			.where(
+				and(
+					eq(memberships.organizationId, organizationId),
+					membershipId === undefined ? undefined : eq(memberships.id, membershipId)
+				)
 			)
-		)
-		.orderBy(asc(users.name), asc(memberships.id));
+			.orderBy(asc(users.name), asc(memberships.id))
+	);
 	const assigned = await rolesByMembership(
 		db,
 		organizationId,

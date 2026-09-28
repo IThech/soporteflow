@@ -6,6 +6,7 @@ const methods = new Set(['GET', 'HEAD', 'OPTIONS', ...mutations]);
 export interface WebPolicy {
 	origin?: string;
 	development: boolean;
+	beforeResolve?: (event: RequestEvent) => Promise<Response | null>;
 }
 
 /** The public origin is operator configuration, never Host or forwarded headers. */
@@ -221,7 +222,10 @@ export async function handleWebRequest(
 	const api = pathname === '/api' || pathname.startsWith('/api/');
 	let response: Response;
 	try {
-		response = (api ? await validateApiRequest(event, policy) : null) ?? (await resolve(event));
+		response =
+			(api ? await validateApiRequest(event, policy) : null) ??
+			(api && policy.beforeResolve ? await policy.beforeResolve(event) : null) ??
+			(await resolve(event));
 		if (api && response.status === 500) response = failure(response.status, 'INTERNAL_ERROR');
 	} catch {
 		response = failure(500, 'INTERNAL_ERROR');

@@ -1,3 +1,4 @@
+import { resultLimitFailure } from '$lib/server/security/bounded-read';
 import { json } from '@sveltejs/kit';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
@@ -50,6 +51,8 @@ export async function readJsonObject(
 
 /** Maps service errors to stable client messages; never forwards driver or SQL details. */
 export function siteServiceFailure(error: unknown) {
+	const oversized = resultLimitFailure(error);
+	if (oversized) return oversized;
 	// 5.4W-A: authority lost between the pre-check and the in-transaction re-validation
 	if (isActorAuthorizationError(error)) return failure(403, 'FORBIDDEN', 'Permission denied.');
 	if (error instanceof IncidentServiceError) {

@@ -1,13 +1,14 @@
-import { createHash } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
+const salt = randomBytes(32);
 import { FixedWindowRateLimiter, type RateLimitDecision } from './rate-limit';
 
 /**
  * Rate limits of the public invitation endpoints (5.4S-D). In-memory, per instance: see
- * FixedWindowRateLimiter (distributed storage is 5.4W debt).
+ * FixedWindowRateLimiter; distributed storage is required before horizontal scaling.
  *
  * Two keys per request, both must pass:
- * - per submitted token (its SHA-256, never the raw value): stops hammering one invitation;
- * - per client address, only when the platform provides one (event.getClientAddress, configured
+ * - per submitted token (its process-salted HMAC-SHA-256, never the raw value): stops hammering one invitation;
+ * - per client address, provided by the platform (unknown shares a bucket) (event.getClientAddress, configured
  *   by the adapter; X-Forwarded-For is never read here): slows token guessing across tokens.
  */
 const MINUTE = 60_000;
@@ -29,7 +30,7 @@ export function resetInvitationRateLimits(now?: () => number): void {
 }
 
 function tokenKey(token: unknown): string {
-	return createHash('sha256')
+	return createHmac('sha256', salt)
 		.update(typeof token === 'string' ? token.trim() : '')
 		.digest('hex');
 }
@@ -40,8 +41,9 @@ function check(
 	token: unknown,
 	clientAddress: string | null
 ): RateLimitDecision {
+	const clientDecision = clientLimiter.consume(tokenKey(clientAddress ?? 'unknown'));
+	if (!clientDecision.allowed) return clientDecision;
 	const decisions = [tokenLimiter.consume(tokenKey(token))];
-	if (clientAddress) decisions.push(clientLimiter.consume(clientAddress));
 	const denied = decisions.filter((decision) => !decision.allowed);
 	if (denied.length === 0) return { allowed: true, retryAfterSeconds: 0 };
 	return {

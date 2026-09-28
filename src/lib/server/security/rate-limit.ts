@@ -1,77 +1,79 @@
-/**
- * Minimal fixed-window rate limiter (5.4S-D) for the public invitation endpoints.
- *
- * LIMITATION (by design, to be replaced in 5.4W): state lives in this process's memory. It is
- * reset on restart and NOT shared between instances, so it is a per-instance brake, not a
- * distributed guarantee. Memory is bounded: expired windows are swept and, above maxKeys, the
- * oldest keys are evicted. Keys must never contain raw secrets (callers pass hashes).
- */
-
+/** Single-process fixed windows. No timers, raw identifiers or live-window eviction. */
 export interface RateLimitDecision {
 	readonly allowed: boolean;
-	/** Seconds until the current window resets (0 when allowed). */
 	readonly retryAfterSeconds: number;
 }
-
 export interface RateLimiterOptions {
 	readonly limit: number;
 	readonly windowMs: number;
 	readonly maxKeys?: number;
-	/** Injectable clock for tests. */
 	readonly now?: () => number;
 }
-
 export class FixedWindowRateLimiter {
 	readonly limit: number;
 	readonly windowMs: number;
 	private readonly maxKeys: number;
 	private readonly now: () => number;
+	private lastNow = 0;
 	private readonly windows = new Map<string, { count: number; resetAt: number }>();
-
 	constructor(options: RateLimiterOptions) {
-		if (!Number.isInteger(options.limit) || options.limit < 1)
-			throw new Error('limit must be a positive integer');
+		if (!Number.isInteger(options.limit) || options.limit < 1) throw new Error('INVALID_LIMIT');
 		if (!Number.isFinite(options.windowMs) || options.windowMs <= 0)
-			throw new Error('windowMs must be positive');
+			throw new Error('INVALID_WINDOW');
+		if (!Number.isInteger(options.maxKeys ?? 10000) || (options.maxKeys ?? 10000) < 1)
+			throw new Error('INVALID_CAPACITY');
 		this.limit = options.limit;
 		this.windowMs = options.windowMs;
-		this.maxKeys = options.maxKeys ?? 10_000;
+		this.maxKeys = options.maxKeys ?? 10000;
 		this.now = options.now ?? (() => Date.now());
 	}
-
-	/** Counts one attempt for key and says whether it is within the limit. */
 	consume(key: string): RateLimitDecision {
-		const now = this.now();
+		if (typeof key !== 'string' || key.length > 256) throw new Error('INVALID_KEY');
+		const rawNow = this.now();
+		if (!Number.isFinite(rawNow)) throw new Error('INVALID_CLOCK');
+		const now = (this.lastNow = Math.max(this.lastNow, rawNow));
+		// Equal window lengths + monotonic insertion times mean expired entries form a prefix.
+		for (const [id, item] of this.windows) {
+			if (item.resetAt > now) break;
+			this.windows.delete(id);
+		}
 		let window = this.windows.get(key);
-		if (!window || window.resetAt <= now) {
-			if (!window) this.makeRoom(now);
+		if (!window) {
+			if (this.windows.size >= this.maxKeys) {
+				const earliest = this.windows.values().next().value!;
+				return {
+					allowed: false,
+					retryAfterSeconds: Math.max(1, Math.ceil((earliest.resetAt - now) / 1000))
+				};
+			}
 			window = { count: 0, resetAt: now + this.windowMs };
 			this.windows.set(key, window);
 		}
-		window.count += 1;
-		if (window.count > this.limit)
+		if (window.count >= this.limit)
 			return {
 				allowed: false,
 				retryAfterSeconds: Math.max(1, Math.ceil((window.resetAt - now) / 1000))
 			};
+		window.count++;
 		return { allowed: true, retryAfterSeconds: 0 };
 	}
-
-	get size(): number {
+	get size() {
 		return this.windows.size;
 	}
-
-	reset(): void {
+	reset() {
 		this.windows.clear();
+		this.lastNow = 0;
 	}
-
-	private makeRoom(now: number): void {
-		if (this.windows.size < this.maxKeys) return;
-		for (const [key, window] of this.windows) if (window.resetAt <= now) this.windows.delete(key);
-		// Still full: evict the oldest windows (Map keeps insertion order).
-		for (const key of this.windows.keys()) {
-			if (this.windows.size < this.maxKeys) break;
-			this.windows.delete(key);
+}
+export function rateLimitedResponse(seconds: number): Response {
+	return Response.json(
+		{ error: { code: 'RATE_LIMITED', message: 'Too many requests.' } },
+		{
+			status: 429,
+			headers: {
+				'Retry-After': String(Math.max(1, Math.ceil(seconds))),
+				'Cache-Control': 'private, no-store'
+			}
 		}
-	}
+	);
 }

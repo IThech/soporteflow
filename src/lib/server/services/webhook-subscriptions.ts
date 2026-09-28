@@ -1,3 +1,4 @@
+import { boundedRows } from '../security/bounded-read';
 import { randomUUID } from 'node:crypto';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { webhookDeliveries, webhookSecrets, webhookSubscriptions } from '../db/schema';
@@ -166,11 +167,13 @@ export async function listWebhookSubscriptions(
 	organizationId: string
 ): Promise<WebhookSubscriptionDto[]> {
 	validId(organizationId);
-	const rows = await db
-		.select()
-		.from(webhookSubscriptions)
-		.where(eq(webhookSubscriptions.organizationId, organizationId))
-		.orderBy(desc(webhookSubscriptions.createdAt), desc(webhookSubscriptions.id));
+	const rows = await boundedRows(
+		db
+			.select()
+			.from(webhookSubscriptions)
+			.where(eq(webhookSubscriptions.organizationId, organizationId))
+			.orderBy(desc(webhookSubscriptions.createdAt), desc(webhookSubscriptions.id))
+	);
 	return rows.map(toDto);
 }
 

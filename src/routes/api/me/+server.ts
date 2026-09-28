@@ -1,3 +1,4 @@
+import { resultLimitFailure } from '$lib/server/security/bounded-read';
 import { onlyKeys } from '$lib/server/security/query';
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
@@ -68,7 +69,9 @@ export const GET: RequestHandler = async (event) => {
 			},
 			{ status: 200 }
 		);
-	} catch {
+	} catch (error) {
+		const oversized = resultLimitFailure(error);
+		if (oversized) return oversized;
 		// Any unexpected failure or internal inconsistency after authentication returns 500
 		return failure(500, 'INTERNAL_ERROR', 'Internal server error.');
 	}

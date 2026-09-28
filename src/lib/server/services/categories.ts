@@ -1,3 +1,4 @@
+import { boundedRows } from '../security/bounded-read';
 import { and, asc, eq } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import { categories, organizations } from '../db/schema';
@@ -185,11 +186,13 @@ export async function listCategories(
 	validateIds(organizationId);
 	const conditions = [eq(categories.organizationId, organizationId)];
 	if (options.activeOnly === true) conditions.push(eq(categories.active, true));
-	return db
-		.select(categoryColumns)
-		.from(categories)
-		.where(and(...conditions))
-		.orderBy(asc(categories.name), asc(categories.id));
+	return boundedRows(
+		db
+			.select(categoryColumns)
+			.from(categories)
+			.where(and(...conditions))
+			.orderBy(asc(categories.name), asc(categories.id))
+	);
 }
 
 /**

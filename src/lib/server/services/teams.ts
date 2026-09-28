@@ -1,3 +1,4 @@
+import { boundedRows } from '../security/bounded-read';
 import { and, eq, asc } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import { teams } from '../db/schema';
@@ -30,15 +31,17 @@ export async function getActiveTeams(
 		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
 	}
 
-	const rows = await db
-		.select({
-			id: teams.id,
-			name: teams.name,
-			description: teams.description
-		})
-		.from(teams)
-		.where(and(eq(teams.organizationId, organizationId), eq(teams.active, true)))
-		.orderBy(asc(teams.name), asc(teams.id));
+	const rows = await boundedRows(
+		db
+			.select({
+				id: teams.id,
+				name: teams.name,
+				description: teams.description
+			})
+			.from(teams)
+			.where(and(eq(teams.organizationId, organizationId), eq(teams.active, true)))
+			.orderBy(asc(teams.name), asc(teams.id))
+	);
 
 	return rows;
 }

@@ -1,3 +1,4 @@
+import { resultLimitFailure } from '$lib/server/security/bounded-read';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import type { SlaPolicyRecord } from '$lib/server/services/sla-policies';
 import { actorAuthorizationFailure, failure } from '../roles/http';
@@ -30,6 +31,8 @@ export function toSlaPolicyDto(policy: SlaPolicyRecord) {
 
 /** Stable client messages; never SQL, constraint names or stacks. */
 export function slaServiceFailure(error: unknown) {
+	const oversized = resultLimitFailure(error);
+	if (oversized) return oversized;
 	const revoked = actorAuthorizationFailure(error);
 	if (revoked) return revoked;
 	if (error instanceof IncidentServiceError) {

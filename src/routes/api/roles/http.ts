@@ -1,3 +1,4 @@
+import { resultLimitFailure } from '$lib/server/security/bounded-read';
 import { json } from '@sveltejs/kit';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
@@ -147,6 +148,8 @@ export function toRoleDto(role: AdminRoleRecord) {
  * organization is 403.
  */
 export function roleServiceFailure(error: unknown) {
+	const oversized = resultLimitFailure(error);
+	if (oversized) return oversized;
 	const revoked = actorAuthorizationFailure(error);
 	if (revoked) return revoked;
 	if (error instanceof IncidentServiceError) {

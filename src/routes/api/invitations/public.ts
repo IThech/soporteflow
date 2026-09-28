@@ -1,3 +1,4 @@
+import { rateLimitedResponse } from '$lib/server/security/rate-limit';
 import { json, type RequestEvent } from '@sveltejs/kit';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 
@@ -19,11 +20,7 @@ export function publicSuccess(body: unknown) {
 
 export const invalidRequest = () => publicFailure(400, 'INVALID_INPUT', 'Invalid request.');
 
-export function rateLimited(retryAfterSeconds: number) {
-	return publicFailure(429, 'RATE_LIMITED', 'Too many attempts. Try again later.', {
-		'Retry-After': String(retryAfterSeconds)
-	});
-}
+export const rateLimited = rateLimitedResponse;
 
 /** Client address as provided by the adapter; null when unavailable (never X-Forwarded-For). */
 export function clientAddress(event: RequestEvent): string | null {

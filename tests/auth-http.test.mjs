@@ -397,12 +397,17 @@ test('SoporteFlow — Etapa 5.4B: Endpoints HTTP de Autenticación (Sign-In, Sig
 	});
 
 	await t.test(
-		'23. Rate limit protege contra fuerza bruta: 4 intentos rápidos desde la misma IP devuelven 429',
+		'23. Rate limit protege contra fuerza bruta: 6 intentos rápidos desde la misma IP devuelven 429',
 		async () => {
 			const fixedIp = '192.168.77.88';
+			const { createApiAbuseGuard } = await f.server.ssrLoadModule(
+				'/src/lib/server/security/api-abuse.ts'
+			);
+			const guard = createApiAbuseGuard();
+			const limitedPost = async (event) => (await guard(event)) ?? authRoutes.POST(event);
 			let lastStatus = 0;
-			for (let i = 1; i <= 4; i++) {
-				const res = await callAuth(authRoutes.POST, {
+			for (let i = 1; i <= 6; i++) {
+				const res = await callAuth(limitedPost, {
 					subpath: 'sign-in/email',
 					headers: { 'x-forwarded-for': fixedIp },
 					body: { email: testUser.email, password: 'WrongPasswordForBruteForce!' }
@@ -412,7 +417,7 @@ test('SoporteFlow — Etapa 5.4B: Endpoints HTTP de Autenticación (Sign-In, Sig
 			assert.equal(
 				lastStatus,
 				429,
-				'El 4º intento consecutivo debe responder 429 Too Many Requests'
+				'El 6º intento consecutivo debe responder 429 Too Many Requests'
 			);
 		}
 	);

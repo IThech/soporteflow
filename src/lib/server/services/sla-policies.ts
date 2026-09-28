@@ -1,3 +1,4 @@
+import { boundedRows } from '../security/bounded-read';
 import { and, asc, eq, ne, type SQL } from 'drizzle-orm';
 import { slaPolicies, SLA_TARGET_MAX_MINUTES } from '../db/schema';
 import { IncidentServiceError, type IncidentDatabase } from './incidents';
@@ -189,11 +190,13 @@ export async function listSlaPolicies(
 		conditions.push(eq(slaPolicies.active, validateBoolean(filters.active, 'active')));
 	if (filters.isDefault !== undefined)
 		conditions.push(eq(slaPolicies.isDefault, validateBoolean(filters.isDefault, 'isDefault')));
-	return db
-		.select(columns)
-		.from(slaPolicies)
-		.where(and(...conditions))
-		.orderBy(asc(slaPolicies.code), asc(slaPolicies.id));
+	return boundedRows(
+		db
+			.select(columns)
+			.from(slaPolicies)
+			.where(and(...conditions))
+			.orderBy(asc(slaPolicies.code), asc(slaPolicies.id))
+	);
 }
 
 /** Another tenant's policy is indistinguishable from a missing one. Inactive ones are readable. */

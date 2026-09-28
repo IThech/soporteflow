@@ -1,3 +1,4 @@
+import { boundedRows } from '../security/bounded-read';
 import { automationAuthority, automationHistoryMetadata } from './automation-authority';
 import { and, eq, desc, asc, isNotNull, isNull, not, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn, PgDatabase } from 'drizzle-orm/pg-core';
@@ -952,11 +953,13 @@ export async function listIncidents(
 		);
 	}
 
-	return await db
-		.select()
-		.from(incidents)
-		.where(and(...conditions))
-		.orderBy(desc(incidents.createdAt), desc(incidents.incidentNumber));
+	return boundedRows(
+		db
+			.select()
+			.from(incidents)
+			.where(and(...conditions))
+			.orderBy(desc(incidents.createdAt), desc(incidents.incidentNumber))
+	);
 }
 
 /**
@@ -1399,7 +1402,51 @@ export async function getAssignableTechnicians(
 			return [];
 		}
 
-		const rows = await db
+		const rows = await boundedRows(
+			db
+				.selectDistinct({
+					id: users.id,
+					name: users.name
+				})
+				.from(users)
+				.innerJoin(memberships, eq(memberships.userId, users.id))
+				.innerJoin(
+					roleAssignments,
+					and(
+						eq(roleAssignments.membershipId, memberships.id),
+						eq(roleAssignments.organizationId, organizationId)
+					)
+				)
+				.innerJoin(
+					roles,
+					and(eq(roles.id, roleAssignments.roleId), eq(roles.organizationId, organizationId))
+				)
+				.innerJoin(
+					teamMemberships,
+					and(
+						eq(teamMemberships.membershipId, memberships.id),
+						eq(teamMemberships.organizationId, organizationId),
+						eq(teamMemberships.teamId, teamId),
+						eq(teamMemberships.active, true)
+					)
+				)
+				.where(
+					and(
+						eq(memberships.organizationId, organizationId),
+						eq(memberships.active, true),
+						eq(users.active, true),
+						eq(roles.active, true),
+						sql`lower(${roles.code}) IN ('technician', 'organization_admin')`
+					)
+				)
+				.orderBy(asc(users.name), asc(users.id))
+		);
+
+		return rows;
+	}
+
+	const rows = await boundedRows(
+		db
 			.selectDistinct({
 				id: users.id,
 				name: users.name
@@ -1417,15 +1464,6 @@ export async function getAssignableTechnicians(
 				roles,
 				and(eq(roles.id, roleAssignments.roleId), eq(roles.organizationId, organizationId))
 			)
-			.innerJoin(
-				teamMemberships,
-				and(
-					eq(teamMemberships.membershipId, memberships.id),
-					eq(teamMemberships.organizationId, organizationId),
-					eq(teamMemberships.teamId, teamId),
-					eq(teamMemberships.active, true)
-				)
-			)
 			.where(
 				and(
 					eq(memberships.organizationId, organizationId),
@@ -1435,39 +1473,8 @@ export async function getAssignableTechnicians(
 					sql`lower(${roles.code}) IN ('technician', 'organization_admin')`
 				)
 			)
-			.orderBy(asc(users.name), asc(users.id));
-
-		return rows;
-	}
-
-	const rows = await db
-		.selectDistinct({
-			id: users.id,
-			name: users.name
-		})
-		.from(users)
-		.innerJoin(memberships, eq(memberships.userId, users.id))
-		.innerJoin(
-			roleAssignments,
-			and(
-				eq(roleAssignments.membershipId, memberships.id),
-				eq(roleAssignments.organizationId, organizationId)
-			)
-		)
-		.innerJoin(
-			roles,
-			and(eq(roles.id, roleAssignments.roleId), eq(roles.organizationId, organizationId))
-		)
-		.where(
-			and(
-				eq(memberships.organizationId, organizationId),
-				eq(memberships.active, true),
-				eq(users.active, true),
-				eq(roles.active, true),
-				sql`lower(${roles.code}) IN ('technician', 'organization_admin')`
-			)
-		)
-		.orderBy(asc(users.name), asc(users.id));
+			.orderBy(asc(users.name), asc(users.id))
+	);
 
 	return rows;
 }

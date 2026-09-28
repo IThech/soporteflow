@@ -1,3 +1,4 @@
+import { resultLimitFailure } from '$lib/server/security/bounded-read';
 import { onlyKeys } from '$lib/server/security/query';
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
@@ -85,6 +86,8 @@ export const GET: RequestHandler = async (event) => {
 			{ status: 200 }
 		);
 	} catch (err: unknown) {
+		const oversized = resultLimitFailure(err);
+		if (oversized) return oversized;
 		if (err instanceof IncidentServiceError && err.code === 'INVALID_INPUT') {
 			return json(
 				{

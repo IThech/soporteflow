@@ -165,7 +165,8 @@ test('Security options keep authentication closed and CSRF/origin checks enabled
 	assert.equal(o.user.changeEmail.enabled, false);
 	assert.equal(o.user.deleteUser.enabled, false);
 	assert.equal(o.session.cookieCache.enabled, false);
-	assert.equal(o.rateLimit.enabled, true);
+	assert.equal(o.rateLimit.enabled, false);
+	assert.equal(o.advanced.ipAddress.disableIpTracking, true);
 	assert.equal(o.advanced.disableCSRFCheck, false);
 	assert.equal(o.advanced.disableOriginCheck, false);
 	assert.equal(o.advanced.useSecureCookies, true);

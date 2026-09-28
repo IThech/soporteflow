@@ -1,3 +1,4 @@
+import { boundedRows } from '../security/bounded-read';
 import { and, eq, asc } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
 import { users, authUsers, memberships, organizations } from '../db/schema';
@@ -92,22 +93,24 @@ export async function getAuthenticatedUserContext(
 	}
 
 	// 3. Fetch active organizations for active memberships
-	const orgRows = await db
-		.select({
-			id: organizations.id,
-			name: organizations.name,
-			slug: organizations.slug
-		})
-		.from(memberships)
-		.innerJoin(organizations, eq(organizations.id, memberships.organizationId))
-		.where(
-			and(
-				eq(memberships.userId, userId),
-				eq(memberships.active, true),
-				eq(organizations.status, 'active')
+	const orgRows = await boundedRows(
+		db
+			.select({
+				id: organizations.id,
+				name: organizations.name,
+				slug: organizations.slug
+			})
+			.from(memberships)
+			.innerJoin(organizations, eq(organizations.id, memberships.organizationId))
+			.where(
+				and(
+					eq(memberships.userId, userId),
+					eq(memberships.active, true),
+					eq(organizations.status, 'active')
+				)
 			)
-		)
-		.orderBy(asc(organizations.name), asc(organizations.id));
+			.orderBy(asc(organizations.name), asc(organizations.id))
+	);
 
 	return {
 		user: {

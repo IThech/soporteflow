@@ -28,6 +28,8 @@ function createInstance(
 		}),
 		advanced: {
 			database: { generateId: 'uuid' },
+			// HTTP rate limits use the adapter peer in the W-D hook, never forwarded client headers.
+			ipAddress: { disableIpTracking: true },
 			useSecureCookies: config.secureCookies,
 			cookiePrefix: 'soporteflow-auth',
 			defaultCookieAttributes: { httpOnly: true, sameSite: 'lax', path: '/' },
@@ -80,7 +82,8 @@ function createInstance(
 				throw new APIError('FORBIDDEN', { message: 'Autenticación no habilitada en esta fase.' });
 			})
 		},
-		rateLimit: { enabled: true },
+		// Central W-D limiter owns HTTP enforcement and the stable 429 contract.
+		rateLimit: { enabled: false },
 		telemetry: { enabled: false },
 		// Do not forward driver errors, tokens or SQL parameters to application logs.
 		logger: { disabled: true }
