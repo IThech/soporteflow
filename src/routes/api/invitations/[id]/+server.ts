@@ -12,6 +12,8 @@ import {
 	toInvitationDto,
 	uuid
 } from '../http';
+import { withAudit } from '$lib/server/services/audit-events';
+import { latestInvitationDeliveryStates } from '$lib/server/services/invitation-deliveries';
 
 function ids(
 	event: Parameters<RequestHandler>[0]
@@ -42,7 +44,12 @@ export const GET: RequestHandler = async (event) => {
 		if (!onlyKeys(event.url.searchParams, ['organizationId']))
 			return failure(400, 'INVALID_INPUT', 'Invalid invitations query.');
 		const invitation = await getInvitation(db, parsed.organizationId, parsed.invitationId);
-		return success({ invitation: toInvitationDto(invitation) });
+		const deliveries = await latestInvitationDeliveryStates(db, parsed.organizationId, [
+			invitation.id
+		]);
+		return success({
+			invitation: toInvitationDto(invitation, deliveries.get(invitation.id) ?? null)
+		});
 	} catch (error) {
 		return adminServiceFailure(error);
 	}
@@ -74,7 +81,18 @@ export const DELETE: RequestHandler = async (event) => {
 				permissionIds: ['invitations:revoke'],
 				lock: 'update'
 			},
-			(tx) => revokeInvitation(tx, parsed.organizationId, parsed.invitationId)
+			(tx) =>
+				withAudit(
+					tx,
+					parsed.organizationId,
+					actor.userId,
+					() => revokeInvitation(tx, parsed.organizationId, parsed.invitationId),
+					() => ({
+						action: 'invitation.revoked',
+						entityType: 'invitation',
+						entityId: parsed.invitationId
+					})
+				)
 		);
 		return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
 	} catch (error) {

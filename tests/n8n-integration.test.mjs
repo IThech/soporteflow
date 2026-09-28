@@ -421,10 +421,13 @@ test('5.4V-D: n8n consumes V-B; mandatory closure gates', async (t) => {
 				.map((p) => fs.readFileSync(p, 'utf8'))
 				.join('\n');
 			assert.doesNotMatch(schemas, /pgTable\(['"]n8n/);
-			assert.equal(
-				fs.readdirSync('drizzle/migrations').some((p) => p.startsWith('0026')),
-				false
-			);
+			// 5.4V-D added no migration; later migrations (0026+, 5.4X) never create n8n tables.
+			for (const file of fs.readdirSync('drizzle/migrations').filter((p) => p.endsWith('.sql')))
+				assert.doesNotMatch(
+					fs.readFileSync(path.join('drizzle/migrations', file), 'utf8'),
+					/CREATE TABLE "n8n/i,
+					file
+				);
 		}
 	);
 });

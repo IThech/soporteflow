@@ -12,6 +12,7 @@ import {
 	webhookContext,
 	webhookFailure
 } from './http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * GET /api/webhooks?organizationId=<UUID>   (webhooks:view)
@@ -40,10 +41,23 @@ export const POST: RequestHandler = async (event) => {
 		const body = await readWebhookJson(event.request);
 		if (!body) return failure(400, 'INVALID_INPUT', 'Invalid request.');
 		const created = await asWebhookManager(ctx, (tx) =>
-			createWebhookSubscription(
+			withAudit(
 				tx,
-				{ organizationId: ctx.organizationId, actorUserId: ctx.actorUserId },
-				body
+				ctx.organizationId,
+				ctx.actorUserId,
+				() =>
+					createWebhookSubscription(
+						tx,
+						{ organizationId: ctx.organizationId, actorUserId: ctx.actorUserId },
+						body
+					),
+				// Never the target URL (may carry receiver credentials) or the one-time secret.
+				(result) => ({
+					action: 'webhook.created',
+					entityType: 'webhook',
+					entityId: result.webhook.id,
+					metadata: { eventTypes: [...result.webhook.eventTypes] }
+				})
 			)
 		);
 		return success(created, 201);

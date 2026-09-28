@@ -17,6 +17,8 @@ import { toIncidentDto } from '$lib/server/services/incident-dto';
 import {
 	createIncidentRecord,
 	listIncidents,
+	listIncidentsPage,
+	type IncidentPageCursor,
 	IncidentServiceError,
 	type IncidentPriority,
 	type IncidentAccess,
@@ -345,10 +347,19 @@ export const GET: RequestHandler = async (event) => {
 			'supportLevel',
 			'slaStatus',
 			'slaFirstResponseStatus',
-			'slaResolutionStatus'
+			'slaResolutionStatus',
+			// 5.4X-D: opt-in keyset pagination (absent -> legacy bounded list, unchanged contract)
+			'limit',
+			'cursor'
 		])
 	)
 		return json({ error: { code: 'INVALID_INPUT', message: 'Invalid request.' } }, { status: 400 });
+	const paging = parseIncidentPaging(event.url.searchParams);
+	if (paging === 'invalid')
+		return json(
+			{ error: { code: 'INVALID_INPUT', message: 'Invalid pagination parameters.' } },
+			{ status: 400 }
+		);
 	// 1. Read organizationId from query string exclusively
 	const organizationId = event.url.searchParams.get('organizationId');
 
@@ -525,11 +536,21 @@ export const GET: RequestHandler = async (event) => {
 	// 7. Execute listIncidents (one reference time for SQL filters and derived DTO fields)
 	try {
 		const now = new Date();
-		const incidents = await listIncidents(
-			db,
-			{ organizationId, actorUserId: principal.userId, access: scope, now },
-			filters
-		);
+		const listContext = { organizationId, actorUserId: principal.userId, access: scope, now };
+		if (paging) {
+			// 5.4X-D: { incidents, nextCursor } — same scope, filters, order and DTO as the legacy list.
+			const page = await listIncidentsPage(db, listContext, filters, paging);
+			return json(
+				{
+					incidents: page.items.map((incident) =>
+						toIncidentDto(incident, incidentAudience(access, incident), now)
+					),
+					nextCursor: page.nextCursor ? encodeIncidentCursor(page.nextCursor) : null
+				},
+				{ status: 200 }
+			);
+		}
+		const incidents = await listIncidents(db, listContext, filters);
 
 		// 8. Success response
 		return json(
@@ -567,3 +588,41 @@ export const GET: RequestHandler = async (event) => {
 		);
 	}
 };
+
+const CURSOR_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+function encodeIncidentCursor(cursor: IncidentPageCursor): string {
+	return Buffer.from(JSON.stringify([cursor.at, cursor.incidentNumber])).toString('base64url');
+}
+
+/**
+ * null: legacy (no limit/cursor). 'invalid': malformed. Otherwise the page request:
+ * limit 1..100 (default 50 when only a cursor is sent), opaque cursor round-tripped exactly.
+ */
+function parseIncidentPaging(
+	params: URLSearchParams
+): { limit: number; cursor: IncidentPageCursor | null } | null | 'invalid' {
+	const rawLimit = params.get('limit');
+	const rawCursor = params.get('cursor');
+	if (rawLimit === null && rawCursor === null) return null;
+	if (rawLimit !== null && !/^(?:[1-9]\d?|100)$/.test(rawLimit)) return 'invalid';
+	const limit = rawLimit === null ? 50 : Number(rawLimit);
+	if (rawCursor === null) return { limit, cursor: null };
+	if (rawCursor.length > 256 || !/^[A-Za-z0-9_-]+$/.test(rawCursor)) return 'invalid';
+	try {
+		const value: unknown = JSON.parse(Buffer.from(rawCursor, 'base64url').toString('utf8'));
+		if (
+			!Array.isArray(value) ||
+			value.length !== 2 ||
+			typeof value[0] !== 'string' ||
+			!CURSOR_AT.test(value[0]) ||
+			!Number.isSafeInteger(value[1]) ||
+			value[1] < 1
+		)
+			return 'invalid';
+		const cursor = { at: value[0], incidentNumber: value[1] as number };
+		return encodeIncidentCursor(cursor) === rawCursor ? { limit, cursor } : 'invalid';
+	} catch {
+		return 'invalid';
+	}
+}

@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
 	boolean,
 	check,
+	index,
 	pgTable,
 	timestamp,
 	unique,
@@ -90,6 +91,9 @@ export const memberships = pgTable(
 	},
 	(table) => [
 		unique('memberships_org_user_unique').on(table.organizationId, table.userId),
-		unique('memberships_id_org_unique').on(table.id, table.organizationId)
+		unique('memberships_id_org_unique').on(table.id, table.organizationId),
+		// 5.4X-D: "organizations of this user" (user-context, /api/me, session resolution); the
+		// (organization_id, user_id) unique cannot serve a user_id-only lookup.
+		index('memberships_user_idx').on(table.userId)
 	]
 );

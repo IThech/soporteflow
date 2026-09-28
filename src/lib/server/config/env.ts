@@ -1,5 +1,16 @@
 import { isTrivialSecret } from '../auth/config';
 import { parseWebhookEncryptionKey } from '../webhooks/secrets';
+import { parseInvitationTokenKey } from '../invitations/token-crypto';
+import { invalidQuotaVariables } from '../services/quotas';
+
+/** 5.4X-D: opt-in retention windows (days); unset = keep. Mirrors services/retention.ts. */
+const RETENTION_VARIABLES = [
+	'RETENTION_NOTIFICATION_DELIVERIES_DAYS',
+	'RETENTION_WEBHOOK_DELIVERIES_DAYS',
+	'RETENTION_INVITATION_DELIVERIES_DAYS',
+	'RETENTION_AUTOMATION_EXECUTIONS_DAYS'
+] as const;
+const RETENTION_DAYS = /^[0-9]{1,4}$/;
 import { describeDatabaseUrl } from '../logging/redact';
 
 /**
@@ -15,7 +26,8 @@ import { describeDatabaseUrl } from '../logging/redact';
  *
  * Variables actually used by the application (inventory in docs/operational-security-5.4w-e.md):
  * BETTER_AUTH_ENABLED, BETTER_AUTH_SECRET, BETTER_AUTH_URL, DATABASE_URL,
- * WEBHOOK_SECRET_ENCRYPTION_KEY, LOG_LEVEL, NODE_ENV. There is no email provider credential yet.
+ * WEBHOOK_SECRET_ENCRYPTION_KEY, INVITATION_TOKEN_ENCRYPTION_KEY (5.4X-C), LOG_LEVEL, NODE_ENV.
+ * There is no email provider credential yet.
  */
 
 export interface ConfigIssue {
@@ -40,6 +52,8 @@ export interface ServerConfigSummary {
 	/** Protocol/host/port/database only: never credentials or query. */
 	database: string;
 	webhookSigning: 'configured' | 'unset';
+	/** 5.4X-C: invitation outbox token encryption (independent key). */
+	invitationTokenEncryption: 'configured' | 'unset';
 	logLevel: string;
 	warnings: ConfigIssue[];
 }
@@ -137,6 +151,7 @@ export function validateServerEnvironment(
 
 	// --- Webhook signing-secret encryption key (optional feature) ----------------------------
 	let webhookSigning: ServerConfigSummary['webhookSigning'] = 'unset';
+	let webhookKey: Buffer | null = null;
 	const rawKey = env.WEBHOOK_SECRET_ENCRYPTION_KEY;
 	if (present(rawKey)) {
 		let key: Buffer | null = null;
@@ -151,7 +166,10 @@ export function validateServerEnvironment(
 		if (key) {
 			if (new Set(key).size < 8)
 				issue('WEBHOOK_SECRET_ENCRYPTION_KEY', 'is a trivial key (not random)');
-			else webhookSigning = 'configured';
+			else {
+				webhookSigning = 'configured';
+				webhookKey = key;
+			}
 		}
 	} else if (production) {
 		warnings.push({
@@ -159,6 +177,42 @@ export function validateServerEnvironment(
 			problem:
 				'is unset: webhook creation returns 503 and deliveries retry with CONFIGURATION_ERROR'
 		});
+	}
+	// --- Invitation token encryption key (5.4X-C outbox) ---------------------------------------
+	// Invitations are the only onboarding path (signup is disabled), so a production server with
+	// authentication enabled must be able to issue them: required there, optional elsewhere.
+	let invitationTokenEncryption: ServerConfigSummary['invitationTokenEncryption'] = 'unset';
+	const rawInvitationKey = env.INVITATION_TOKEN_ENCRYPTION_KEY;
+	if (present(rawInvitationKey)) {
+		let key: Buffer | null = null;
+		try {
+			key = parseInvitationTokenKey(rawInvitationKey);
+		} catch {
+			issue(
+				'INVITATION_TOKEN_ENCRYPTION_KEY',
+				'must be exactly 32 bytes encoded as 64 hex characters or base64'
+			);
+		}
+		if (key) {
+			if (new Set(key).size < 8)
+				issue('INVITATION_TOKEN_ENCRYPTION_KEY', 'is a trivial key (not random)');
+			else if (webhookKey && key.equals(webhookKey))
+				issue(
+					'INVITATION_TOKEN_ENCRYPTION_KEY',
+					'must be independent of WEBHOOK_SECRET_ENCRYPTION_KEY'
+				);
+			else invitationTokenEncryption = 'configured';
+		}
+	} else if (production && authEnabled) {
+		issue('INVITATION_TOKEN_ENCRYPTION_KEY', 'is missing');
+	}
+	// --- Technical quotas / retention (5.4X-D) ---------------------------------------------
+	for (const variable of invalidQuotaVariables(env))
+		issue(variable, 'must be an integer between 1 and its technical ceiling');
+	for (const variable of RETENTION_VARIABLES) {
+		const raw = env[variable]?.trim();
+		if (raw && (!RETENTION_DAYS.test(raw) || Number(raw) < 1 || Number(raw) > 3650))
+			issue(variable, 'must be a number of days between 1 and 3650');
 	}
 	if (production && !authEnabled)
 		warnings.push({
@@ -173,6 +227,7 @@ export function validateServerEnvironment(
 		publicOrigin,
 		database: describeDatabaseUrl(databaseUrl),
 		webhookSigning,
+		invitationTokenEncryption,
 		logLevel,
 		warnings
 	};

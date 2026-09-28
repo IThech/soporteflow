@@ -9,6 +9,7 @@ import {
 	withActorAuthorization,
 	uuid
 } from '../../../http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * DELETE /api/memberships/<id>/roles/<roleId>?organizationId=<UUID>
@@ -39,7 +40,19 @@ export const DELETE: RequestHandler = async (event) => {
 			db,
 			{ userId: auth.userId, organizationId, permissionIds: ['roles:assign'], lock: 'update' },
 			(tx, actorPermissions) =>
-				revokeRoleFromMembership(tx, organizationId, membershipId, roleId, actorPermissions)
+				withAudit(
+					tx,
+					organizationId,
+					auth.userId,
+					() =>
+						revokeRoleFromMembership(tx, organizationId, membershipId, roleId, actorPermissions),
+					() => ({
+						action: 'membership.role_revoked',
+						entityType: 'membership',
+						entityId: membershipId,
+						metadata: { roleId }
+					})
+				)
 		);
 		return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
 	} catch (error) {

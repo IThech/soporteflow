@@ -13,6 +13,7 @@ import {
 	toSiteDto,
 	uuid
 } from './http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * GET /api/sites?organizationId=<UUID>[&activeOnly=true|false]
@@ -89,7 +90,14 @@ export const POST: RequestHandler = async (event) => {
 				permissionIds: ['sites:manage'],
 				lock: 'share'
 			},
-			(tx) => createSite(tx, organizationId, { name })
+			(tx) =>
+				withAudit(
+					tx,
+					organizationId,
+					principal.userId,
+					() => createSite(tx, organizationId, { name }),
+					(created) => ({ action: 'site.created', entityType: 'site', entityId: created.id })
+				)
 		);
 		return success({ site: toSiteDto(site) }, 201);
 	} catch (error) {

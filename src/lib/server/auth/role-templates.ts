@@ -60,7 +60,9 @@ export const ROLE_TEMPLATES = [
 			'webhooks:view',
 			'webhooks:manage',
 			'automations:view',
-			'automations:manage'
+			'automations:manage',
+			// 5.4X-A: audit trail readable by tenant administrators only.
+			'audit:view'
 		]
 	},
 	{

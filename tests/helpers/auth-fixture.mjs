@@ -5,7 +5,7 @@ import { createServer } from 'vite';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { applyMigrations } from './persistence-migrations.mjs';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { hashPassword } from 'better-auth/crypto';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 export const directory = path.join(root, 'drizzle/migrations');
@@ -35,7 +35,10 @@ export const expectedMigrations = [
 	'0022_notification_delivery.sql',
 	'0023_automation_events.sql',
 	'0024_webhooks.sql',
-	'0025_automation_rules.sql'
+	'0025_automation_rules.sql',
+	'0026_audit_events.sql',
+	'0027_invitation_deliveries.sql',
+	'0028_growth_indexes.sql'
 ];
 
 export const TEST_SECRET = 'synthetic-phase-b-only-secret-123456789';
@@ -44,6 +47,8 @@ export const TEST_ORIGIN = 'http://localhost';
 export async function fixture(t, migrate = true) {
 	// 5.4W-E: structured logs are silent in tests unless a test (or the caller) asks for them.
 	process.env.LOG_LEVEL ??= 'silent';
+	// 5.4X-C: synthetic invitation outbox key (independent of the webhook key); never a real secret.
+	process.env.INVITATION_TOKEN_ENCRYPTION_KEY ??= randomBytes(32).toString('hex');
 	const pg = new PGlite();
 	t.after(() => pg.close());
 
@@ -76,7 +81,7 @@ export async function fixture(t, migrate = true) {
 						};`;
 					}
 					if (id === '\0$app/environment') {
-						return `export const building = false;\nexport const dev = true;`;
+						return `export const building = false;\nexport const dev = true;\nexport const version = 'test-build';`;
 					}
 					const normId = id.split('\\').join('/');
 					if (

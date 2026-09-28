@@ -13,6 +13,7 @@ import {
 	uuid,
 	withActorAuthorization
 } from './http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * GET /api/roles?organizationId=<UUID>[&activeOnly=true|false]
@@ -71,12 +72,24 @@ export const POST: RequestHandler = async (event) => {
 			db,
 			{ userId: auth.userId, organizationId, permissionIds: ['roles:manage'], lock: 'share' },
 			(tx, actorPermissions) =>
-				createCustomRole(tx, organizationId, actorPermissions, {
-					name: body.name,
-					code: body.code,
-					description: body.description,
-					permissions: body.permissions
-				})
+				withAudit(
+					tx,
+					organizationId,
+					auth.userId,
+					() =>
+						createCustomRole(tx, organizationId, actorPermissions, {
+							name: body.name,
+							code: body.code,
+							description: body.description,
+							permissions: body.permissions
+						}),
+					(created) => ({
+						action: 'role.created',
+						entityType: 'role',
+						entityId: created.id,
+						metadata: { code: created.code, permissionIds: [...created.permissions] }
+					})
+				)
 		);
 		return success({ role: toRoleDto(role) }, 201);
 	} catch (error) {

@@ -14,6 +14,7 @@ import {
 import { AutomationRuleError } from '$lib/automation/rules';
 import * as rules from '$lib/server/services/automation-rules';
 import { logUnexpectedError } from '$lib/server/logging/logger';
+import { withAudit } from '$lib/server/services/audit-events';
 type Operation = 'list' | 'create' | 'get' | 'patch' | 'disable' | 'executions';
 async function body(request: Request) {
 	if (!/^application\/json\s*(;|$)/i.test(request.headers.get('content-type') ?? '')) return null;
@@ -89,18 +90,60 @@ export async function handle(event: RequestEvent, op: Operation): Promise<Respon
 				(tx) => run(tx)
 			);
 		if (op === 'disable') {
-			await authorized((tx) => rules.updateAutomationRule(tx, org, id!, { active: false }));
+			await authorized((tx) =>
+				withAudit(
+					tx,
+					org,
+					principal.userId,
+					() => rules.updateAutomationRule(tx, org, id!, { active: false }),
+					() => ({
+						action: 'automation_rule.deactivated',
+						entityType: 'automation_rule',
+						entityId: id!
+					})
+				)
+			);
 			return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
 		}
 		const input = await body(event.request);
 		if (!input) return failure(400, 'INVALID_INPUT', 'Invalid request.');
 		if (op === 'patch')
 			return success({
-				rule: await authorized((tx) => rules.updateAutomationRule(tx, org, id!, input))
+				rule: await authorized((tx) =>
+					withAudit(
+						tx,
+						org,
+						principal.userId,
+						() => rules.updateAutomationRule(tx, org, id!, input),
+						(updated) => ({
+							action: 'automation_rule.updated',
+							entityType: 'automation_rule',
+							entityId: updated.id,
+							metadata: {
+								fields: Object.keys(input).filter((key) => /^[a-zA-Z]{1,40}$/.test(key)),
+								active: updated.active,
+								eventType: updated.eventType
+							}
+						})
+					)
+				)
 			});
 		return success(
 			{
-				rule: await authorized((tx) => rules.createAutomationRule(tx, org, principal.userId, input))
+				rule: await authorized((tx) =>
+					withAudit(
+						tx,
+						org,
+						principal.userId,
+						() => rules.createAutomationRule(tx, org, principal.userId, input),
+						(created) => ({
+							action: 'automation_rule.created',
+							entityType: 'automation_rule',
+							entityId: created.id,
+							metadata: { eventType: created.eventType, active: created.active }
+						})
+					)
+				)
 			},
 			201
 		);

@@ -250,6 +250,14 @@ export const PERMISSION_CATALOG = [
 		description: 'Configurar acciones internas con autoridad de sistema en la organización.',
 		category: 'automations',
 		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	// 5.4X-A: read-only access to the administrative audit trail (migration 0026).
+	{
+		id: 'audit:view',
+		name: 'Ver auditoría',
+		description: 'Consultar el registro de auditoría administrativa de la organización.',
+		category: 'audit',
+		allowedScopeTypes: ORGANIZATION_ONLY
 	}
 ] as const satisfies readonly PermissionDefinition[];
 

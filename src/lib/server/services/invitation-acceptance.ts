@@ -14,6 +14,8 @@ import {
 } from '../db/schema';
 import { IncidentServiceError, type IncidentDatabase } from './incidents';
 import { hashInvitationToken } from './invitations';
+import { appendAuditEvent } from './audit-events';
+import { cancelInvitationDeliveries } from './invitation-deliveries';
 
 /**
  * Public invitation verification and acceptance (5.4S-D).
@@ -284,6 +286,29 @@ export async function acceptInvitation(
 			.update(invitations)
 			.set({ status: 'accepted', acceptedAt, updatedAt: acceptedAt })
 			.where(and(eq(invitations.id, invitation.id), eq(invitations.status, 'pending')));
+		// 5.4X-C: an accepted invitation must never be emailed again; pending ciphertext neutralized.
+		await cancelInvitationDeliveries(
+			tx,
+			invitation.organizationId,
+			invitation.id,
+			'INVITATION_ACCEPTED'
+		);
+		// 5.4X-A: same transaction as the acceptance; the actor is the accepting identity. Never the
+		// token, the email or the password.
+		await appendAuditEvent(tx, {
+			organizationId: invitation.organizationId,
+			actor: { type: 'user', userId },
+			action: 'invitation.accepted',
+			entityType: 'invitation',
+			entityId: invitation.id,
+			targetUserId: userId,
+			metadata: {
+				roleId: invitation.roleId,
+				membershipId,
+				membershipCreated: !membership,
+				identityCreated: !owner
+			}
+		});
 		return { organizationName, requiresLogin: input.principalUserId === null };
 	};
 	try {

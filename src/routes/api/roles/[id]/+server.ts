@@ -13,6 +13,7 @@ import {
 	uuid,
 	withActorAuthorization
 } from '../http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * GET /api/roles/<id>?organizationId=<UUID>
@@ -71,12 +72,30 @@ export const PATCH: RequestHandler = async (event) => {
 			db,
 			{ userId: auth.userId, organizationId, permissionIds: ['roles:manage'], lock: 'update' },
 			(tx, actorPermissions) =>
-				updateCustomRole(tx, organizationId, roleId, actorPermissions, {
-					name: body.name,
-					description: body.description,
-					permissions: body.permissions,
-					active: body.active
-				})
+				withAudit(
+					tx,
+					organizationId,
+					auth.userId,
+					() =>
+						updateCustomRole(tx, organizationId, roleId, actorPermissions, {
+							name: body.name,
+							description: body.description,
+							permissions: body.permissions,
+							active: body.active
+						}),
+					(updated) => ({
+						action: 'role.updated',
+						entityType: 'role',
+						entityId: updated.id,
+						metadata: {
+							fields: Object.keys(body).filter(
+								(k) => (body as Record<string, unknown>)[k] !== undefined
+							),
+							active: updated.active,
+							permissionIds: [...updated.permissions]
+						}
+					})
+				)
 		);
 		return success({ role: toRoleDto(role) });
 	} catch (error) {

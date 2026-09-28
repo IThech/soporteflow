@@ -118,6 +118,9 @@ Nothing depends on SERIALIZABLE.
 | 31  | 60   | W-B: technician loses `incidents:edit` while `PATCH /api/incidents/[id]` waits on the org lock → 403, nothing written               |
 | 32  | 60   | W-B: membership deactivated while `POST …/comments` waits → 403, no message                                                         |
 | 33  | 60   | W-B: view_own incident reassigned to someone else while the PATCH waits on the row lock → 404, nothing written                      |
+| 34  | 70   | X-C: two invitation-outbox workers in parallel: SKIP LOCKED splits the work, each delivery sent exactly once                        |
+| 35  | 70   | X-C: explicit resend while a worker holds the claim: the old link is never sent; the new delivery carries the new token             |
+| 36  | 70   | X-C: revocation while a worker holds the claim: no useful send, ciphertext neutralized                                              |
 
 ## Findings of the first real run (CT 105, PostgreSQL 17.11)
 

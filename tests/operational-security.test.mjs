@@ -40,6 +40,8 @@ test('SoporteFlow — Etapa 5.4W-E: seguridad operacional', async (t) => {
 	const subs = await load('/src/lib/server/services/webhook-subscriptions.ts');
 	const secrets = await load('/src/lib/server/webhooks/secrets.ts');
 	const invitations = await load('/src/lib/server/services/invitations.ts');
+	const invitationOutbox = await load('/src/lib/server/services/invitation-deliveries.ts');
+	const { PERMISSION_IDS } = await load('/src/lib/server/auth/permissions.ts');
 	const { ensureOrganizationRoles } = await load('/src/lib/server/services/roles.ts');
 	const { createIncidentRecord } = await load('/src/lib/server/services/incidents.ts');
 
@@ -92,7 +94,9 @@ test('SoporteFlow — Etapa 5.4W-E: seguridad operacional', async (t) => {
 		BETTER_AUTH_SECRET: STRONG_SECRET,
 		BETTER_AUTH_URL: 'https://support.example.com',
 		DATABASE_URL: 'postgresql://app:db-password-9f8e7d@db.internal:5432/soporteflow',
-		WEBHOOK_SECRET_ENCRYPTION_KEY: KEY_HEX
+		WEBHOOK_SECRET_ENCRYPTION_KEY: KEY_HEX,
+		// 5.4X-C: required in production with auth enabled, independent of the webhook key
+		INVITATION_TOKEN_ENCRYPTION_KEY: randomBytes(32).toString('hex')
 	};
 	const configIssues = (env, options = PROD) => {
 		try {
@@ -744,7 +748,7 @@ test('SoporteFlow — Etapa 5.4W-E: seguridad operacional', async (t) => {
 	await t.test('27. timeouts explícitos: email, webhook e invitación', async () => {
 		assert.equal(deliveries.NOTIFICATION_EMAIL_SEND_TIMEOUT_MS, 30_000);
 		assert.equal(webhookDeliveries.WEBHOOK_TIMEOUT_MS, 10_000);
-		assert.equal(invitations.INVITATION_EMAIL_SEND_TIMEOUT_MS, 15_000);
+		assert.equal(invitationOutbox.INVITATION_EMAIL_SEND_TIMEOUT_MS, 15_000);
 		const client = fs.readFileSync('src/lib/server/webhooks/http-client.ts', 'utf8');
 		assert.match(client, /setTimeout\([\s\S]*TIMEOUT[\s\S]*req\.destroy\(\)/);
 		// hung notification provider -> NETWORK_ERROR retry, bounded
@@ -760,29 +764,26 @@ test('SoporteFlow — Etapa 5.4W-E: seguridad operacional', async (t) => {
 		});
 		assert.equal(r.retried, 1);
 		assert.equal(events('email.delivery_retry')[0].code, 'NETWORK_ERROR');
-		// hung invitation provider -> EMAIL_DELIVERY_FAILED, no token in the log
+		// 5.4X-C: hung invitation provider (outbox worker) -> bounded, NETWORK_ERROR retry, same
+		// link kept for the next attempt; no token or address in the log
 		capture();
-		const token = randomBytes(32).toString('base64url');
-		await assert.rejects(
-			invitations.deliverInvitation(
-				{ sendInvitation: () => new Promise(() => {}) },
-				{
-					invitation: { id: randomUUID() },
-					delivery: {
-						email: 'invitee@example.com',
-						organizationName: 'Org',
-						roleName: 'Rol',
-						token,
-						expiresAt: new Date()
-					}
-				},
-				{ timeoutMs: 25 }
-			),
-			(error) => error.code === 'EMAIL_DELIVERY_FAILED'
+		const { roles } = await ensureOrganizationRoles(db, org.id);
+		const issued = await invitations.createInvitation(
+			db,
+			{ organizationId: org.id, actorUserId: recipient.id, actorPermissions: PERMISSION_IDS },
+			{ email: 'invitee@example.com', roleId: roles.find((r) => r.code === 'customer').id }
 		);
+		const hungInvitation = await invitationOutbox.processDueInvitationDeliveries(db, {
+			sender: { sendInvitation: () => new Promise(() => {}) },
+			sendTimeoutMs: 25,
+			now: new Date(Date.now() + 1000)
+		});
+		assert.equal(hungInvitation.retried, 1);
 		assert.ok(Date.now() - started < 10_000);
-		assert.equal(events('email.invitation_delivery_failed').length, 1);
-		assert.ok(!allText().includes(token) && !allText().includes('invitee@example.com'));
+		assert.equal(events('invitation_email.delivery_retry')[0].code, 'NETWORK_ERROR');
+		assert.ok(
+			!allText().includes(issued.delivery.token) && !allText().includes('invitee@example.com')
+		);
 	});
 
 	// =========================================================================

@@ -4,6 +4,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import {
@@ -756,7 +757,9 @@ test('5.4V-C: automation rules, actions and system actor', async (t) => {
 				await migrate(db2, { migrationsFolder: directory });
 				assert.equal(
 					(await pg2.query('SELECT count(*)::int n FROM drizzle.__drizzle_migrations')).rows[0].n,
-					26
+					// every journal entry applied exactly once (0025 and any later migration)
+					JSON.parse(fs.readFileSync(path.join(directory, 'meta/_journal.json'), 'utf8')).entries
+						.length
 				);
 				const columns = (
 					await pg2.query(

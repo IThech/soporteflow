@@ -14,6 +14,7 @@ import {
 	toCategoryDto,
 	uuid
 } from './http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * GET /api/categories?organizationId=<UUID>[&activeOnly=true|false]
@@ -95,10 +96,21 @@ export const POST: RequestHandler = async (event) => {
 				lock: 'share'
 			},
 			(tx) =>
-				createCategory(tx, organizationId, {
-					name: payload.name,
-					...('description' in payload ? { description: payload.description } : {})
-				})
+				withAudit(
+					tx,
+					organizationId,
+					principal.userId,
+					() =>
+						createCategory(tx, organizationId, {
+							name: payload.name,
+							...('description' in payload ? { description: payload.description } : {})
+						}),
+					(created) => ({
+						action: 'category.created',
+						entityType: 'category',
+						entityId: created.id
+					})
+				)
 		);
 		return success({ category: toCategoryDto(category) }, 201);
 	} catch (error) {

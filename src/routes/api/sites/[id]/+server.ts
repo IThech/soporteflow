@@ -13,6 +13,7 @@ import {
 	toSiteDto,
 	uuid
 } from '../http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * PATCH /api/sites/<id>?organizationId=<UUID> with a discriminated body:
@@ -58,7 +59,18 @@ export const PATCH: RequestHandler = async (event) => {
 					permissionIds: ['sites:manage'],
 					lock: 'share'
 				},
-				(tx) => updateSite(tx, organizationId, siteId, { name })
+				(tx) =>
+					withAudit(
+						tx,
+						organizationId,
+						principal.userId,
+						() => updateSite(tx, organizationId, siteId, { name }),
+						() => ({
+							action: 'site.renamed',
+							entityType: 'site',
+							entityId: siteId
+						})
+					)
 			);
 			return success({ site: toSiteDto(site) });
 		}
@@ -74,7 +86,18 @@ export const PATCH: RequestHandler = async (event) => {
 					permissionIds: ['sites:manage'],
 					lock: 'share'
 				},
-				(tx) => setSiteActive(tx, organizationId, siteId, active)
+				(tx) =>
+					withAudit(
+						tx,
+						organizationId,
+						principal.userId,
+						() => setSiteActive(tx, organizationId, siteId, active),
+						() => ({
+							action: active ? 'site.activated' : 'site.deactivated',
+							entityType: 'site',
+							entityId: siteId
+						})
+					)
 			);
 			return success({ site: toSiteDto(site) });
 		}

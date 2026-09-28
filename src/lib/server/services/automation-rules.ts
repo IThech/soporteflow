@@ -3,6 +3,7 @@ import { automationRules, automationExecutions, organizations } from '../db/sche
 import { parseRule, validId, AutomationRuleError, type RuleInput } from '../../automation/rules';
 import type { IncidentDatabase } from './incidents';
 import { parseHistoryQuery } from './incident-history';
+import { quotaLimit } from './quotas';
 
 type Row = typeof automationRules.$inferSelect;
 function dto(r: Row) {
@@ -32,7 +33,9 @@ async function cap(tx: IncidentDatabase, org: string) {
 		.select({ n: sql<number>`count(*)::int` })
 		.from(automationRules)
 		.where(and(eq(automationRules.organizationId, org), eq(automationRules.active, true)));
-	if (r.n >= 100) throw new AutomationRuleError('RULE_LIMIT_REACHED');
+	// 5.4X-D: same technical ceiling as before (100), now lowerable per deployment.
+	if (r.n >= quotaLimit('activeAutomationRules'))
+		throw new AutomationRuleError('RULE_LIMIT_REACHED');
 }
 export async function createAutomationRule(
 	db: IncidentDatabase,

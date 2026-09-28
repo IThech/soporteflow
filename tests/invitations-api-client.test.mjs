@@ -345,12 +345,23 @@ test('SoporteFlow — Etapa 5.4S-C: cliente API de invitaciones', async (t) => {
 			assert.equal(created.role.code, 'customer');
 			const listed = await listInvitations({ organizationId: org.id, customFetch: bridge });
 			assert.deepEqual(listed, [created]);
+			// 5.4X-C: emails leave through the outbox worker
+			const outbox = await server.ssrLoadModule(
+				'/src/lib/server/services/invitation-deliveries.ts'
+			);
+			const deliver = () =>
+				outbox.processDueInvitationDeliveries(db, {
+					sender: mail,
+					now: new Date(Date.now() + 1000)
+				});
+			await deliver();
 			const resent = await resendInvitation({
 				organizationId: org.id,
 				invitationId: created.id,
 				customFetch: bridge
 			});
 			assert.equal(resent.id, created.id);
+			await deliver();
 			assert.equal(mail.sent.length, 2);
 			assert.notEqual(mail.sent[0].token, mail.sent[1].token);
 			await revokeInvitation({

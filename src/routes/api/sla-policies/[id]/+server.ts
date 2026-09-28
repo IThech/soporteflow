@@ -13,6 +13,7 @@ import {
 	toSlaPolicyDto,
 	uuid
 } from '../http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 function ids(
 	event: Parameters<RequestHandler>[0]
@@ -82,14 +83,34 @@ export const PATCH: RequestHandler = async (event) => {
 				lock: 'update'
 			},
 			(tx) =>
-				updateSlaPolicy(tx, parsed.organizationId, parsed.policyId, {
-					name: body.name,
-					description: body.description,
-					active: body.active,
-					firstResponseMinutes: body.firstResponseMinutes,
-					resolutionMinutes: body.resolutionMinutes,
-					isDefault: body.isDefault
-				})
+				withAudit(
+					tx,
+					parsed.organizationId,
+					actor.userId,
+					() =>
+						updateSlaPolicy(tx, parsed.organizationId, parsed.policyId, {
+							name: body.name,
+							description: body.description,
+							active: body.active,
+							firstResponseMinutes: body.firstResponseMinutes,
+							resolutionMinutes: body.resolutionMinutes,
+							isDefault: body.isDefault
+						}),
+					(updated) => ({
+						action: 'sla_policy.updated',
+						entityType: 'sla_policy',
+						entityId: parsed.policyId,
+						metadata: {
+							fields: Object.keys(body).filter(
+								(k) => (body as Record<string, unknown>)[k] !== undefined
+							),
+							active: updated.active,
+							isDefault: updated.isDefault,
+							firstResponseMinutes: updated.firstResponseMinutes,
+							resolutionMinutes: updated.resolutionMinutes
+						}
+					})
+				)
 		);
 		return success({ slaPolicy: toSlaPolicyDto(policy) });
 	} catch (error) {

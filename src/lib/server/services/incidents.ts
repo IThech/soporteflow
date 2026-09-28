@@ -82,6 +82,8 @@ export type IncidentServiceErrorCode =
 	| 'INVITATION_NOT_RESENDABLE'
 	| 'ALREADY_MEMBER'
 	| 'EMAIL_DELIVERY_FAILED'
+	// 5.4X-C: INVITATION_TOKEN_ENCRYPTION_KEY missing; nothing was written (HTTP 503).
+	| 'INVITATION_DELIVERY_NOT_CONFIGURED'
 	| 'INVALID_INVITATION'
 	| 'AUTHENTICATION_REQUIRED'
 	| 'INVALID_ACCEPTOR'
@@ -832,11 +834,66 @@ export async function listIncidents(
 	context: ListIncidentsContext,
 	filters?: ListIncidentsFilters
 ): Promise<IncidentRecord[]> {
+	return boundedRows(
+		db
+			.select()
+			.from(incidents)
+			.where(and(...incidentListConditions(context, filters)))
+			.orderBy(desc(incidents.createdAt), desc(incidents.incidentNumber))
+	);
+}
+
+/** 5.4X-D: keyset page of the incident list (same scope, filters and order as listIncidents). */
+export interface IncidentPageCursor {
+	/** created_at as UTC ISO with microseconds (exact column value). */
+	at: string;
+	incidentNumber: number;
+}
+export const INCIDENT_PAGE_MAX_LIMIT = 100;
+
+export async function listIncidentsPage(
+	db: IncidentDatabase,
+	context: ListIncidentsContext,
+	filters: ListIncidentsFilters | undefined,
+	page: { limit: number; cursor: IncidentPageCursor | null }
+): Promise<{ items: IncidentRecord[]; nextCursor: IncidentPageCursor | null }> {
+	if (!Number.isInteger(page?.limit) || page.limit < 1 || page.limit > INCIDENT_PAGE_MAX_LIMIT)
+		throw new IncidentServiceError('INVALID_INPUT', 'invalid page limit');
+	const conditions = incidentListConditions(context, filters);
+	if (page.cursor)
+		conditions.push(
+			sql`(${incidents.createdAt}, ${incidents.incidentNumber}) < (${page.cursor.at}::timestamptz, ${page.cursor.incidentNumber})`
+		);
+	const rows = await db
+		.select({
+			incident: incidents,
+			cursorAt: sql<string>`to_char(${incidents.createdAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
+		})
+		.from(incidents)
+		.where(and(...conditions))
+		.orderBy(desc(incidents.createdAt), desc(incidents.incidentNumber))
+		.limit(page.limit + 1);
+	const items = rows.slice(0, page.limit);
+	const last = items.at(-1);
+	return {
+		items: items.map((row) => row.incident),
+		nextCursor:
+			rows.length > page.limit && last
+				? { at: last.cursorAt, incidentNumber: last.incident.incidentNumber }
+				: null
+	};
+}
+
+/** Tenant + access scope + validated filters, shared by the bounded list and the keyset page. */
+function incidentListConditions(
+	context: ListIncidentsContext,
+	filters?: ListIncidentsFilters
+): SQL[] {
 	if (!isValidUuid(context?.organizationId)) {
 		throw new IncidentServiceError('INVALID_INPUT', 'organizationId must be a valid UUID');
 	}
 
-	const conditions = [eq(incidents.organizationId, context.organizationId)];
+	const conditions: SQL[] = [eq(incidents.organizationId, context.organizationId)];
 	const scope = incidentAccessCondition(context.access);
 	if (scope) conditions.push(scope);
 
@@ -953,13 +1010,7 @@ export async function listIncidents(
 		);
 	}
 
-	return boundedRows(
-		db
-			.select()
-			.from(incidents)
-			.where(and(...conditions))
-			.orderBy(desc(incidents.createdAt), desc(incidents.incidentNumber))
-	);
+	return conditions;
 }
 
 /**

@@ -81,6 +81,21 @@ test('SoporteFlow — Etapa 5.4S-D: verificación y aceptación pública de invi
 	const mail = new email.MemoryInvitationEmailSender();
 	email.setInvitationEmailSender(mail);
 	t.after(() => email.setInvitationEmailSender(undefined));
+
+	// 5.4X-C: invitation emails leave through the durable outbox; run the worker before reading
+	// the captured message (the request itself never sends).
+	const invitationOutbox = await server.ssrLoadModule(
+		'/src/lib/server/services/invitation-deliveries.ts'
+	);
+	const deliverInvitations = () =>
+		invitationOutbox.processDueInvitationDeliveries(db, {
+			sender: mail,
+			now: new Date(Date.now() + 1000)
+		});
+	const lastMessage = async (to) => {
+		await deliverInvitations();
+		return mail.lastTo(to);
+	};
 	let clock = Date.now();
 	limits.resetInvitationRateLimits(() => clock);
 	t.after(() => limits.resetInvitationRateLimits());
@@ -160,7 +175,7 @@ test('SoporteFlow — Etapa 5.4S-D: verificación y aceptación pública de invi
 		const normalized = to.trim().toLowerCase();
 		return {
 			invitation: res.json.invitation,
-			token: mail.lastTo(normalized).token,
+			token: (await lastMessage(normalized)).token,
 			email: normalized
 		};
 	}
@@ -280,7 +295,7 @@ test('SoporteFlow — Etapa 5.4S-D: verificación y aceptación pública de invi
 				params: { id: resent.invitation.id },
 				cookie: adminA.cookie
 			});
-			const newToken = mail.lastTo(resent.email).token;
+			const newToken = (await lastMessage(resent.email)).token;
 			for (const token of [
 				'A'.repeat(43),
 				'corto',
@@ -724,7 +739,7 @@ test('SoporteFlow — Etapa 5.4S-D: verificación y aceptación pública de invi
 				'sites:manage',
 				'sites:view'
 			]);
-			const newToken = mail.lastTo(to).token;
+			const newToken = (await lastMessage(to)).token;
 			assert.equal((await verify({ token: newToken })).status, 200);
 			// reducir el rol sigue permitido (nunca da más de lo delegado)
 			await db

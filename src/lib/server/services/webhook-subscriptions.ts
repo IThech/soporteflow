@@ -11,6 +11,7 @@ import {
 } from '../webhooks/secrets';
 import { WebhookTargetError, normalizeWebhookTargetUrl } from '../webhooks/url-safety';
 import type { IncidentDatabase } from './incidents';
+import { quotaLimit } from './quotas';
 
 /**
  * Outbound webhook subscriptions (5.4V-B). Authorization (webhooks:view / webhooks:manage) is
@@ -22,7 +23,12 @@ import type { IncidentDatabase } from './incidents';
  */
 
 export type WebhookServiceErrorCode =
-	'INVALID_INPUT' | 'INVALID_TARGET' | 'SSRF_BLOCKED' | 'WEBHOOK_NOT_FOUND' | 'CONFIGURATION_ERROR';
+	| 'INVALID_INPUT'
+	| 'INVALID_TARGET'
+	| 'SSRF_BLOCKED'
+	| 'WEBHOOK_NOT_FOUND'
+	| 'CONFIGURATION_ERROR'
+	| 'WEBHOOK_LIMIT_REACHED';
 
 export class WebhookServiceError extends Error {
 	constructor(readonly code: WebhookServiceErrorCode) {
@@ -100,6 +106,20 @@ function encryptionKey(provided?: Buffer): Buffer {
 }
 
 type SubscriptionRow = typeof webhookSubscriptions.$inferSelect;
+
+/** 5.4X-D technical quota: active subscriptions per organization (services/quotas.ts). */
+async function assertActiveWebhookQuota(tx: IncidentDatabase, organizationId: string) {
+	const [row] = await tx
+		.select({ n: sql<number>`count(*)::int` })
+		.from(webhookSubscriptions)
+		.where(
+			and(
+				eq(webhookSubscriptions.organizationId, organizationId),
+				eq(webhookSubscriptions.active, true)
+			)
+		);
+	if (row.n >= quotaLimit('activeWebhooks')) throw new WebhookServiceError('WEBHOOK_LIMIT_REACHED');
+}
 function toDto(row: SubscriptionRow): WebhookSubscriptionDto {
 	return {
 		id: row.id,
@@ -139,6 +159,7 @@ export async function createWebhookSubscription(
 	const secret = generateWebhookSecret();
 	const encrypted = encryptWebhookSecret(key, secret, { subscriptionId: id, version: 1 });
 	const row = await db.transaction(async (tx) => {
+		await assertActiveWebhookQuota(tx, context.organizationId);
 		const [created] = await tx
 			.insert(webhookSubscriptions)
 			.values({
@@ -237,6 +258,8 @@ export async function updateWebhookSubscription(
 			(patch.eventTypes !== undefined &&
 				JSON.stringify(patch.eventTypes) !== JSON.stringify(current.eventTypes));
 		if (!changed) return toDto(current);
+		if (patch.active === true && !current.active)
+			await assertActiveWebhookQuota(tx, organizationId);
 		const [row] = await tx
 			.update(webhookSubscriptions)
 			.set({ ...patch, updatedAt: new Date() })

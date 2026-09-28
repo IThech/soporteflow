@@ -183,6 +183,27 @@
 			"when": 1790510099355,
 			"tag": "0025_automation_rules",
 			"breakpoints": true
+		},
+		{
+			"idx": 26,
+			"version": "7",
+			"when": 1790596490309,
+			"tag": "0026_audit_events",
+			"breakpoints": true
+		},
+		{
+			"idx": 27,
+			"version": "7",
+			"when": 1790598759640,
+			"tag": "0027_invitation_deliveries",
+			"breakpoints": true
+		},
+		{
+			"idx": 28,
+			"version": "7",
+			"when": 1790599647970,
+			"tag": "0028_growth_indexes",
+			"breakpoints": true
 		}
 	]
 }

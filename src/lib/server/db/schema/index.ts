@@ -11,3 +11,6 @@ export * from './automation';
 export * from './webhooks';
 
 export * from './automation-rules';
+
+export * from './audit';
+export * from './invitation-deliveries';

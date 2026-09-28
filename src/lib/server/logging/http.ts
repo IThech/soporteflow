@@ -68,7 +68,10 @@ export async function observeRequest(
 			);
 		}
 		const status = response.status;
-		if (status !== 429 && !(status === 503 && response.headers.get('retry-after'))) {
+		// 5.4X-B: successful health/readiness probes (every few seconds from the orchestrator) are
+		// not access-logged; failures still are.
+		const probe = (event.route?.id === '/healthz' || event.route?.id === '/readyz') && status < 500;
+		if (!probe && status !== 429 && !(status === 503 && response.headers.get('retry-after'))) {
 			const method = METHODS.has(event.request.method) ? event.request.method : 'OTHER';
 			const fields = {
 				method,

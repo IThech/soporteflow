@@ -192,11 +192,11 @@ export function roleServiceFailure(error: unknown) {
 			return failure(409, 'INVITATION_NOT_RESENDABLE', 'Invitation cannot be resent.');
 		if (error.code === 'ALREADY_MEMBER')
 			return failure(409, 'ALREADY_MEMBER', 'Already a member of the organization.');
-		if (error.code === 'EMAIL_DELIVERY_FAILED')
+		if (error.code === 'INVITATION_DELIVERY_NOT_CONFIGURED')
 			return failure(
-				502,
-				'EMAIL_DELIVERY_FAILED',
-				'The invitation was saved but the email could not be delivered.'
+				503,
+				'INVITATION_DELIVERY_NOT_CONFIGURED',
+				'Invitation delivery is not configured.'
 			);
 		if (error.code === 'ORGANIZATION_NOT_FOUND' || error.code === 'ORGANIZATION_NOT_OPERATIONAL')
 			return failure(403, 'FORBIDDEN', 'Permission denied.');

@@ -8,6 +8,7 @@ import {
 	webhookContext,
 	webhookFailure
 } from '../../http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * POST /api/webhooks/<id>/rotate-secret?organizationId=<UUID>   (webhooks:manage, same Origin,
@@ -24,7 +25,16 @@ export const POST: RequestHandler = async (event) => {
 			return failure(400, 'INVALID_INPUT', 'Request body is not allowed.');
 		const id = event.params.id;
 		return success(
-			await asWebhookManager(ctx, (tx) => rotateWebhookSecret(tx, ctx.organizationId, id))
+			await asWebhookManager(ctx, (tx) =>
+				withAudit(
+					tx,
+					ctx.organizationId,
+					ctx.actorUserId,
+					() => rotateWebhookSecret(tx, ctx.organizationId, id),
+					// The new secret is returned to the caller once and never audited.
+					() => ({ action: 'webhook.secret_rotated', entityType: 'webhook', entityId: id })
+				)
+			)
 		);
 	} catch (error) {
 		return webhookFailure(error);

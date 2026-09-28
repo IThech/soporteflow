@@ -20,6 +20,7 @@ import assert from 'node:assert/strict';
 
 const SECRET = randomBytes(32).toString('base64url');
 const WEBHOOK_KEY = randomBytes(32).toString('hex');
+const INVITATION_KEY = randomBytes(32).toString('hex');
 const DB_PASSWORD = 'smoke-db-' + randomBytes(6).toString('hex');
 const valid = {
 	NODE_ENV: 'production',
@@ -28,9 +29,10 @@ const valid = {
 	BETTER_AUTH_SECRET: SECRET,
 	BETTER_AUTH_URL: 'https://support.smoke.invalid',
 	DATABASE_URL: `postgresql://smoke:${DB_PASSWORD}@127.0.0.1:9/smoke`,
-	WEBHOOK_SECRET_ENCRYPTION_KEY: WEBHOOK_KEY
+	WEBHOOK_SECRET_ENCRYPTION_KEY: WEBHOOK_KEY,
+	INVITATION_TOKEN_ENCRYPTION_KEY: INVITATION_KEY
 };
-const SECRETS = [SECRET, WEBHOOK_KEY, DB_PASSWORD];
+const SECRETS = [SECRET, WEBHOOK_KEY, INVITATION_KEY, DB_PASSWORD];
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 let port = 4300 + Math.floor(Math.random() * 500);
 

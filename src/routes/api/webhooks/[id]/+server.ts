@@ -15,6 +15,7 @@ import {
 	webhookContext,
 	webhookFailure
 } from '../http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /** GET /api/webhooks/<id>?organizationId=<UUID>   (webhooks:view). Never the secret. */
 export const GET: RequestHandler = async (event) => {
@@ -47,7 +48,22 @@ export const PATCH: RequestHandler = async (event) => {
 		if (!body) return failure(400, 'INVALID_INPUT', 'Invalid request.');
 		return success({
 			webhook: await asWebhookManager(ctx, (tx) =>
-				updateWebhookSubscription(tx, ctx.organizationId, id, body)
+				withAudit(
+					tx,
+					ctx.organizationId,
+					ctx.actorUserId,
+					() => updateWebhookSubscription(tx, ctx.organizationId, id, body),
+					(updated) => ({
+						action: 'webhook.updated',
+						entityType: 'webhook',
+						entityId: id,
+						metadata: {
+							fields: Object.keys(body).filter((key) => /^[a-zA-Z]{1,40}$/.test(key)),
+							active: updated.active,
+							eventTypes: [...updated.eventTypes]
+						}
+					})
+				)
 			)
 		});
 	} catch (error) {
@@ -69,7 +85,15 @@ export const DELETE: RequestHandler = async (event) => {
 		if (event.request.body !== null)
 			return failure(400, 'INVALID_INPUT', 'Request body is not allowed.');
 		const id = event.params.id;
-		await asWebhookManager(ctx, (tx) => deactivateWebhookSubscription(tx, ctx.organizationId, id));
+		await asWebhookManager(ctx, (tx) =>
+			withAudit(
+				tx,
+				ctx.organizationId,
+				ctx.actorUserId,
+				() => deactivateWebhookSubscription(tx, ctx.organizationId, id),
+				() => ({ action: 'webhook.deactivated', entityType: 'webhook', entityId: id })
+			)
+		);
 		return noContent();
 	} catch (error) {
 		return webhookFailure(error);

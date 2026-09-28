@@ -64,7 +64,8 @@ const EXPECTED_IDS = [
 	'webhooks:view', // 0024 (5.4V-B)
 	'webhooks:manage',
 	'automations:view', // 0025 (5.4V-C)
-	'automations:manage'
+	'automations:manage',
+	'audit:view' // 0026 (5.4X-A)
 ];
 const ID_PATTERN = /^[a-z][a-z_]*:[a-z][a-z_]*$/;
 const SCOPES = ['organization', 'department', 'team', 'site', 'personal'];

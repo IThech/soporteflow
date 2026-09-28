@@ -11,19 +11,23 @@ import {
 	users
 } from '../db/schema';
 import type { PermissionId } from '../auth/permissions';
-import type { InvitationEmailSender } from '../email/invitation-email';
 import { IncidentServiceError, type IncidentDatabase } from './incidents';
 import { assertDelegable, assertOperationalOrganization } from './roles';
-import { logger } from '../logging/logger';
+import { cancelInvitationDeliveries, enqueueInvitationDelivery } from './invitation-deliveries';
+import {
+	InvitationTokenConfigurationError,
+	invitationTokenKeyFromEnv
+} from '../invitations/token-crypto';
 
 /**
  * Administrative invitations (5.4S-C). Public verification/acceptance, user creation, membership
  * creation and role assignment on acceptance belong to 5.4S-D and are NOT implemented here: this
  * service never writes users, memberships, role_assignments or auth tables.
  *
- * Token handling: a 256-bit random token is generated per issue (create / resend), only its
- * SHA-256 is persisted, and the raw token is handed to the email sender after commit. It is never
- * persisted, logged or returned in any DTO.
+ * Token handling: a 256-bit random token is generated per issue (create / resend). Its SHA-256 is
+ * the lookup key; in the SAME transaction the raw token is enqueued in the invitation outbox only
+ * as AES-256-GCM ciphertext (5.4X-C, invitation-deliveries.ts), neutralized once the delivery is
+ * terminal. It is never persisted in plaintext, logged or returned in any HTTP DTO.
  *
  * Expiration: status 'pending' with expires_at <= now is EXPIRED. Reads derive it (no side
  * effects in GET); mutations persist it lazily (create retires an expired pending row for the same
@@ -330,52 +334,32 @@ async function assertNotMember(tx: IncidentDatabase, organizationId: string, ema
 	throw new IncidentServiceError('MEMBERSHIP_INACTIVE', 'Membership is not active');
 }
 
-/**
- * 5.4W-E: upper bound for the synchronous (post-commit, in-request) invitation send. A hung
- * provider must not hold the HTTP request; a timed-out send may still be delivered by the
- * provider (the invitation stays pending and resend issues a fresh token).
- */
-export const INVITATION_EMAIL_SEND_TIMEOUT_MS = 15_000;
+/** Options for the issuing operations (tests inject the key; production reads the env). */
+export interface InvitationIssueOptions {
+	encryptionKey?: Buffer;
+}
 
 /**
- * Sends the invitation email for an issued invitation (after the database commit). A failure or
- * timeout is reported as EMAIL_DELIVERY_FAILED; the invitation stays pending and can be resent.
+ * The outbox key is required to issue a token: without it nothing is written (fail closed,
+ * 503 INVITATION_DELIVERY_NOT_CONFIGURED), so an invitation never exists without its delivery.
  */
-export async function deliverInvitation(
-	sender: InvitationEmailSender,
-	issued: IssuedInvitation,
-	options: { timeoutMs?: number } = {}
-): Promise<void> {
-	let timer: ReturnType<typeof setTimeout> | undefined;
+function issueKey(options: InvitationIssueOptions): Buffer {
 	try {
-		await Promise.race([
-			sender.sendInvitation({ ...issued.delivery }),
-			new Promise<never>((_, reject) => {
-				timer = setTimeout(
-					() => reject(new Error('Invitation email send timeout')),
-					options.timeoutMs ?? INVITATION_EMAIL_SEND_TIMEOUT_MS
-				);
-			})
-		]);
+		return options.encryptionKey ?? invitationTokenKeyFromEnv();
 	} catch (error) {
-		// 5.4W-E: invitation id and error class only. Never the token, the address or the
-		// provider message (it may echo credentials or the recipient).
-		logger.warn('email.invitation_delivery_failed', {
-			invitationId: issued.invitation.id,
-			errorName: error instanceof Error ? error.name : typeof error
-		});
-		throw new IncidentServiceError(
-			'EMAIL_DELIVERY_FAILED',
-			'The invitation was saved but the email could not be delivered'
-		);
-	} finally {
-		clearTimeout(timer);
+		if (error instanceof InvitationTokenConfigurationError)
+			throw new IncidentServiceError(
+				'INVITATION_DELIVERY_NOT_CONFIGURED',
+				'Invitation delivery is not configured'
+			);
+		throw error;
 	}
 }
 
 /**
- * Creates a pending invitation in one transaction (the email is sent afterwards by
- * deliverInvitation, never inside the transaction). Caller authorizes invitations:create and
+ * Creates a pending invitation in one transaction together with its token hash and its outbox
+ * delivery (encrypted token); the email is sent later by the delivery worker, never inside the
+ * transaction or the request. Caller authorizes invitations:create and
  * roles:assign; this service enforces tenant, role and delegation rules:
  * - organization active (row locked FOR UPDATE: serializes invitation issuing per tenant);
  * - role of this organization, active, fully delegable (ROLE_NOT_FOUND / ROLE_INACTIVE /
@@ -387,7 +371,8 @@ export async function deliverInvitation(
 export async function createInvitation(
 	db: IncidentDatabase,
 	context: InvitationActorContext,
-	input: { email: unknown; roleId: unknown }
+	input: { email: unknown; roleId: unknown },
+	options: InvitationIssueOptions = {}
 ): Promise<IssuedInvitation> {
 	assertUuid(context?.organizationId, 'organizationId');
 	assertUuid(context.actorUserId, 'actorUserId');
@@ -395,6 +380,7 @@ export async function createInvitation(
 	const email = normalizeInvitationEmail(input.email);
 	assertUuid(input.roleId, 'roleId');
 	const roleId = input.roleId;
+	const key = issueKey(options);
 	const token = generateInvitationToken();
 	try {
 		return await inTransaction(db, async (tx) => {
@@ -428,11 +414,19 @@ export async function createInvitation(
 					'INVITATION_ALREADY_PENDING',
 					'A pending invitation already exists for this email'
 				);
-			if (pending)
+			if (pending) {
 				await tx
 					.update(invitations)
 					.set({ status: 'expired', updatedAt: now })
 					.where(eq(invitations.id, pending.id));
+				await cancelInvitationDeliveries(
+					tx,
+					context.organizationId,
+					pending.id,
+					'INVITATION_EXPIRED',
+					now
+				);
+			}
 			const expiresAt = newExpiry(now);
 			const [created] = await tx
 				.insert(invitations)
@@ -449,6 +443,13 @@ export async function createInvitation(
 					updatedAt: now
 				})
 				.returning({ id: invitations.id });
+			await enqueueInvitationDelivery(tx, {
+				organizationId: context.organizationId,
+				invitationId: created.id,
+				token,
+				encryptionKey: key,
+				now
+			});
 			return {
 				invitation: await getInvitation(tx, context.organizationId, created.id),
 				delivery: {
@@ -501,6 +502,8 @@ export async function revokeInvitation(
 			.update(invitations)
 			.set({ status: 'revoked', updatedAt: new Date() })
 			.where(and(eq(invitations.id, invitationId), eq(invitations.organizationId, organizationId)));
+		// 5.4X-C: no further useful send; pending ciphertext neutralized in the same transaction.
+		await cancelInvitationDeliveries(tx, organizationId, invitationId, 'INVITATION_REVOKED');
 	});
 }
 
@@ -515,11 +518,13 @@ export async function revokeInvitation(
 export async function resendInvitation(
 	db: IncidentDatabase,
 	context: InvitationActorContext,
-	invitationId: string
+	invitationId: string,
+	options: InvitationIssueOptions = {}
 ): Promise<IssuedInvitation> {
 	assertUuid(context?.organizationId, 'organizationId');
 	assertUuid(context.actorUserId, 'actorUserId');
 	assertUuid(invitationId, 'invitationId');
+	const key = issueKey(options);
 	const token = generateInvitationToken();
 	try {
 		return await inTransaction(db, async (tx) => {
@@ -567,6 +572,15 @@ export async function resendInvitation(
 						eq(invitations.organizationId, context.organizationId)
 					)
 				);
+			// 5.4X-C: explicit resend rotates the link — the active delivery (old token) is cancelled
+			// and neutralized, a new delivery carries the new token; same transaction as the hash.
+			await enqueueInvitationDelivery(tx, {
+				organizationId: context.organizationId,
+				invitationId,
+				token,
+				encryptionKey: key,
+				now
+			});
 			return {
 				invitation: await getInvitation(tx, context.organizationId, invitationId),
 				delivery: {

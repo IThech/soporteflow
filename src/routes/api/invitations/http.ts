@@ -36,9 +36,32 @@ export async function requireInvitationIssuer(
 /** Permissions re-validated inside the issuing transaction (create and resend). */
 export const INVITATION_ISSUER_PERMISSIONS = ['invitations:create', 'roles:assign'] as const;
 
-/** Explicit allowlist: never token, token hash, organizationId or auth/session data. */
-export function toInvitationDto(invitation: InvitationRecord) {
+/** 5.4X-C: latest outbox state of the invitation email (never token material). */
+export interface InvitationDeliveryState {
+	status: string;
+	lastErrorCode: string | null;
+	attemptCount: number;
+}
+/** State reported right after an explicit create/resend: a fresh delivery is queued. */
+export const QUEUED_DELIVERY: InvitationDeliveryState = {
+	status: 'pending',
+	lastErrorCode: null,
+	attemptCount: 0
+};
+
+/** Explicit allowlist: never token, token hash, ciphertext, organizationId or auth/session data. */
+export function toInvitationDto(
+	invitation: InvitationRecord,
+	delivery: InvitationDeliveryState | null = null
+) {
 	return {
+		delivery: delivery
+			? {
+					status: delivery.status,
+					lastErrorCode: delivery.lastErrorCode,
+					attemptCount: delivery.attemptCount
+				}
+			: null,
 		id: invitation.id,
 		email: invitation.email,
 		status: invitation.status,

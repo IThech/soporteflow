@@ -144,7 +144,19 @@ export const incidents = pgTable(
 			table.organizationId,
 			table.firstResponseDueAt
 		),
-		index('incidents_org_resolution_due_idx').on(table.organizationId, table.resolutionDueAt)
+		index('incidents_org_resolution_due_idx').on(table.organizationId, table.resolutionDueAt),
+		// 5.4X-D: access-model predicates (view_own / queue=mine: assignee; view_requested:
+		// requester), ordered like the list (created_at DESC) so pages are index range scans.
+		index('incidents_org_assignee_created_idx').on(
+			table.organizationId,
+			table.assignedToUserId,
+			table.createdAt
+		),
+		index('incidents_org_client_created_idx').on(
+			table.organizationId,
+			table.clientUserId,
+			table.createdAt
+		)
 	]
 );
 

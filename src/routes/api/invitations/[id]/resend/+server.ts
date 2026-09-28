@@ -1,8 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { resolvePrincipal } from '$lib/server/auth/principal';
-import { getInvitationEmailSender } from '$lib/server/email/invitation-email';
-import { deliverInvitation, resendInvitation } from '$lib/server/services/invitations';
+import { resendInvitation } from '$lib/server/services/invitations';
 import {
 	adminServiceFailure,
 	failure,
@@ -12,8 +11,10 @@ import {
 	withActorAuthorization,
 	success,
 	toInvitationDto,
+	QUEUED_DELIVERY,
 	uuid
 } from '../../http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * POST /api/invitations/<id>/resend?organizationId=<UUID>   (no body)
@@ -48,14 +49,26 @@ export const POST: RequestHandler = async (event) => {
 				lock: 'update'
 			},
 			(tx, actorPermissions) =>
-				resendInvitation(
+				withAudit(
 					tx,
-					{ organizationId, actorUserId: principal.userId, actorPermissions },
-					invitationId
+					organizationId,
+					principal.userId,
+					() =>
+						resendInvitation(
+							tx,
+							{ organizationId, actorUserId: principal.userId, actorPermissions },
+							invitationId
+						),
+					(result) => ({
+						action: 'invitation.resent',
+						entityType: 'invitation',
+						entityId: result.invitation.id,
+						metadata: { roleId: result.invitation.role.id }
+					})
 				)
 		);
-		await deliverInvitation(getInvitationEmailSender(), issued);
-		return success({ invitation: toInvitationDto(issued.invitation) });
+		// New token + new delivery (old link invalid, old delivery cancelled) in the same transaction.
+		return success({ invitation: toInvitationDto(issued.invitation, QUEUED_DELIVERY) });
 	} catch (error) {
 		return adminServiceFailure(error);
 	}

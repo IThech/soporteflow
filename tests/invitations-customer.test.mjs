@@ -300,6 +300,7 @@ test('SoporteFlow — Etapa 5.4S-A: invitations, permisos 5.4S y rol Customer', 
 		);
 		const idx = Object.fromEntries(rows.map((r) => [r.indexname, r.indexdef]));
 		assert.deepEqual(Object.keys(idx), [
+			'invitations_id_org_unique', // 0027 (5.4X-C): target of the outbox tenant FK
 			'invitations_org_email_pending_unique_idx',
 			'invitations_org_status_idx',
 			'invitations_pkey',

@@ -14,6 +14,7 @@ import {
 	toCategoryDto,
 	uuid
 } from '../http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * PATCH /api/categories/<id>?organizationId=<UUID> with a discriminated body:
@@ -69,10 +70,22 @@ export const PATCH: RequestHandler = async (event) => {
 					lock: 'share'
 				},
 				(tx) =>
-					updateCategory(tx, organizationId, categoryId, {
-						...('name' in payload ? { name: payload.name } : {}),
-						...('description' in payload ? { description: payload.description } : {})
-					})
+					withAudit(
+						tx,
+						organizationId,
+						principal.userId,
+						() =>
+							updateCategory(tx, organizationId, categoryId, {
+								...('name' in payload ? { name: payload.name } : {}),
+								...('description' in payload ? { description: payload.description } : {})
+							}),
+						() => ({
+							action: 'category.updated',
+							entityType: 'category',
+							entityId: categoryId,
+							metadata: { fields: fields.filter((key) => key !== 'action') }
+						})
+					)
 			);
 			return success({ category: toCategoryDto(category) });
 		}
@@ -88,7 +101,18 @@ export const PATCH: RequestHandler = async (event) => {
 					permissionIds: ['categories:manage'],
 					lock: 'share'
 				},
-				(tx) => setCategoryActive(tx, organizationId, categoryId, active)
+				(tx) =>
+					withAudit(
+						tx,
+						organizationId,
+						principal.userId,
+						() => setCategoryActive(tx, organizationId, categoryId, active),
+						() => ({
+							action: active ? 'category.activated' : 'category.deactivated',
+							entityType: 'category',
+							entityId: categoryId
+						})
+					)
 			);
 			return success({ category: toCategoryDto(category) });
 		}

@@ -45,7 +45,8 @@ const ADMIN = [
 	'webhooks:view', // 0024 (5.4V-B)
 	'webhooks:manage',
 	'automations:view', // 0025 (5.4V-C)
-	'automations:manage'
+	'automations:manage',
+	'audit:view' // 0026 (5.4X-A)
 ].sort();
 /** Customer template (0015, 5.4S-A): exactly these 5 permissions. */
 const CUSTOMER = [

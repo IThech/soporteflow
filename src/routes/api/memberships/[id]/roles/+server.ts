@@ -12,6 +12,7 @@ import {
 	toMembershipRoleDto,
 	uuid
 } from '../../http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * POST /api/memberships/<id>/roles?organizationId=<UUID>   body: { roleId }
@@ -47,7 +48,22 @@ export const POST: RequestHandler = async (event) => {
 			db,
 			{ userId: auth.userId, organizationId, permissionIds: ['roles:assign'], lock: 'update' },
 			(tx, actorPermissions) =>
-				assignRoleToMembership(tx, organizationId, membershipId, roleId, actorPermissions)
+				withAudit(
+					tx,
+					organizationId,
+					auth.userId,
+					() => assignRoleToMembership(tx, organizationId, membershipId, roleId, actorPermissions),
+					// Idempotent re-grant writes nothing, so it is not audited either.
+					(assigned) =>
+						assigned.created
+							? {
+									action: 'membership.role_granted',
+									entityType: 'membership',
+									entityId: membershipId,
+									metadata: { roleId }
+								}
+							: null
+				)
 		);
 		return success(
 			{

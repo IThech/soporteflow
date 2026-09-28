@@ -120,6 +120,8 @@ export function webhookFailure(error: unknown): Response {
 				return failure(404, 'WEBHOOK_NOT_FOUND', 'Webhook not found.');
 			case 'CONFIGURATION_ERROR':
 				return failure(503, 'WEBHOOKS_NOT_CONFIGURED', 'Webhook signing is not configured.');
+			case 'WEBHOOK_LIMIT_REACHED':
+				return failure(409, 'WEBHOOK_LIMIT_REACHED', 'Active webhook limit reached.');
 		}
 	}
 	logUnexpectedError(error);

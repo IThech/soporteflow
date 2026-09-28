@@ -35,9 +35,25 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 	email.setInvitationEmailSender(mail);
 	t.after(() => email.setInvitationEmailSender(undefined));
 
+	// 5.4X-C: invitation emails leave through the durable outbox; run the worker before reading
+	// the captured message (the request itself never sends).
+	const invitationOutbox = await server.ssrLoadModule(
+		'/src/lib/server/services/invitation-deliveries.ts'
+	);
+	const deliverInvitations = () =>
+		invitationOutbox.processDueInvitationDeliveries(db, {
+			sender: mail,
+			now: new Date(Date.now() + 1000)
+		});
+	const lastMessage = async (to) => {
+		await deliverInvitations();
+		return mail.lastTo(to);
+	};
+
 	const DTO_KEYS = [
 		'acceptedAt',
 		'createdAt',
+		'delivery',
 		'email',
 		'expiresAt',
 		'id',
@@ -206,6 +222,7 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 	await t.test(
 		'41. Admin invita Customer: 201, email normalizado, solo hash en DB, token solo al sender',
 		async () => {
+			await deliverInvitations();
 			mail.reset();
 			const before = Date.now();
 			const res = await create(admin, A.org, {
@@ -229,6 +246,8 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 			assert.deepEqual(dto.invitedBy, { id: admin.user.id, name: 'Credential User' });
 			const ttl = Date.parse(dto.expiresAt) - before;
 			assert.ok(ttl >= 48 * 3600000 - 5000 && ttl <= 48 * 3600000 + 5000, `ttl ${ttl}`);
+			assert.equal(mail.sent.length, 0, '5.4X-C: la petición no envía');
+			await deliverInvitations();
 			assert.equal(mail.sent.length, 1);
 			const message = mail.sent[0];
 			assert.equal(message.email, 'foo.bar@example.com');
@@ -242,6 +261,8 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 			assert.ok(!res.text.includes(stored.tokenHash), 'el hash no sale en la API');
 			const dump = JSON.stringify((await pg.query(`SELECT * FROM invitations`)).rows);
 			assert.ok(!dump.includes(message.token), 'el token en claro no se persiste');
+			const outbox = JSON.stringify((await pg.query(`SELECT * FROM invitation_deliveries`)).rows);
+			assert.ok(!outbox.includes(message.token), 'ni en el outbox');
 		}
 	);
 
@@ -555,7 +576,7 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 		async () => {
 			mail.reset();
 			const inv = await invite(admin, A.org, A.customer);
-			const firstToken = mail.lastTo(inv.email).token;
+			const firstToken = (await lastMessage(inv.email)).token;
 			const before = await row(inv.id);
 			await db
 				.update(s.invitations)
@@ -566,8 +587,8 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 			assert.equal(res.json.invitation.id, inv.id);
 			assert.equal(res.json.invitation.status, 'pending');
 			const after = await row(inv.id);
-			const secondToken = mail.lastTo(inv.email).token;
-			assert.equal(mail.sent.length, 2);
+			const secondToken = (await lastMessage(inv.email)).token;
+			assert.equal(mail.sent.filter((m) => m.email === inv.email).length, 2);
 			assert.notEqual(secondToken, firstToken);
 			assert.equal(after.tokenHash, sha256(secondToken));
 			assert.notEqual(after.tokenHash, before.tokenHash);
@@ -643,22 +664,42 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 	// Fallo de email (45)
 	// =========================================================================
 	await t.test(
-		'45. fallo de email: 502 seguro, invitación pending persistida, reenvío posterior OK',
+		'45. fallo de email (5.4X-C): 201 inmediato, entrega en reintento, invitación pending, mismo enlace',
 		async () => {
+			await deliverInvitations();
 			mail.reset();
 			mail.failing = true;
 			const to = address('fail');
 			const res = await create(admin, A.org, { email: to, roleId: A.customer.id });
-			assert.equal(res.status, 502);
-			assert.deepEqual(Object.keys(res.json), ['error']);
-			assert.equal(res.json.error.code, 'EMAIL_DELIVERY_FAILED');
-			assert.ok(!/simulated|token/i.test(res.text));
+			assert.equal(res.status, 201, 'el envío ya no ocurre en la petición');
+			assert.deepEqual(res.json.invitation.delivery, {
+				status: 'pending',
+				lastErrorCode: null,
+				attemptCount: 0
+			});
+			assert.ok(!/token|ciphertext/i.test(res.text));
+			const outcome = await deliverInvitations();
+			assert.equal(outcome.retried, 1, 'fallo transitorio -> reintento programado');
 			const [saved] = await db.select().from(s.invitations).where(eq(s.invitations.email, to));
 			assert.equal(saved.status, 'pending');
+			const listed = await itemRoute.GET({
+				url: new URL(`http://localhost/api/invitations/${saved.id}?organizationId=${A.org.id}`),
+				params: { id: saved.id },
+				request: new Request(
+					`http://localhost/api/invitations/${saved.id}?organizationId=${A.org.id}`,
+					{
+						headers: { cookie: admin.cookie }
+					}
+				)
+			});
+			const detail = await listed.json();
+			assert.equal(detail.invitation.delivery.status, 'retry');
+			assert.equal(detail.invitation.delivery.lastErrorCode, 'PROVIDER_ERROR');
 			mail.failing = false;
+			// explicit resend: new token, the stored hash matches the delivered one
 			const retry = await resend(admin, A.org, saved.id);
 			assert.equal(retry.status, 200);
-			assert.equal((await row(saved.id)).tokenHash, sha256(mail.lastTo(to).token));
+			assert.equal((await row(saved.id)).tokenHash, sha256((await lastMessage(to)).token));
 		}
 	);
 
@@ -671,8 +712,12 @@ test('SoporteFlow — Etapa 5.4S-C: invitaciones administrativas', async (t) => 
 					email.getInvitationEmailSender() instanceof email.UnconfiguredInvitationEmailSender
 				);
 				const res = await create(admin, A.org, { email: address('none'), roleId: A.customer.id });
-				assert.equal(res.status, 502);
-				assert.equal(res.json.error.code, 'EMAIL_DELIVERY_FAILED');
+				assert.equal(res.status, 201);
+				const outcome = await invitationOutbox.processDueInvitationDeliveries(db, {
+					now: new Date(Date.now() + 1000)
+				});
+				assert.equal(outcome.failed, 1, 'PROVIDER_NOT_CONFIGURED es terminal, nunca un éxito');
+				assert.equal(outcome.sent, 0);
 			} finally {
 				email.setInvitationEmailSender(mail);
 			}

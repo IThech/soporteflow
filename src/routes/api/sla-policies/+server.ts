@@ -14,6 +14,7 @@ import {
 	toSlaPolicyDto,
 	uuid
 } from './http';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * GET /api/sla-policies?organizationId=<UUID>[&active=true|false][&isDefault=true|false]
@@ -77,14 +78,31 @@ export const POST: RequestHandler = async (event) => {
 				lock: 'update'
 			},
 			(tx) =>
-				createSlaPolicy(tx, organizationId, {
-					code: body.code,
-					name: body.name,
-					description: body.description,
-					firstResponseMinutes: body.firstResponseMinutes,
-					resolutionMinutes: body.resolutionMinutes,
-					isDefault: body.isDefault
-				})
+				withAudit(
+					tx,
+					organizationId,
+					actor.userId,
+					() =>
+						createSlaPolicy(tx, organizationId, {
+							code: body.code,
+							name: body.name,
+							description: body.description,
+							firstResponseMinutes: body.firstResponseMinutes,
+							resolutionMinutes: body.resolutionMinutes,
+							isDefault: body.isDefault
+						}),
+					(created) => ({
+						action: 'sla_policy.created',
+						entityType: 'sla_policy',
+						entityId: created.id,
+						metadata: {
+							code: created.code,
+							firstResponseMinutes: created.firstResponseMinutes,
+							resolutionMinutes: created.resolutionMinutes,
+							isDefault: created.isDefault
+						}
+					})
+				)
 		);
 		return success({ slaPolicy: toSlaPolicyDto(policy) }, 201);
 	} catch (error) {

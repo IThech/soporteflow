@@ -224,6 +224,8 @@ export const invitations = pgTable(
 			foreignColumns: [roles.id, roles.organizationId]
 		}).onDelete('cascade'),
 		unique('invitations_token_hash_unique').on(table.tokenHash),
+		// 5.4X-C: target of the tenant-bound FK from invitation_deliveries.
+		unique('invitations_id_org_unique').on(table.id, table.organizationId),
 		check(
 			'invitations_status_check',
 			sql`${table.status} IN ('pending', 'accepted', 'revoked', 'expired')`

@@ -1,9 +1,7 @@
 import type { RequestHandler } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { getInvitationEmailSender } from '$lib/server/email/invitation-email';
 import {
 	createInvitation,
-	deliverInvitation,
 	listInvitations,
 	INVITATION_STATUSES,
 	type InvitationStatus,
@@ -21,8 +19,11 @@ import {
 	withActorAuthorization,
 	success,
 	toInvitationDto,
+	QUEUED_DELIVERY,
 	uuid
 } from './http';
+import { latestInvitationDeliveryStates } from '$lib/server/services/invitation-deliveries';
+import { withAudit } from '$lib/server/services/audit-events';
 
 /**
  * GET /api/invitations?organizationId=<UUID>[&status=pending|accepted|revoked|expired][&email=]
@@ -52,7 +53,16 @@ export const GET: RequestHandler = async (event) => {
 		const email = params.get('email');
 		if (email !== null) filters.email = email;
 		const invitations = await listInvitations(db, organizationId, filters);
-		return success({ invitations: invitations.map(toInvitationDto) });
+		const deliveries = await latestInvitationDeliveryStates(
+			db,
+			organizationId,
+			invitations.map((invitation) => invitation.id)
+		);
+		return success({
+			invitations: invitations.map((invitation) =>
+				toInvitationDto(invitation, deliveries.get(invitation.id) ?? null)
+			)
+		});
 	} catch (error) {
 		return adminServiceFailure(error);
 	}
@@ -61,8 +71,9 @@ export const GET: RequestHandler = async (event) => {
 /**
  * POST /api/invitations?organizationId=<UUID>   body: { email, roleId }
  * Requires invitations:create + roles:assign + delegation of the role. 201 with the safe DTO.
- * The raw token only reaches the email sender, after the database commit; if delivery fails the
- * invitation stays pending (502 EMAIL_DELIVERY_FAILED) and can be resent.
+ * 5.4X-C: the invitation, its token hash and its outbox delivery (token encrypted) are written in
+ * one transaction; the email is sent by the delivery worker (never in the request). Without
+ * INVITATION_TOKEN_ENCRYPTION_KEY nothing is written: 503 INVITATION_DELIVERY_NOT_CONFIGURED.
  */
 export const POST: RequestHandler = async (event) => {
 	const params = event.url.searchParams;
@@ -91,14 +102,26 @@ export const POST: RequestHandler = async (event) => {
 				lock: 'update'
 			},
 			(tx, actorPermissions) =>
-				createInvitation(
+				withAudit(
 					tx,
-					{ organizationId, actorUserId: principal.userId, actorPermissions },
-					input
+					organizationId,
+					principal.userId,
+					() =>
+						createInvitation(
+							tx,
+							{ organizationId, actorUserId: principal.userId, actorPermissions },
+							input
+						),
+					// Never the token or the invitee address: ids only.
+					(result) => ({
+						action: 'invitation.created',
+						entityType: 'invitation',
+						entityId: result.invitation.id,
+						metadata: { roleId: result.invitation.role.id }
+					})
 				)
 		);
-		await deliverInvitation(getInvitationEmailSender(), issued);
-		return success({ invitation: toInvitationDto(issued.invitation) }, 201);
+		return success({ invitation: toInvitationDto(issued.invitation, QUEUED_DELIVERY) }, 201);
 	} catch (error) {
 		return adminServiceFailure(error);
 	}
