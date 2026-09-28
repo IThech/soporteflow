@@ -788,6 +788,60 @@ test('SoporteFlow — Etapa 5.4W-E: seguridad operacional', async (t) => {
 	// =========================================================================
 	// 28. W-C headers retained (plus correlation)
 	// =========================================================================
+	await t.test(
+		'W-F. fallo del propio wrapper: 500 genérico con cabeceras base y requestId',
+		async () => {
+			capture();
+			const httpModule = await load('/src/lib/server/logging/http.ts');
+			const e = event();
+			const res = await httpModule.observeRequest(e, async () => {
+				throw new Error('wrapper exploded token=abc123');
+			});
+			assert.equal(res.status, 500);
+			assert.deepEqual(await res.json(), {
+				error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' }
+			});
+			assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+			assert.equal(res.headers.get('cache-control'), 'private, no-store');
+			assert.match(res.headers.get('content-security-policy'), /default-src 'none'/);
+			assert.equal(res.headers.get('x-request-id'), e.locals.requestId);
+			assert.equal(events('http.unhandled_error')[0].requestId, e.locals.requestId);
+			assert.ok(!allText().includes('abc123'));
+		}
+	);
+
+	await t.test(
+		'W-F. redacción lineal: entradas adversarias no bloquean el event loop (ReDoS)',
+		() => {
+			// Before 5.4W-F 'token.' x3000 took ~30 s in redactString (nested quantifiers).
+			const adversarial = [
+				'token.'.repeat(3000),
+				'pass'.repeat(4096),
+				'a-'.repeat(8192),
+				'x.'.repeat(8192) + '=',
+				('"pass' + 'a'.repeat(50)).repeat(300),
+				'"' + 'k'.repeat(60) + '":"' + '\\"'.repeat(4000),
+				'a://'.repeat(4000),
+				'a://' + 'b'.repeat(16000),
+				'Bearer '.repeat(2000),
+				'f'.repeat(16384)
+			];
+			const started = performance.now();
+			for (const input of adversarial) {
+				redact.redactString(input, 4096);
+				redact.serializeError(new Error(input));
+			}
+			const elapsed = performance.now() - started;
+			assert.ok(elapsed < 1000, `redaction took ${Math.round(elapsed)} ms`);
+			// the linear rules still redact
+			assert.equal(redact.redactString('session_token=abc; x=1'), 'session_token=[REDACTED]; x=1');
+			assert.equal(
+				redact.redactString('{"apiKey": "k-1", "name": "n"}'),
+				'{"apiKey": "[REDACTED]", "name": "n"}'
+			);
+		}
+	);
+
 	await t.test('28. cabeceras de seguridad W-C intactas', async () => {
 		const res = await handle(event());
 		assert.equal(res.headers.get('x-content-type-options'), 'nosniff');

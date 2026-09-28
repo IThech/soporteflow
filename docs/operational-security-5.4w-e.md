@@ -108,6 +108,9 @@ Invalid server configuration: BETTER_AUTH_SECRET is a trivial or default value; 
 - **Límites**: string 512 (stack 4096), profundidad 4, 32 claves, 20 elementos; línea ≤ 8 KiB.
   `Request`/`Response`/streams/buffers nunca se serializan.
 - Es una red de seguridad: el código registra ids y códigos, **nunca cuerpos**.
+- 5.4W-F: todas las reglas son lineales (sin cuantificadores anidados sobre clases solapadas;
+  claves de pares acotadas y clasificadas en el replacer). Antes, `token.` ×3000 bloqueaba ~30 s el
+  event loop; test de regresión en `operational-security`.
 
 **No registrar nunca**: contraseñas, email+contraseña, tokens (invitación, sesión, lease), cookies,
 cabeceras de autorización, secretos de webhook o su firma, URLs destino de webhook (pueden llevar

@@ -31,23 +31,33 @@ export function isSensitiveKey(key: string): boolean {
 	return SENSITIVE_KEY.test(normalizeKey(key));
 }
 
-const STRING_RULES: readonly [RegExp, string][] = [
+/** Words that make a `key=value` / `"key": "value"` pair sensitive (checked on the key only). */
+const SENSITIVE_PAIR_KEY = /pass|pwd|secret|token|api[_-]?key|authorization|session|cookie/i;
+
+type Replacer = string | ((match: string, ...groups: string[]) => string);
+
+/**
+ * 5.4W-F (ReDoS fix): every rule is linear in the input. No `[x]*literal[x]*` shapes over
+ * overlapping classes: pair keys are matched with a bounded class and classified in the
+ * replacer, schemes/userinfo are length-bounded, and token runs are anchored by lookbehind.
+ */
+const STRING_RULES: readonly [RegExp, Replacer][] = [
 	// scheme://user:password@host -> scheme://[REDACTED]@host
-	[/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, `$1${REDACTED}@`],
+	[/\b([a-z][a-z0-9+.-]{0,31}:\/\/)[^\s/@]{1,256}@/gi, `$1${REDACTED}@`],
 	[/\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+/=-]+/gi, `$1 ${REDACTED}`],
 	[/whsec_[A-Za-z0-9_-]+/g, `whsec_${REDACTED}`],
 	// cookie / query / form pairs: session_token=…, password=…, token=…
 	[
-		/\b([A-Za-z0-9_.-]*(?:pass(?:word)?|pwd|secret|token|api[_-]?key|authorization|session)[A-Za-z0-9_.-]*)=([^\s&;,"']+)/gi,
-		`$1=${REDACTED}`
+		/(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{1,64})=([^\s&;,"']+)/g,
+		(match, key) => (SENSITIVE_PAIR_KEY.test(key) ? `${key}=${REDACTED}` : match)
 	],
 	// JSON-ish pairs: "password": "…"
 	[
-		/("[A-Za-z0-9_.-]*(?:pass(?:word)?|pwd|secret|token|api[_-]?key|authorization|cookie)[A-Za-z0-9_.-]*"\s*:\s*)"(?:[^"\\]|\\.)*"/gi,
-		`$1"${REDACTED}"`
+		/"([A-Za-z0-9_.-]{1,64})"(\s{0,8}:\s{0,8})"(?:[^"\\]|\\.)*"/g,
+		(match, key, colon) => (SENSITIVE_PAIR_KEY.test(key) ? `"${key}"${colon}"${REDACTED}"` : match)
 	],
 	// 32-byte keys written as hex (e.g. WEBHOOK_SECRET_ENCRYPTION_KEY)
-	[/\b[0-9a-f]{64}\b/gi, REDACTED],
+	[/(?<![0-9A-Za-z])[0-9a-f]{64}(?![0-9A-Za-z])/gi, REDACTED],
 	// 32-byte values in standard base64 (44 chars, one '=' of padding)
 	[/(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])/g, REDACTED],
 	// Opaque bearer-like tokens: invitation tokens are 43 base64url chars; any unbroken
@@ -59,7 +69,11 @@ const STRING_RULES: readonly [RegExp, string][] = [
 /** Scrubs embedded credentials from free text and truncates it. */
 export function redactString(value: string, max: number = LOG_LIMITS.maxString): string {
 	let out = value.length > max * 4 ? value.slice(0, max * 4) : value;
-	for (const [pattern, replacement] of STRING_RULES) out = out.replace(pattern, replacement);
+	for (const [pattern, replacement] of STRING_RULES)
+		out =
+			typeof replacement === 'string'
+				? out.replace(pattern, replacement)
+				: out.replace(pattern, replacement as (substring: string, ...args: string[]) => string);
 	return out.length > max ? `${out.slice(0, max)}…[truncated ${value.length - max}]` : out;
 }
 

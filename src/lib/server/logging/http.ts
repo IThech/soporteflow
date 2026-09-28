@@ -52,9 +52,19 @@ export async function observeRequest(
 			response = await run();
 		} catch (error) {
 			logError('http.unhandled_error', error);
+			// Last resort (the W-C wrapper itself failed): keep the W-C baseline headers anyway.
 			response = Response.json(
 				{ error: { code: 'INTERNAL_ERROR', message: 'Internal server error.' } },
-				{ status: 500, headers: { 'Cache-Control': 'private, no-store' } }
+				{
+					status: 500,
+					headers: {
+						'Cache-Control': 'private, no-store',
+						'X-Content-Type-Options': 'nosniff',
+						'Referrer-Policy': 'no-referrer',
+						'Content-Security-Policy':
+							"default-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"
+					}
+				}
 			);
 		}
 		const status = response.status;
