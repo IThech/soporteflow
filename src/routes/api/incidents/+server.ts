@@ -102,13 +102,14 @@ export const POST: RequestHandler = async (event) => {
 
 	// 2.1 Strict shape: unknown properties (categoryName, subcategoryId, classification,
 	// routing, defaultTeamId, demo fields...) are rejected instead of silently ignored.
+	// clientUserId is NOT part of this contract: a manual creation's requester is always the
+	// authenticated principal (derived below). Sending it is rejected (400), never honored.
 	const allowedKeys = new Set([
 		'organizationId',
 		'title',
 		'description',
 		'client',
 		'priority',
-		'clientUserId',
 		'siteId',
 		'categoryId',
 		'slaPolicyId'
@@ -158,30 +159,13 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
-	// 4.1 Requester (5.4S-B). Choosing another member as requester (clientUserId) gives that
-	// member read access through incidents:view_requested, so it is reserved to callers that can
-	// already see every incident of the tenant (incidents:view_all: support staff / admin).
-	// Anyone else creates the incident for themselves: clientUserId is set by the server to the
-	// principal; an explicit different value is refused (never silently re-targeted).
-	const canChooseRequester = await authorizeAction(event.request.headers, {
-		organizationId,
-		permissionId: 'incidents:view_all'
-	});
-	let clientUserId = body.clientUserId as string | null | undefined;
-	if (!canChooseRequester) {
-		if (clientUserId !== undefined && clientUserId !== null && clientUserId !== principal.userId) {
-			return json(
-				{
-					error: {
-						code: 'FORBIDDEN',
-						message: 'Permission denied.'
-					}
-				},
-				{ status: 403 }
-			);
-		}
-		clientUserId = principal.userId;
-	}
+	// 4.1 Requester. A manual creation through this endpoint is always requested by its author:
+	// clientUserId is derived from the authenticated principal, for every caller (customers and
+	// staff alike; incidents:view_all is a READ capability, not a right to act on behalf of
+	// someone else). createdByUserId (author) and clientUserId (requester) stay distinct concepts
+	// in the model: future workflows ("create on behalf of", e-mail ingestion, imports) may set a
+	// different requester through the service with their own explicit permission — never here.
+	const clientUserId = principal.userId;
 
 	// 4.2 SLA (5.4T-B). Deadlines and snapshot are always server-owned. Choosing the policy
 	// (a UUID, or null for "no SLA") requires sla:assign; without it the server applies the
@@ -206,16 +190,12 @@ export const POST: RequestHandler = async (event) => {
 
 	// 5. Execute service. 5.4W-B: the checks above are pre-checks; inside the creation transaction
 	// (organization FOR SHARE) the capabilities are re-read and every decision that depended on
-	// them (create, choosing another requester, choosing the SLA) is re-validated.
+	// them (create, choosing the SLA) is re-validated. The requester is always the principal.
 	try {
 		const { incident, audience } = await withIncidentActor(
 			db,
 			{ userId: principal.userId, organizationId, permissionIds: ['incidents:create'] },
 			async (tx, scope) => {
-				const choosesRequester =
-					clientUserId !== undefined && clientUserId !== null && clientUserId !== principal.userId;
-				if (choosesRequester && !scope.permissions.includes('incidents:view_all'))
-					throw new ActorAuthorizationError();
 				if (slaPolicyId !== undefined && !scope.permissions.includes('sla:assign'))
 					throw new ActorAuthorizationError();
 				const result = await createIncidentRecord(

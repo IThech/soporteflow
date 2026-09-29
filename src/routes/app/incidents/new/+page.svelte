@@ -6,7 +6,6 @@
 	import { signOut } from '$lib/api/auth';
 	import { listCategories } from '$lib/api/categories';
 	import { submitIncidentCreation } from '$lib/api/incident-create';
-	import { listMemberships } from '$lib/api/memberships';
 	import { listSites } from '$lib/api/sites';
 	import { listSlaPolicies } from '$lib/api/sla-policies';
 	import { navigationModel } from '$lib/app/capabilities';
@@ -63,7 +62,6 @@
 		sites: (organizationId, signal) => listSites({ organizationId, activeOnly: true, signal }),
 		categories: (organizationId, signal) =>
 			listCategories({ organizationId, activeOnly: true, signal }),
-		memberships: (organizationId, signal) => listMemberships({ organizationId, signal }),
 		slaPolicies: (organizationId, signal) =>
 			listSlaPolicies({ organizationId, active: true, signal })
 	});
@@ -176,7 +174,7 @@
 		if (!owner || !canCreate) return {};
 		const found = validateCreateDraft(draft);
 		if (Object.keys(found).length > 0) return (errors = found);
-		const request = toCreateRequest(draft, sections, owner.userId);
+		const request = toCreateRequest(draft, sections);
 		const gate = checkCreateRequest(owner.organizationId, request);
 		if (Object.keys(gate).length > 0) return (errors = gate);
 		errors = {};
@@ -330,7 +328,6 @@
 					{errors}
 					{sections}
 					catalogs={$catalogs}
-					selfName={$context.user?.name ?? null}
 					submitting={$creator.status === 'submitting'}
 					submitBlockedSeconds={blockedSeconds}
 					onsubmit={handleSubmit}

@@ -13,14 +13,13 @@ import type { IncidentPriority } from './incident-views.ts';
 /**
  * UI-2A — POST /api/incidents contract (frontend side). Exactly the properties the strict server
  * allowlist accepts (organizationId travels separately):
- *   title, description, client, priority, clientUserId, siteId, categoryId, slaPolicyId.
+ *   title, description, client, priority, siteId, categoryId, slaPolicyId.
  * Never sent: status (the server sets 'open'), supportLevel (server sets 'N1'), team/assignee,
- * attachments. `client` (free-text label) and `clientUserId` (requester member) are distinct
- * concepts: neither is derived from the other here.
+ * attachments, and the requester: a manual creation is always requested by the authenticated
+ * user, whom the SERVER sets as clientUserId (the endpoint rejects the property). `client` is a
+ * free-text label (a company/customer name), unrelated to the requester user.
  *
  * Optional ids follow the server semantics:
- * - clientUserId: omitted/null -> the server decides (the caller itself unless it may choose,
- *   incidents:view_all); a different member without that capability is a 403.
  * - slaPolicyId: omitted -> the organization's default policy; null -> no SLA; UUID -> that
  *   policy. Sending it at all requires sla:assign (403 otherwise).
  * Validation mirrors only the real server rules (trimmed non-empty title/description/client,
@@ -32,7 +31,6 @@ export interface CreateIncidentRequest {
 	description: string;
 	client: string;
 	priority: IncidentPriority;
-	clientUserId?: string | null;
 	siteId?: string | null;
 	categoryId?: string | null;
 	slaPolicyId?: string | null;
@@ -43,7 +41,6 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 	'description',
 	'client',
 	'priority',
-	'clientUserId',
 	'siteId',
 	'categoryId',
 	'slaPolicyId'
@@ -103,7 +100,6 @@ export function buildCreateIncidentPayload(
 		throw new CreateIncidentInputError('priority', 'La prioridad no es válida.');
 	payload.priority = input.priority;
 	const ids: [CreateIncidentField, string][] = [
-		['clientUserId', 'El solicitante'],
 		['siteId', 'La sede'],
 		['categoryId', 'La categoría'],
 		['slaPolicyId', 'La política SLA']

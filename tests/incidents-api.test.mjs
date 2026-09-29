@@ -211,7 +211,7 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 	});
 	const sessionA = await createSession(f, userA.id);
 
-	// 5.4S-B: elegir otro solicitante (clientUserId) exige incidents:view_all (personal de soporte).
+	// Personal de soporte (incidents:view_all): también es el solicitante de lo que crea (no elige a otro).
 	const staffA = await identity(f);
 	const [membershipStaffA] = await db
 		.insert(s.memberships)
@@ -720,65 +720,45 @@ test('SoporteFlow — Etapa 5.2A: Endpoint HTTP POST /api/incidents', async (t) 
 	// =========================================================================
 	// TENANT / REFERENCIAS (Tests 21 - 26)
 	// =========================================================================
-	await t.test('21. clientUserId válido de la misma organización -> 201', async () => {
-		const res = await callPost(POST, {
-			body: { ...basePayloadA, clientUserId: clientUserA.id },
-			headers: { cookie: sessionStaffA.cookieHeader }
-		});
-		assert.equal(res.status, 201);
-		assert.equal(res.json.incident.clientUserId, clientUserA.id);
-		assert.equal(
-			(await persistedHistory(db, s, res.json.incident.id))[0].payload.clientUserId,
-			clientUserA.id
-		);
-	});
-
 	await t.test(
-		'22. clientUserId cross-tenant vs inexistente son indistinguibles -> 404',
+		'21. staff con view_all crea: el solicitante es el propio autor (sin elegir a otro)',
 		async () => {
-			const nonexistentClientUserId = randomUUID();
-			const resCrossTenant = await callPost(POST, {
-				body: { ...basePayloadA, clientUserId: clientUserB.id },
+			const res = await callPost(POST, {
+				body: basePayloadA,
 				headers: { cookie: sessionStaffA.cookieHeader }
 			});
-			const resNonexistent = await callPost(POST, {
-				body: { ...basePayloadA, clientUserId: nonexistentClientUserId },
-				headers: { cookie: sessionStaffA.cookieHeader }
-			});
-
-			// Mismo status HTTP (404)
-			assert.equal(resCrossTenant.status, 404);
-			assert.equal(resNonexistent.status, 404);
-
-			// Mismo error.code
-			assert.equal(resCrossTenant.json.error?.code, 'CLIENT_USER_MEMBERSHIP_NOT_FOUND');
-			assert.equal(resNonexistent.json.error?.code, 'CLIENT_USER_MEMBERSHIP_NOT_FOUND');
-
-			// Mismo error.message
+			assert.equal(res.status, 201);
+			assert.equal(res.json.incident.clientUserId, staffA.id);
+			assert.equal(res.json.incident.createdByUserId, staffA.id);
 			assert.equal(
-				resCrossTenant.json.error?.message,
-				'Client user has no membership in this organization'
+				(await persistedHistory(db, s, res.json.incident.id))[0].payload.clientUserId,
+				staffA.id
 			);
-			assert.equal(
-				resNonexistent.json.error?.message,
-				'Client user has no membership in this organization'
-			);
-
-			// Misma estructura JSON completa
-			assert.deepEqual(resCrossTenant.json, resNonexistent.json);
-			assert.deepEqual(Object.keys(resCrossTenant.json), ['error']);
-			assert.deepEqual(Object.keys(resCrossTenant.json.error).sort(), ['code', 'message'].sort());
 		}
 	);
 
-	await t.test('23. clientUserId inactivo -> 409', async () => {
-		const res = await callPost(POST, {
-			body: { ...basePayloadA, clientUserId: clientUserInactiveA.id },
-			headers: { cookie: sessionStaffA.cookieHeader }
-		});
-		assert.equal(res.status, 409);
-		assert.equal(res.json.error?.code, 'CLIENT_USER_INACTIVE');
-	});
+	await t.test(
+		'22. clientUserId no forma parte del contrato: cualquier valor -> 400, nada creado',
+		async () => {
+			const before = (await db.select().from(s.incidents)).length;
+			// same-org member, other tenant, nonexistent, the actor itself, null — even for view_all
+			for (const clientUserId of [clientUserA.id, clientUserB.id, randomUUID(), staffA.id, null]) {
+				const res = await callPost(POST, {
+					body: { ...basePayloadA, clientUserId },
+					headers: { cookie: sessionStaffA.cookieHeader }
+				});
+				assert.equal(res.status, 400, String(clientUserId));
+				assert.deepEqual(res.json, {
+					error: { code: 'INVALID_INPUT', message: "Unknown property 'clientUserId'." }
+				});
+			}
+			assert.equal((await db.select().from(s.incidents)).length, before);
+		}
+	);
+
+	// 23. (removed) "clientUserId inactivo -> 409": a requester can no longer be chosen over HTTP.
+	// The service-level validation of an inactive requester stays covered in
+	// tests/incidents-service.test.mjs (CLIENT_USER_INACTIVE).
 
 	await t.test('24. siteId válido de la misma organización -> 201', async () => {
 		const res = await callPost(POST, {

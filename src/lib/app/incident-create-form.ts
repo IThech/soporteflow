@@ -16,13 +16,12 @@ import { tenantKey, type TenantIdentity } from './tenant-identity.ts';
  * UI-2B — pure model of the "new incident" form (no Svelte, unit-tested in Node).
  *
  * The form edits a Draft; `toCreateRequest` turns it into the UI-2A CreateIncidentRequest:
- * - requester (only with the selector): 'self' -> the actor's own user id, another member -> that
- *   user id. Without the selector clientUserId is omitted (the server then uses the caller);
+ * - no requester: a manual creation is always requested by the authenticated user, whom the
+ *   server sets as clientUserId (the form has no requester state and never sends it);
  * - SLA 'auto' -> slaPolicyId OMITTED (server default policy); 'none' -> null (explicit "no SLA");
  *   a policy -> its UUID. Choosing 'none'/a policy is only offered with the right capabilities;
  * - empty site/category -> omitted.
  * Which optional sections exist depends ONLY on real capabilities (never roles):
- * - requester: incidents:view_all (server rule to choose another requester) + memberships:view;
  * - site: sites:view;   category: categories:view;
  * - SLA: sla:assign (else Automático only); naming a policy also needs sla:view.
  * Values for the optional selects only ever come from the real catalogs (no typed UUIDs).
@@ -40,8 +39,6 @@ export interface CreateIncidentDraft {
 	description: string;
 	client: string;
 	priority: IncidentPriority;
-	/** 'self' or the user id of another active member (from the memberships catalog). */
-	requester: string;
 	/** '' = none. */
 	siteId: string;
 	/** '' = none. */
@@ -50,7 +47,6 @@ export interface CreateIncidentDraft {
 	sla: string;
 }
 
-export const REQUESTER_SELF = 'self';
 export const SLA_AUTO = 'auto';
 export const SLA_NONE = 'none';
 
@@ -60,7 +56,6 @@ export function emptyCreateDraft(): CreateIncidentDraft {
 		description: '',
 		client: '',
 		priority: 'medium',
-		requester: REQUESTER_SELF,
 		siteId: '',
 		categoryId: '',
 		sla: SLA_AUTO
@@ -78,7 +73,6 @@ export function isDraftDirty(draft: CreateIncidentDraft): boolean {
 }
 
 export interface CreateFormSections {
-	requester: boolean;
 	site: boolean;
 	category: boolean;
 	/** Offer SLA choices at all (Automático / Sin SLA). */
@@ -91,7 +85,6 @@ export interface CreateFormSections {
 export function createFormSections(capabilities: readonly string[]): CreateFormSections {
 	const has = (id: string) => capabilities.includes(id);
 	const sections = {
-		requester: has('incidents:view_all') && has('memberships:view'),
 		site: has('sites:view'),
 		category: has('categories:view'),
 		sla: has('sla:assign'),
@@ -108,7 +101,6 @@ export const CREATE_FIELD_ORDER: readonly CreateIncidentField[] = [
 	'description',
 	'client',
 	'priority',
-	'clientUserId',
 	'siteId',
 	'categoryId',
 	'slaPolicyId'
@@ -137,9 +129,7 @@ export function validateCreateDraft(draft: CreateIncidentDraft): CreateFieldErro
  */
 export function toCreateRequest(
 	draft: CreateIncidentDraft,
-	sections: CreateFormSections,
-	/** The signed-in user (identity.userId): the explicit "Yo" of the requester selector. */
-	actorUserId: string
+	sections: CreateFormSections
 ): CreateIncidentRequest {
 	const request: CreateIncidentRequest = {
 		title: draft.title,
@@ -147,11 +137,6 @@ export function toCreateRequest(
 		client: draft.client,
 		priority: draft.priority
 	};
-	// With the selector (the actor may choose: incidents:view_all) the server keeps exactly what it
-	// receives — an omitted clientUserId is stored as null — so "Yo" must be sent explicitly.
-	// Without the selector nothing is sent: the server sets the actor itself (it may not choose).
-	if (sections.requester)
-		request.clientUserId = draft.requester === REQUESTER_SELF ? actorUserId : draft.requester;
 	if (sections.site && draft.siteId) request.siteId = draft.siteId;
 	if (sections.category && draft.categoryId) request.categoryId = draft.categoryId;
 	if (sections.sla) {
@@ -184,12 +169,7 @@ const FIELD_ERRORS: Readonly<Record<string, [CreateIncidentField, string]>> = {
 	CATEGORY_NOT_FOUND: ['categoryId', 'La categoría seleccionada ya no está disponible.'],
 	CATEGORY_INACTIVE: ['categoryId', 'La categoría seleccionada está inactiva.'],
 	SLA_POLICY_NOT_FOUND: ['slaPolicyId', 'La política SLA seleccionada ya no está disponible.'],
-	SLA_POLICY_INACTIVE: ['slaPolicyId', 'La política SLA seleccionada está inactiva.'],
-	CLIENT_USER_MEMBERSHIP_NOT_FOUND: [
-		'clientUserId',
-		'El solicitante seleccionado ya no pertenece a la organización.'
-	],
-	CLIENT_USER_INACTIVE: ['clientUserId', 'El solicitante seleccionado está inactivo.']
+	SLA_POLICY_INACTIVE: ['slaPolicyId', 'La política SLA seleccionada está inactiva.']
 };
 
 export interface CreateErrorView {

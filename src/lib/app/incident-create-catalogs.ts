@@ -1,6 +1,5 @@
 import { ApiError, isApiError, networkApiError } from '../api/errors.ts';
 import type { Category } from '../api/categories.ts';
-import type { Membership } from '../api/memberships.ts';
 import type { Site } from '../api/sites.ts';
 import type { SlaPolicy } from '../api/sla-policies.ts';
 import { presentApiError } from './error-presentation.ts';
@@ -15,7 +14,7 @@ import {
 import { tenantKey, type TenantIdentity } from './tenant-identity.ts';
 
 /**
- * UI-2B — the optional catalogs of the creation form (sites, categories, members as requesters,
+ * UI-2B — the optional catalogs of the creation form (sites, categories,
  * SLA policies), on top of the UI-2A tenant-bound cache: keyed by user + organization +
  * generation, deduplicated, never persisted, dropped on any identity change.
  *
@@ -31,7 +30,7 @@ export interface CatalogOption {
 	readonly hint?: string;
 }
 
-export type CreateCatalogName = 'sites' | 'categories' | 'memberships' | 'slaPolicies';
+export type CreateCatalogName = 'sites' | 'categories' | 'slaPolicies';
 
 export interface CatalogView {
 	readonly status: 'idle' | 'loading' | 'ready' | 'error';
@@ -46,7 +45,6 @@ export type CreateCatalogsState = Readonly<Record<CreateCatalogName, CatalogView
 export interface CreateCatalogLoaders {
 	sites: (organizationId: string, signal: AbortSignal) => Promise<Site[]>;
 	categories: (organizationId: string, signal: AbortSignal) => Promise<Category[]>;
-	memberships: (organizationId: string, signal: AbortSignal) => Promise<Membership[]>;
 	slaPolicies: (organizationId: string, signal: AbortSignal) => Promise<SlaPolicy[]>;
 }
 
@@ -63,24 +61,6 @@ export function categoryOptions(categories: readonly Category[]): CatalogOption[
 	return categories
 		.filter((category) => category.active)
 		.map((category) => ({ value: category.id, label: category.name }))
-		.sort(byLabel);
-}
-
-/**
- * Other active members of the organization (active membership AND active user); the actor is
- * the default "self" choice and is not repeated. Labeled by name (+ email when present).
- */
-export function requesterOptions(
-	memberships: readonly Membership[],
-	selfUserId: string
-): CatalogOption[] {
-	return memberships
-		.filter((m) => m.active && m.user.active && m.user.id !== selfUserId && m.user.name.trim())
-		.map((m) => ({
-			value: m.user.id,
-			label: m.user.name,
-			...(m.user.email ? { hint: m.user.email } : {})
-		}))
 		.sort(byLabel);
 }
 
@@ -112,14 +92,12 @@ const IDLE: CatalogView = Object.freeze({
 const EMPTY_STATE: CreateCatalogsState = Object.freeze({
 	sites: IDLE,
 	categories: IDLE,
-	memberships: IDLE,
 	slaPolicies: IDLE
 });
 
 const CACHE_NAME: Record<CreateCatalogName, CatalogName> = {
 	sites: 'sites',
 	categories: 'categories',
-	memberships: 'memberships',
 	slaPolicies: 'slaPolicies'
 };
 
@@ -127,13 +105,11 @@ const CACHE_NAME: Record<CreateCatalogName, CatalogName> = {
 const CACHE_FILTERS: Record<CreateCatalogName, Readonly<Record<string, boolean>>> = {
 	sites: { activeOnly: true },
 	categories: { activeOnly: true },
-	memberships: {},
 	slaPolicies: { active: true }
 };
 
 export function catalogsFor(sections: CreateFormSections): CreateCatalogName[] {
 	const names: CreateCatalogName[] = [];
-	if (sections.requester) names.push('memberships');
 	if (sections.site) names.push('sites');
 	if (sections.category) names.push('categories');
 	if (sections.slaPolicies) names.push('slaPolicies');
@@ -163,14 +139,12 @@ export function createIncidentCreateCatalogs(
 		for (const listener of listeners) listener(state);
 	}
 
-	function options(name: CreateCatalogName, raw: unknown, owner: TenantIdentity) {
+	function options(name: CreateCatalogName, raw: unknown) {
 		switch (name) {
 			case 'sites':
 				return siteOptions(raw as Site[]);
 			case 'categories':
 				return categoryOptions(raw as Category[]);
-			case 'memberships':
-				return requesterOptions(raw as Membership[], owner.userId);
 			case 'slaPolicies':
 				return slaPolicyOptions(raw as SlaPolicy[]);
 		}
@@ -189,7 +163,7 @@ export function createIncidentCreateCatalogs(
 			if (tenantKey(identity) !== tenantKey(owner)) return;
 			set(name, {
 				status: 'ready',
-				options: options(name, raw, owner),
+				options: options(name, raw),
 				error: null,
 				errorMessage: null
 			});

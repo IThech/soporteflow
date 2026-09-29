@@ -590,7 +590,11 @@ test('SoporteFlow — Etapa 5.4T-B: SLA aplicado a incidencias', async (t) => {
 		async () => {
 			const both = await member(A.org, [A.tech, A.customer]);
 			const mine = (await create(both, A.org, { slaPolicyId: premiumA.id })).json.incident;
-			assert.equal(mine.clientUserId, null, 'staff con view_all no se fija como solicitante');
+			assert.equal(
+				mine.clientUserId,
+				both.user.id,
+				'la creación manual fija al autor como solicitante (también con view_all)'
+			);
 			const requested = (
 				await createIncidentRecord(
 					db,

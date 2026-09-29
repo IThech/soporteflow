@@ -627,11 +627,6 @@ export interface CreateIncidentInput {
 	description: string;
 	client: string;
 	priority: 'low' | 'medium' | 'high' | 'urgent';
-	/**
-	 * UI-2A: requester member (distinct from the free-text `client`). Omitted/null: the server
-	 * decides (the caller itself unless it holds incidents:view_all).
-	 */
-	clientUserId?: string | null;
 	/** UI-2A: optional site (active, same organization). */
 	siteId?: string | null;
 	/** Optional Core category (active, same organization). Omitted or null: no category. */
@@ -675,10 +670,7 @@ export async function createIncident(
 	) {
 		throw new IncidentApiError(0, 'INVALID_INPUT', 'La política SLA seleccionada no es válida.');
 	}
-	for (const [key, label] of [
-		['clientUserId', 'El solicitante seleccionado no es válido.'],
-		['siteId', 'La sede seleccionada no es válida.']
-	] as const) {
+	for (const [key, label] of [['siteId', 'La sede seleccionada no es válida.']] as const) {
 		const value = input?.[key];
 		if (
 			value !== undefined &&
@@ -695,7 +687,6 @@ export async function createIncident(
 		client: input.client,
 		priority: input.priority
 	};
-	if (input.clientUserId !== undefined) payload.clientUserId = input.clientUserId;
 	if (input.siteId !== undefined) payload.siteId = input.siteId;
 	if (input.categoryId !== undefined) payload.categoryId = input.categoryId;
 	if (input.slaPolicyId !== undefined) payload.slaPolicyId = input.slaPolicyId;

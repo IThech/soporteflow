@@ -4,7 +4,6 @@
 	import {
 		CREATE_FIELD_ORDER,
 		PRIORITY_OPTIONS,
-		REQUESTER_SELF,
 		SLA_AUTO,
 		SLA_NONE,
 		type CreateFieldErrors,
@@ -36,7 +35,6 @@
 		errors,
 		sections,
 		catalogs,
-		selfName,
 		submitting = false,
 		submitBlockedSeconds = 0,
 		onsubmit,
@@ -47,7 +45,6 @@
 		errors: CreateFieldErrors;
 		sections: CreateFormSections;
 		catalogs: CreateCatalogsState;
-		selfName: string | null;
 		submitting?: boolean;
 		/** 429 cooldown: submitting is disabled for these seconds. */
 		submitBlockedSeconds?: number;
@@ -75,13 +72,6 @@
 		{ value: '', label },
 		...view.options.map((option) => ({ value: option.value, label: option.label }))
 	];
-	const requesterOptions = $derived([
-		{ value: REQUESTER_SELF, label: selfName ? `Yo (${selfName})` : 'Yo' },
-		...catalogs.memberships.options.map((option) => ({
-			value: option.value,
-			label: option.hint ? `${option.label} · ${option.hint}` : option.label
-		}))
-	]);
 	const slaOptions = $derived([
 		{ value: SLA_AUTO, label: 'Automático' },
 		...(sections.slaPolicies
@@ -183,27 +173,7 @@
 				<h2 class="sf-section-title" id={contextHeadingId}>Contexto</h2>
 				<p class="sf-section-hint">Opcional. Ayuda a clasificar y atender la incidencia.</p>
 			</div>
-			<div class="sf-grid">
-				{#if sections.requester}
-					<div>
-						<Field
-							label="Solicitante"
-							hint="Persona de la organización que solicita la atención."
-							error={errors.clientUserId}
-						>
-							{#snippet children(control)}
-								<Select
-									{control}
-									bind:value={draft.requester}
-									bind:element={controls.clientUserId}
-									options={requesterOptions}
-									disabled={submitting}
-								/>
-							{/snippet}
-						</Field>
-						{@render catalogState('memberships', catalogs.memberships)}
-					</div>
-				{/if}
+			<div class="sf-grid sf-grid-context">
 				{#if sections.site}
 					<div>
 						<Field label="Sede" error={errors.siteId}>
@@ -322,6 +292,10 @@
 	}
 	.sf-grid:has(.sf-span-wide) {
 		grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+	}
+	/* Optional context (site / category / SLA, 1-3 fields): they share the row evenly, no holes. */
+	.sf-grid-context {
+		grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
 	}
 	.sf-catalog-note {
 		margin: var(--space-2) 0 0;

@@ -20,8 +20,7 @@ import {
 } from '../src/lib/app/incident-create-form.ts';
 import {
 	catalogsFor,
-	createIncidentCreateCatalogs,
-	requesterOptions
+	createIncidentCreateCatalogs
 } from '../src/lib/app/incident-create-catalogs.ts';
 import { createIncidentCreateController } from '../src/lib/app/incident-create-controller.ts';
 import { presentMutationFailure } from '../src/lib/app/error-presentation.ts';
@@ -171,23 +170,19 @@ test('UI-2B — página y formulario reales (SSR)', async (t) => {
 
 	await t.test('7-9. contexto opcional solo con las capabilities reales', () => {
 		const minimal = renderPage(['incidents:create']);
-		for (const label of ['Solicitante', 'Sede', 'Categoría', 'SLA'])
+		for (const label of ['Sede', 'Categoría', 'SLA'])
 			assert.doesNotMatch(minimal, new RegExp(`>\\s*${label}\\s*<`), label);
 		const full = renderPage(ALL_CAPS);
-		for (const label of ['Solicitante', 'Sede', 'Categoría', 'SLA'])
+		for (const label of ['Sede', 'Categoría', 'SLA'])
 			assert.match(full, new RegExp(`<label[^>]*>\\s*${label}`), label);
 		assert.match(full, /<option value="auto"[^>]*selected[^>]*>Automático/);
 		assert.match(full, /<option value="none"[^>]*>Sin SLA/);
-		assert.match(full, /Yo \(Ana Pérez\)/);
-		// view_all without memberships:view (or the reverse) never offers other requesters
-		assert.doesNotMatch(
-			renderPage(['incidents:create', 'incidents:view_all']),
-			/>\s*Solicitante\s*</
-		);
-		assert.doesNotMatch(
-			renderPage(['incidents:create', 'memberships:view']),
-			/>\s*Solicitante\s*</
-		);
+		// The requester is always the author (server-derived): never a selector, whatever the
+		// capabilities (view_all + memberships:view included).
+		for (const html of [full, minimal]) {
+			assert.doesNotMatch(html, /Solicitante/);
+			assert.doesNotMatch(html, /Yo \(/);
+		}
 		// no UUID text fields anywhere
 		assert.doesNotMatch(full, /placeholder="[^"]*(UUID|uuid|0000)/);
 	});
@@ -199,10 +194,8 @@ test('UI-2B — página y formulario reales (SSR)', async (t) => {
 		catalogs: {
 			sites: { status: 'idle', options: [], error: null, errorMessage: null },
 			categories: { status: 'idle', options: [], error: null, errorMessage: null },
-			memberships: { status: 'idle', options: [], error: null, errorMessage: null },
 			slaPolicies: { status: 'idle', options: [], error: null, errorMessage: null }
 		},
-		selfName: 'Ana',
 		onsubmit: () => ({}),
 		oncancel: () => {},
 		onretrycatalog: () => {},
@@ -282,41 +275,38 @@ test('UI-2B — página y formulario reales (SSR)', async (t) => {
 	});
 });
 
-test('5-6/10-11. petición: campos reales, client y clientUserId separados, SLA', () => {
+test('5-6/10-11. petición: campos reales, client libre, sin solicitante, SLA', () => {
 	const sections = createFormSections(ALL_CAPS);
 	const draft = {
 		...emptyCreateDraft(),
 		title: ' T ',
 		description: 'D',
 		client: 'Etiqueta',
-		requester: OTHER,
 		siteId: SITE,
 		categoryId: CATEGORY
 	};
-	const auto = toCreateRequest(draft, sections, USER);
+	const auto = toCreateRequest(draft, sections);
 	assert.equal('slaPolicyId' in auto, false, 'Automático omite slaPolicyId');
-	assert.equal(auto.client, 'Etiqueta');
-	assert.equal(auto.clientUserId, OTHER);
+	assert.equal(auto.client, 'Etiqueta', '`client` sigue siendo texto libre');
 	const body = buildCreateIncidentPayload(ORG_A, auto);
-	for (const forbidden of ['status', 'supportLevel', 'teamId', 'assignedToUserId'])
+	for (const forbidden of ['status', 'supportLevel', 'teamId', 'assignedToUserId', 'clientUserId'])
 		assert.equal(forbidden in body, false, forbidden);
-	assert.equal(toCreateRequest({ ...draft, sla: 'none' }, sections, USER).slaPolicyId, null);
-	assert.equal(toCreateRequest({ ...draft, sla: POLICY }, sections, USER).slaPolicyId, POLICY);
+	assert.equal('requester' in emptyCreateDraft(), false, 'el borrador no tiene solicitante');
+	assert.equal('requester' in sections, false, 'no existe sección de solicitante');
+	assert.equal(toCreateRequest({ ...draft, sla: 'none' }, sections).slaPolicyId, null);
+	assert.equal(toCreateRequest({ ...draft, sla: POLICY }, sections).slaPolicyId, POLICY);
 	// without sla:assign neither null nor a policy is ever sent
 	const noSla = createFormSections(['incidents:create', 'sites:view']);
-	assert.equal('slaPolicyId' in toCreateRequest({ ...draft, sla: 'none' }, noSla, USER), false);
-	assert.equal('slaPolicyId' in toCreateRequest({ ...draft, sla: POLICY }, noSla, USER), false);
+	assert.equal('slaPolicyId' in toCreateRequest({ ...draft, sla: 'none' }, noSla), false);
+	assert.equal('slaPolicyId' in toCreateRequest({ ...draft, sla: POLICY }, noSla), false);
 	// a policy needs sla:view too (sla:assign alone: Automático / Sin SLA)
 	const assignOnly = createFormSections(['incidents:create', 'sla:assign']);
-	assert.equal(
-		'slaPolicyId' in toCreateRequest({ ...draft, sla: POLICY }, assignOnly, USER),
-		false
-	);
+	assert.equal('slaPolicyId' in toCreateRequest({ ...draft, sla: POLICY }, assignOnly), false);
 	// sections not offered never leak their stale values
-	const bare = toCreateRequest(draft, createFormSections(['incidents:create']), USER);
+	const bare = toCreateRequest(draft, createFormSections(['incidents:create']));
 	assert.deepEqual(Object.keys(bare).sort(), ['client', 'description', 'priority', 'title']);
-	// With the selector, "Yo" is sent explicitly (see the MEDIUM #1 test below)
-	assert.equal(toCreateRequest({ ...draft, requester: 'self' }, sections, USER).clientUserId, USER);
+	// even a smuggled clientUserId is refused by the UI-2A payload builder (never sent)
+	assert.throws(() => buildCreateIncidentPayload(ORG_A, { ...auto, clientUserId: OTHER }));
 });
 
 test('12. validación alineada con el backend', () => {
@@ -412,8 +402,7 @@ test('13-18. resultados: detalle, sin lectura, desconocido, 429, obsoleto, doble
 	creator.setIdentity(owner);
 	const request = toCreateRequest(
 		{ ...emptyCreateDraft(), title: 'T', description: 'D', client: 'C' },
-		createFormSections(owner.capabilities),
-		owner.userId
+		createFormSections(owner.capabilities)
 	);
 	const first = creator.submit(request);
 	assert.equal((await creator.submit(request)).status, 'busy');
@@ -435,8 +424,8 @@ test('presentación segura de errores del POST (sin mensajes técnicos del backe
 	assert.doesNotMatch(server.message, /stack/);
 	assert.equal(server.requestId, 'r-1');
 	assert.equal(
-		presentCreateError(new ApiError(404, 'CLIENT_USER_MEMBERSHIP_NOT_FOUND', 'x')).field.name,
-		'clientUserId'
+		presentCreateError(new ApiError(409, 'CATEGORY_INACTIVE', 'x')).field.name,
+		'categoryId'
 	);
 });
 
@@ -452,12 +441,15 @@ test('19. catálogos: tenant-bound, error no es lista vacía, cambio de tenant',
 	const controller = createIncidentCreateCatalogs({
 		sites: loader('sites'),
 		categories: loader('categories'),
-		memberships: loader('memberships'),
 		slaPolicies: loader('slaPolicies')
 	});
 	const a = identity(ALL_CAPS, ORG_A, 1);
 	const names = catalogsFor(createFormSections(ALL_CAPS));
-	assert.deepEqual(names.sort(), ['categories', 'memberships', 'sites', 'slaPolicies']);
+	assert.deepEqual(
+		names.sort(),
+		['categories', 'sites', 'slaPolicies'],
+		'sin catálogo de miembros'
+	);
 	controller.setIdentity(a, names);
 	assert.equal(controller.get().sites.status, 'loading');
 	gates.sites[0].resolve([
@@ -465,33 +457,13 @@ test('19. catálogos: tenant-bound, error no es lista vacía, cambio de tenant',
 		{ id: randomUUID(), name: 'Sede cerrada', active: false }
 	]);
 	gates.categories[0].reject(new ApiError(422, 'RESULT_LIMIT_EXCEEDED', 'x'));
-	gates.memberships[0].resolve([
-		{
-			id: randomUUID(),
-			active: true,
-			user: { id: USER, name: 'Ana', email: null, active: true },
-			roles: []
-		},
-		{
-			id: randomUUID(),
-			active: true,
-			user: { id: OTHER, name: 'Bruno', email: 'b@x.test', active: true },
-			roles: []
-		},
-		{
-			id: randomUUID(),
-			active: false,
-			user: { id: randomUUID(), name: 'Baja', email: null, active: true },
-			roles: []
-		}
-	]);
 	await new Promise((resolve) => setImmediate(resolve));
 	const state = controller.get();
 	assert.deepEqual(state.sites.options, [{ value: SITE, label: 'Sede Norte' }]);
 	assert.equal(state.categories.status, 'error');
 	assert.deepEqual(state.categories.options, [], 'error, no una lista vacía "lista"');
 	assert.match(state.categories.errorMessage, /demasiadas opciones/);
-	assert.deepEqual(state.memberships.options, [{ value: OTHER, label: 'Bruno', hint: 'b@x.test' }]);
+	assert.equal('memberships' in state, false, 'la creación ya no carga miembros');
 
 	// organization B: everything of A disappears at once; A's late answer is ignored
 	controller.setIdentity(identity(ALL_CAPS, ORG_B, 2), names);
@@ -507,23 +479,6 @@ test('19. catálogos: tenant-bound, error no es lista vacía, cambio de tenant',
 		'B carga sus propios datos'
 	);
 
-	// manual retry of a failed catalog (a safe GET)
-	controller.setIdentity(identity(ALL_CAPS, ORG_B, 2), names);
-	assert.deepEqual(
-		requesterOptions(
-			[
-				{
-					id: randomUUID(),
-					active: true,
-					user: { id: OTHER, name: 'X', email: null, active: false },
-					roles: []
-				}
-			],
-			USER
-		),
-		[],
-		'usuarios inactivos no son solicitantes'
-	);
 	controller.dispose();
 });
 

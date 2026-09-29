@@ -324,7 +324,6 @@ test('UI-2A — contrato de creación: campos reales, nada inventado', async () 
 		description: ' Sin tóner ',
 		client: ' Recepción ',
 		priority: 'medium',
-		clientUserId: REQUESTER,
 		siteId: null,
 		categoryId: randomUUID(),
 		slaPolicyId: null
@@ -332,7 +331,6 @@ test('UI-2A — contrato de creación: campos reales, nada inventado', async () 
 	assert.deepEqual(Object.keys(payload).sort(), [
 		'categoryId',
 		'client',
-		'clientUserId',
 		'description',
 		'organizationId',
 		'priority',
@@ -342,7 +340,16 @@ test('UI-2A — contrato de creación: campos reales, nada inventado', async () 
 	]);
 	assert.equal(payload.title, 'Impresora');
 	assert.equal(payload.client, 'Recepción', '`client` sigue siendo texto explícito');
-	assert.equal(payload.clientUserId, REQUESTER, 'clientUserId es otro concepto, no derivado');
+	assert.equal('clientUserId' in payload, false, 'el solicitante lo fija el servidor');
+	// a smuggled requester is refused before any request, never forwarded
+	assert.throws(() =>
+		buildCreateIncidentPayload(ORG, {
+			title: 'T',
+			description: 'D',
+			priority: 'low',
+			clientUserId: REQUESTER
+		})
+	);
 	assert.equal(payload.slaPolicyId, null, 'null (sin SLA) se conserva');
 	// omitted optional ids stay omitted (server defaults: requester, default SLA policy)
 	const minimal = buildCreateIncidentPayload(ORG, {

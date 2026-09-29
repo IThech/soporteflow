@@ -14,10 +14,7 @@ import {
 	planCreationFollowUp,
 	toCreateRequest
 } from '../src/lib/app/incident-create-form.ts';
-import {
-	createIncidentCreateCatalogs,
-	requesterOptions
-} from '../src/lib/app/incident-create-catalogs.ts';
+import { createIncidentCreateCatalogs } from '../src/lib/app/incident-create-catalogs.ts';
 import { createIncidentCreateController } from '../src/lib/app/incident-create-controller.ts';
 import {
 	createDraftLeaveGuard,
@@ -77,60 +74,27 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 const filled = { ...emptyCreateDraft(), title: 'T', description: 'D', client: 'Etiqueta' };
 
 // ------------------------------------------------------------------------------------------------
-// MEDIUM #1 — "Yo" as requester
+// Requester rule (product correction during UI-2C): a manual creation is always requested by its
+// author; the SERVER derives clientUserId from the principal. The form never has requester state.
 // ------------------------------------------------------------------------------------------------
 
-test('#1 A. con selector, "Yo" envía el userId real (el servidor no lo rellena para quien puede elegir)', () => {
-	const request = toCreateRequest(filled, createFormSections(PICKER), USER);
-	const body = buildCreateIncidentPayload(ORG_A, request);
-	assert.equal(body.clientUserId, USER);
-	assert.equal(body.client, 'Etiqueta', '`client` sigue siendo el texto explícito');
-});
-
-test('#1 B. con selector y otro miembro, se envía el userId elegido', () => {
-	const request = toCreateRequest(
-		{ ...filled, requester: OTHER },
-		createFormSections(PICKER),
-		USER
-	);
-	assert.equal(buildCreateIncidentPayload(ORG_A, request).clientUserId, OTHER);
-});
-
-test('#1 C. sin capacidad de elegir: sin selector y sin clientUserId (el servidor usa al actor)', () => {
+test('solicitante: ninguna combinación de capabilities ofrece elegirlo ni envía clientUserId', () => {
 	for (const caps of [
 		['incidents:create'],
 		['incidents:create', 'memberships:view'],
-		['incidents:create', 'incidents:view_all']
+		['incidents:create', 'incidents:view_all'],
+		PICKER
 	]) {
 		const sections = createFormSections(caps);
-		assert.equal(sections.requester, false, caps.join(','));
-		// even a stale select value can never target another user
-		const request = toCreateRequest({ ...filled, requester: OTHER }, sections, USER);
-		assert.equal('clientUserId' in buildCreateIncidentPayload(ORG_A, request), false);
+		assert.equal('requester' in sections, false, caps.join(','));
+		const body = buildCreateIncidentPayload(ORG_A, toCreateRequest(filled, sections));
+		assert.equal('clientUserId' in body, false, caps.join(','));
+		assert.equal(body.client, 'Etiqueta', '`client` sigue siendo texto libre independiente');
 	}
-});
-
-test('#1 D. nunca un UUID como etiqueta visible', () => {
-	const options = requesterOptions(
-		[
-			{
-				id: randomUUID(),
-				active: true,
-				user: { id: OTHER, name: 'Bruno Díaz', email: null, active: true },
-				roles: []
-			},
-			{
-				id: randomUUID(),
-				active: true,
-				user: { id: randomUUID(), name: '  ', email: 'x@y.z', active: true },
-				roles: []
-			}
-		],
-		USER
+	// a manipulated request cannot smuggle another requester through the UI-2A builder either
+	assert.throws(() =>
+		buildCreateIncidentPayload(ORG_A, { ...toCreateRequest(filled, {}), clientUserId: OTHER })
 	);
-	assert.deepEqual(options, [{ value: OTHER, label: 'Bruno Díaz' }], 'sin nombre -> no se ofrece');
-	const uuid = /[0-9a-f]{8}-[0-9a-f]{4}-/i;
-	for (const option of options) assert.doesNotMatch(option.label, uuid);
 });
 
 // ------------------------------------------------------------------------------------------------
@@ -178,19 +142,16 @@ test('#3 catálogos: 401 vigente -> sesión expirada; stale -> ignorado; 403/5xx
 	const catalogs = createIncidentCreateCatalogs({
 		sites: loader('sites'),
 		categories: loader('categories'),
-		memberships: loader('memberships'),
 		slaPolicies: loader('slaPolicies')
 	});
 	const idle = { error: null };
-	const all = ['sites', 'categories', 'memberships', 'slaPolicies'];
+	const all = ['sites', 'categories', 'slaPolicies'];
 	catalogs.setIdentity(identity(PICKER, ORG_A, 1), all);
 	gates.categories[0].reject(new ApiError(403, 'FORBIDDEN', 'x'));
-	gates.memberships[0].reject(new ApiError(500, 'INTERNAL_ERROR', 'x'));
-	gates.slaPolicies[0].reject(new ApiError(503, 'LIMITER_UNAVAILABLE', 'x'));
+	gates.slaPolicies[0].reject(new ApiError(500, 'INTERNAL_ERROR', 'x'));
 	await flush();
-	assert.equal(currentSessionExpiry(idle, catalogs.get()), null, '403/500/503 no cierran sesión');
+	assert.equal(currentSessionExpiry(idle, catalogs.get()), null, '403/500 no cierran sesión');
 	assert.equal(catalogs.get().categories.status, 'error');
-	assert.equal(catalogs.get().memberships.status, 'error');
 	assert.equal(catalogs.get().slaPolicies.status, 'error');
 
 	// a 401 answered for a PREVIOUS identity never reaches the state of the new one
@@ -199,6 +160,12 @@ test('#3 catálogos: 401 vigente -> sesión expirada; stale -> ignorado; 403/5xx
 	await flush();
 	assert.equal(currentSessionExpiry(idle, catalogs.get()), null, '401 obsoleto ignorado');
 	assert.notEqual(catalogs.get().sites.status, 'error');
+
+	// 503 for the current identity: local error, no session expiry
+	gates.categories[1].reject(new ApiError(503, 'LIMITER_UNAVAILABLE', 'x'));
+	await flush();
+	assert.equal(currentSessionExpiry(idle, catalogs.get()), null, '503 no cierra sesión');
+	assert.equal(catalogs.get().categories.status, 'error');
 
 	// the same 401 for the CURRENT identity is a session expiry
 	gates.sites[1].reject(new ApiError(401, 'UNAUTHORIZED', 'x'));
@@ -388,8 +355,8 @@ export const beforeNavigate = (fn) => { (globalThis.__sfBefore ??= []).push(fn);
 	globalThis.__sfContext = contextState(PICKER);
 	globalThis.__sfUrl = new URL(`http://localhost/app/incidents/new?organizationId=${ORG_A}`);
 	const html = clean(render(Page, { props: {} }).body);
-	assert.match(html, /<label[^>]*>\s*Solicitante/);
-	assert.match(html, /<option value="self"[^>]*selected[^>]*>Yo \(Ana Pérez\)/);
+	// staff with view_all + memberships:view: still no requester selector
+	assert.doesNotMatch(html, /Solicitante|Yo \(/);
 	assert.doesNotMatch(html, new RegExp(`>[^<]*${USER}[^<]*<`), 'el UUID nunca es texto visible');
 
 	// the page registered exactly one beforeNavigate handler: its draft guard

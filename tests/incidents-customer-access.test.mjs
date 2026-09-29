@@ -534,7 +534,7 @@ test('SoporteFlow — Etapa 5.4S-B: acceso Customer por incidents:view_requested
 	// Creación (37)
 	// =====================================================================
 	await t.test(
-		'37. Customer crea: createdBy y clientUserId = principal; spoof rechazado',
+		'37. Customer crea: createdBy y clientUserId = principal; clientUserId fuera del contrato (400)',
 		async () => {
 			const res = await create(cust1);
 			assert.equal(res.status, 201);
@@ -546,17 +546,20 @@ test('SoporteFlow — Etapa 5.4S-B: acceso Customer por incidents:view_requested
 				.from(s.incidents)
 				.where(eq(s.incidents.id, res.json.incident.id));
 			assert.equal(stored.createdByUserId, cust1.user.id);
+			assert.equal(stored.clientUserId, cust1.user.id, 'solicitante persistido = autor');
+			// the requester then reads it through incidents:view_requested
 			assert.equal((await detail(cust1, A.org, res.json.incident.id)).status, 200);
-			const self = await create(cust1, { clientUserId: cust1.user.id });
-			assert.equal(self.status, 201);
-			const asNull = await create(cust1, { clientUserId: null });
-			assert.equal(asNull.json.incident.clientUserId, cust1.user.id);
+			// clientUserId is not part of the POST contract: any value (other member, other tenant,
+			// self, null) is rejected before creating anything — never honored, never re-targeted.
 			const before = (await db.select().from(s.incidents)).length;
-			const spoof = await create(cust1, { clientUserId: cust2.user.id });
-			assert.equal(spoof.status, 403);
-			assert.deepEqual(spoof.json, { error: { code: 'FORBIDDEN', message: 'Permission denied.' } });
+			for (const clientUserId of [cust2.user.id, custB.user.id, cust1.user.id, null]) {
+				const spoof = await create(cust1, { clientUserId });
+				assert.equal(spoof.status, 400, String(clientUserId));
+				assert.deepEqual(spoof.json, {
+					error: { code: 'INVALID_INPUT', message: "Unknown property 'clientUserId'." }
+				});
+			}
 			assert.equal((await db.select().from(s.incidents)).length, before, 'nada creado');
-			assert.equal((await create(cust1, { clientUserId: custB.user.id })).status, 403);
 		}
 	);
 
@@ -566,15 +569,18 @@ test('SoporteFlow — Etapa 5.4S-B: acceso Customer por incidents:view_requested
 			const res = await create(createOnly);
 			assert.equal(res.status, 201);
 			assert.equal(res.json.incident.clientUserId, createOnly.user.id);
-			assert.equal((await create(createOnly, { clientUserId: cust1.user.id })).status, 403);
-			// view_all (personal) conserva el flujo en nombre de un cliente
+			assert.equal((await create(createOnly, { clientUserId: cust1.user.id })).status, 400);
+			// Staff (incidents:view_all) follows the SAME rule: view_all is a read capability, never
+			// a right to create on behalf of someone else. The author is also the requester.
+			const staffOwn = await create(tech);
+			assert.equal(staffOwn.status, 201);
+			assert.equal(staffOwn.json.incident.clientUserId, tech.user.id);
+			assert.equal(staffOwn.json.incident.createdByUserId, tech.user.id);
+			assert.equal((await detail(cust1, A.org, staffOwn.json.incident.id)).status, 404);
 			const onBehalf = await create(tech, { clientUserId: cust1.user.id });
-			assert.equal(onBehalf.status, 201);
-			assert.equal(onBehalf.json.incident.clientUserId, cust1.user.id);
-			assert.equal(onBehalf.json.incident.createdByUserId, tech.user.id);
-			assert.equal((await detail(cust1, A.org, onBehalf.json.incident.id)).status, 200);
-			const noClient = await create(admin);
-			assert.equal(noClient.json.incident.clientUserId, null, 'personal sin solicitante: null');
+			assert.equal(onBehalf.status, 400, 'no se puede crear en nombre de otro');
+			const adminOwn = await create(admin);
+			assert.equal(adminOwn.json.incident.clientUserId, admin.user.id);
 			assert.equal((await create(nobody)).status, 403);
 		}
 	);
