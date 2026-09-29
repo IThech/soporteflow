@@ -5,6 +5,7 @@
  * Assigned roles are administrative metadata, not effective capabilities: UI actions must be
  * gated by /api/me capabilities.
  */
+import { ApiError, responseErrorMeta, type ApiErrorMeta } from './errors.ts';
 
 export interface MembershipRole {
 	id: string;
@@ -34,15 +35,11 @@ export interface RoleAssignment {
 	created: boolean;
 }
 
-export class MembershipApiError extends Error {
-	readonly status: number;
-	readonly code: string;
-
-	constructor(status: number, code: string, message: string) {
-		super(message);
+/** UI-2A: an ApiError (kind, Retry-After, X-Request-ID); same (status, code, message) API. */
+export class MembershipApiError extends ApiError {
+	constructor(status: number, code: string, message: string, meta: ApiErrorMeta = {}) {
+		super(status, code, message, meta);
 		this.name = 'MembershipApiError';
-		this.status = status;
-		this.code = code;
 	}
 }
 
@@ -130,8 +127,19 @@ const CONFLICT: Record<string, string> = {
 	LAST_ADMIN_REQUIRED: 'La organización debe conservar al menos un administrador.'
 };
 
-/** Fixed client messages; only the backend error code is read, never its message. */
+/** Failure of a request: fixed code/message mapping + Retry-After/X-Request-ID. */
 async function failure(res: Response, action: Action): Promise<MembershipApiError> {
+	const classified = await classifyFailure(res, action);
+	return new MembershipApiError(
+		classified.status,
+		classified.code,
+		classified.message,
+		responseErrorMeta(res)
+	);
+}
+
+/** Fixed client messages; only the backend error code is read, never its message. */
+async function classifyFailure(res: Response, action: Action): Promise<MembershipApiError> {
 	let backendCode: unknown;
 	try {
 		backendCode = ((await res.json()) as { error?: { code?: unknown } })?.error?.code;

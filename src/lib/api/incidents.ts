@@ -1,4 +1,4 @@
-import { ApiError, type ApiErrorMeta } from './errors.ts';
+import { ApiError, responseErrorMeta, type ApiErrorMeta } from './errors.ts';
 
 /** 5.4T-C derived SLA compliance (computed by the server at request time). */
 export type SlaObjectiveStatus = 'not_applicable' | 'pending' | 'met' | 'breached';
@@ -184,7 +184,7 @@ export async function listIncidents(
 			message = 'No se pudieron cargar las incidencias. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -322,7 +322,7 @@ export async function getIncident(
 			message = 'No se pudo cargar la incidencia. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -627,6 +627,13 @@ export interface CreateIncidentInput {
 	description: string;
 	client: string;
 	priority: 'low' | 'medium' | 'high' | 'urgent';
+	/**
+	 * UI-2A: requester member (distinct from the free-text `client`). Omitted/null: the server
+	 * decides (the caller itself unless it holds incidents:view_all).
+	 */
+	clientUserId?: string | null;
+	/** UI-2A: optional site (active, same organization). */
+	siteId?: string | null;
 	/** Optional Core category (active, same organization). Omitted or null: no category. */
 	categoryId?: string | null;
 	/**
@@ -668,6 +675,18 @@ export async function createIncident(
 	) {
 		throw new IncidentApiError(0, 'INVALID_INPUT', 'La política SLA seleccionada no es válida.');
 	}
+	for (const [key, label] of [
+		['clientUserId', 'El solicitante seleccionado no es válido.'],
+		['siteId', 'La sede seleccionada no es válida.']
+	] as const) {
+		const value = input?.[key];
+		if (
+			value !== undefined &&
+			value !== null &&
+			(typeof value !== 'string' || !CATEGORY_UUID.test(value))
+		)
+			throw new IncidentApiError(0, 'INVALID_INPUT', label);
+	}
 	// Explicit allowlist: the strict server contract rejects any other property.
 	const payload: Record<string, unknown> = {
 		organizationId,
@@ -676,6 +695,8 @@ export async function createIncident(
 		client: input.client,
 		priority: input.priority
 	};
+	if (input.clientUserId !== undefined) payload.clientUserId = input.clientUserId;
+	if (input.siteId !== undefined) payload.siteId = input.siteId;
 	if (input.categoryId !== undefined) payload.categoryId = input.categoryId;
 	if (input.slaPolicyId !== undefined) payload.slaPolicyId = input.slaPolicyId;
 
@@ -745,7 +766,7 @@ export async function createIncident(
 			message = 'No se pudo crear la incidencia. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -835,7 +856,7 @@ export async function updateIncident(
 			message = 'No se pudo actualizar la incidencia. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -918,7 +939,7 @@ export async function listTeams(
 			message = 'No se pudieron cargar los equipos. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -1037,7 +1058,7 @@ export async function listAssignees(
 			message = 'No se pudieron cargar los técnicos disponibles. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -1157,7 +1178,7 @@ export async function assignIncident(
 			message = 'No se pudo asignar la incidencia. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -1253,7 +1274,7 @@ export async function updateIncidentSupportLevel(
 			message = 'No se pudo actualizar el nivel de soporte. Inténtalo de nuevo.';
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -1375,7 +1396,7 @@ export async function updateIncidentSite(
 		} else if (res.status >= 500) {
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -1508,7 +1529,7 @@ export async function updateIncidentCategory(
 		} else if (res.status >= 500) {
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 
 	let data: unknown;
@@ -1663,8 +1684,23 @@ async function sendMessageRequest(
 	}
 }
 
-/** Maps HTTP failures to safe, fixed messages. Only the backend error code is read, never its message. */
+/** Failure of a messages request: fixed code/message mapping + Retry-After/X-Request-ID. */
 async function messageFailure(
+	res: Response,
+	endpoint: MessageEndpoint,
+	action: 'list' | 'create'
+): Promise<IncidentApiError> {
+	const classified = await classifyMessageFailure(res, endpoint, action);
+	return new IncidentApiError(
+		classified.status,
+		classified.code,
+		classified.message,
+		responseErrorMeta(res)
+	);
+}
+
+/** Maps HTTP failures to safe, fixed messages. Only the backend error code is read, never its message. */
+async function classifyMessageFailure(
 	res: Response,
 	endpoint: MessageEndpoint,
 	action: 'list' | 'create'
@@ -1918,7 +1954,7 @@ export async function updateIncidentSla(
 		} else if (res.status >= 500) {
 			code = 'SERVER_ERROR';
 		}
-		throw new IncidentApiError(res.status, code, message);
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
 	}
 	let data: unknown;
 	try {

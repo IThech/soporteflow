@@ -650,7 +650,11 @@ test('SoporteFlow — Etapa 5.4P-D: clientes API de categorías', async (t) => {
 		'hardening: código fuente sin storage, demo, clasificación ni cabeceras de identidad',
 		async () => {
 			const source = fs.readFileSync('src/lib/api/categories.ts', 'utf8');
-			assert.ok(!/^import /m.test(source));
+			// UI-2A: the only allowed import is the shared, pure API error model (Retry-After/X-Request-ID).
+			assert.ok(
+				(source.match(/^import .*$/gm) ?? []).every((line) => /from '\.\/errors\.ts';$/.test(line)),
+				'sin imports salvo el modelo de error común'
+			);
 			for (const forbidden of [
 				'localStorage',
 				'sessionStorage',

@@ -104,6 +104,28 @@ export function readRequestId(
 	return value && REQUEST_ID.test(value) ? value.toLowerCase() : undefined;
 }
 
+/**
+ * UI-2A: the single parser of the operational headers of a FAILED response. Every client (the
+ * common apiErrorFromResponse and the legacy clients with their own code/message mapping) passes
+ * this to its error constructor, so Retry-After and X-Request-ID survive homogeneously.
+ * Retry-After is only meaningful on 429/503 (a 429 without a readable value gets the default).
+ */
+export function responseErrorMeta(
+	res: Pick<Response, 'status' | 'headers'>,
+	now: number = Date.now()
+): ApiErrorMeta {
+	const meta: ApiErrorMeta = {};
+	if (res.status === 429 || res.status === 503) {
+		const seconds =
+			parseRetryAfter(res.headers.get('retry-after'), now) ??
+			(res.status === 429 ? DEFAULT_RETRY_AFTER_SECONDS : null);
+		if (seconds !== null) meta.retryAfterSeconds = seconds;
+	}
+	const requestId = readRequestId(res.headers);
+	if (requestId) meta.requestId = requestId;
+	return meta;
+}
+
 /** Uniform, safe user-facing messages (Spanish UI). Pages never write their own. */
 const DEFAULT_MESSAGES: Record<ApiErrorKind, string> = {
 	network: 'No se pudo conectar con el servidor. Comprueba tu conexión.',
@@ -157,20 +179,12 @@ export async function apiErrorFromResponse(
 							: 'REQUEST_FAILED';
 	const finalCode = code ?? fallbackCode;
 	const kind = apiErrorKind(res.status, finalCode);
-	const retryAfter =
-		res.status === 429 || res.status === 503
-			? (parseRetryAfter(res.headers.get('retry-after'), options.now) ??
-				(res.status === 429 ? DEFAULT_RETRY_AFTER_SECONDS : undefined))
-			: undefined;
 	const clientCorrectable =
 		kind === 'invalid-input' || kind === 'conflict' || kind === 'unprocessable';
 	const message =
 		options.messages?.[kind] ??
 		(clientCorrectable && backendMessage ? backendMessage : defaultMessageFor(kind));
-	return new ApiError(res.status, finalCode, message, {
-		retryAfterSeconds: retryAfter ?? undefined,
-		requestId: readRequestId(res.headers)
-	});
+	return new ApiError(res.status, finalCode, message, responseErrorMeta(res, options.now));
 }
 
 export function networkApiError(): ApiError {

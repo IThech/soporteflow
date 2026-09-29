@@ -1,0 +1,138 @@
+import { ApiError } from './errors.ts';
+import {
+	INCIDENT_CLIENT_MAX_LENGTH,
+	INCIDENT_TITLE_MAX_LENGTH,
+	assertIncidentIds,
+	parseCreatedIncident,
+	requestIncidentJson,
+	type CreatedIncidentView,
+	type IncidentRequestOptions
+} from './incident-detail.ts';
+import type { IncidentPriority } from './incident-views.ts';
+
+/**
+ * UI-2A — POST /api/incidents contract (frontend side). Exactly the properties the strict server
+ * allowlist accepts (organizationId travels separately):
+ *   title, description, client, priority, clientUserId, siteId, categoryId, slaPolicyId.
+ * Never sent: status (the server sets 'open'), supportLevel (server sets 'N1'), team/assignee,
+ * attachments. `client` (free-text label) and `clientUserId` (requester member) are distinct
+ * concepts: neither is derived from the other here.
+ *
+ * Optional ids follow the server semantics:
+ * - clientUserId: omitted/null -> the server decides (the caller itself unless it may choose,
+ *   incidents:view_all); a different member without that capability is a 403.
+ * - slaPolicyId: omitted -> the organization's default policy; null -> no SLA; UUID -> that
+ *   policy. Sending it at all requires sla:assign (403 otherwise).
+ * Validation mirrors only the real server rules (trimmed non-empty title/description/client,
+ * title/client <= 255, enum priority, UUIDs). No invented description limit.
+ */
+
+export interface CreateIncidentRequest {
+	title: string;
+	description: string;
+	client: string;
+	priority: IncidentPriority;
+	clientUserId?: string | null;
+	siteId?: string | null;
+	categoryId?: string | null;
+	slaPolicyId?: string | null;
+}
+
+const ALLOWED_KEYS: ReadonlySet<string> = new Set([
+	'title',
+	'description',
+	'client',
+	'priority',
+	'clientUserId',
+	'siteId',
+	'categoryId',
+	'slaPolicyId'
+]);
+const PRIORITIES: readonly string[] = ['low', 'medium', 'high', 'urgent'];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type CreateIncidentField = keyof CreateIncidentRequest;
+
+/** Client-side validation failure, tied to the offending field (nothing was sent). */
+export class CreateIncidentInputError extends ApiError {
+	readonly field: CreateIncidentField | null;
+	constructor(field: CreateIncidentField | null, message: string) {
+		super(0, 'INVALID_INPUT', message);
+		this.name = 'CreateIncidentInputError';
+		this.field = field;
+	}
+}
+
+function requiredText(value: unknown, field: CreateIncidentField, label: string, max?: number) {
+	if (typeof value !== 'string' || value.trim().length === 0)
+		throw new CreateIncidentInputError(field, `${label} es obligatorio.`);
+	const trimmed = value.trim();
+	if (max !== undefined && trimmed.length > max)
+		throw new CreateIncidentInputError(field, `${label} no puede superar ${max} caracteres.`);
+	return trimmed;
+}
+
+function optionalId(value: unknown, field: CreateIncidentField, label: string) {
+	if (value === undefined || value === null) return value;
+	if (typeof value !== 'string' || !UUID.test(value))
+		throw new CreateIncidentInputError(field, `${label} no es válido.`);
+	return value;
+}
+
+/**
+ * Validates and builds the exact POST body. Unknown properties are refused (a caller can never
+ * smuggle status/supportLevel/teamId…); omitted optional ids stay omitted (server defaults).
+ */
+export function buildCreateIncidentPayload(
+	organizationId: string,
+	input: CreateIncidentRequest
+): Record<string, unknown> {
+	assertIncidentIds(organizationId);
+	if (!input || typeof input !== 'object' || Array.isArray(input))
+		throw new CreateIncidentInputError(null, 'Los datos de la incidencia no son válidos.');
+	for (const key of Object.keys(input))
+		if (!ALLOWED_KEYS.has(key))
+			throw new CreateIncidentInputError(null, 'Los datos de la incidencia no son válidos.');
+	const payload: Record<string, unknown> = {
+		organizationId,
+		title: requiredText(input.title, 'title', 'El título', INCIDENT_TITLE_MAX_LENGTH),
+		description: requiredText(input.description, 'description', 'La descripción'),
+		client: requiredText(input.client, 'client', 'El cliente', INCIDENT_CLIENT_MAX_LENGTH)
+	};
+	if (typeof input.priority !== 'string' || !PRIORITIES.includes(input.priority))
+		throw new CreateIncidentInputError('priority', 'La prioridad no es válida.');
+	payload.priority = input.priority;
+	const ids: [CreateIncidentField, string][] = [
+		['clientUserId', 'El solicitante'],
+		['siteId', 'La sede'],
+		['categoryId', 'La categoría'],
+		['slaPolicyId', 'La política SLA']
+	];
+	for (const [field, label] of ids) {
+		const value = optionalId(input[field], field, label);
+		if (value !== undefined) payload[field] = value;
+	}
+	return payload;
+}
+
+/**
+ * Sends the creation. Pessimistic and single-shot: never retried here. The caller (a mutation
+ * channel) classifies failures: a lost response is an UNKNOWN outcome, not a failure.
+ */
+export async function submitIncidentCreation(
+	organizationId: string,
+	input: CreateIncidentRequest,
+	options: IncidentRequestOptions = {}
+): Promise<CreatedIncidentView> {
+	const payload = buildCreateIncidentPayload(organizationId, input);
+	const { body, status, requestId } = await requestIncidentJson(
+		'/api/incidents',
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload)
+		},
+		options
+	);
+	return parseCreatedIncident(body.incident, { organizationId }, status, requestId);
+}

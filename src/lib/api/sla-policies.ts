@@ -4,6 +4,7 @@
  * Tenant travels only in the query string; identity comes from the session cookie.
  * Targets are 24x7 elapsed minutes. UI actions must be gated by /api/me capabilities.
  */
+import { ApiError, responseErrorMeta, type ApiErrorMeta } from './errors.ts';
 
 export const SLA_TARGET_MAX_MINUTES = 5_256_000;
 
@@ -20,15 +21,11 @@ export interface SlaPolicy {
 	updatedAt: string;
 }
 
-export class SlaPolicyApiError extends Error {
-	readonly status: number;
-	readonly code: string;
-
-	constructor(status: number, code: string, message: string) {
-		super(message);
+/** UI-2A: an ApiError (kind, Retry-After, X-Request-ID); same (status, code, message) API. */
+export class SlaPolicyApiError extends ApiError {
+	constructor(status: number, code: string, message: string, meta: ApiErrorMeta = {}) {
+		super(status, code, message, meta);
 		this.name = 'SlaPolicyApiError';
-		this.status = status;
-		this.code = code;
 	}
 }
 
@@ -150,8 +147,19 @@ async function send(
 	}
 }
 
-/** Fixed client messages; only the backend error code is read, never its message. */
+/** Failure of a request: fixed code/message mapping + Retry-After/X-Request-ID. */
 async function failure(res: Response, action: Action): Promise<SlaPolicyApiError> {
+	const classified = await classifyFailure(res, action);
+	return new SlaPolicyApiError(
+		classified.status,
+		classified.code,
+		classified.message,
+		responseErrorMeta(res)
+	);
+}
+
+/** Fixed client messages; only the backend error code is read, never its message. */
+async function classifyFailure(res: Response, action: Action): Promise<SlaPolicyApiError> {
 	let backendCode: unknown;
 	try {
 		backendCode = ((await res.json()) as { error?: { code?: unknown } })?.error?.code;

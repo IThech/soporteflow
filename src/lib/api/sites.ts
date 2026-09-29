@@ -3,6 +3,7 @@
  * fetch + runtime validation + typed errors only: no session handling, navigation or storage.
  * Tenant travels only in the query string; identity comes from the session cookie.
  */
+import { ApiError, responseErrorMeta, type ApiErrorMeta } from './errors.ts';
 
 export interface Site {
 	id: string;
@@ -12,15 +13,11 @@ export interface Site {
 	updatedAt: string;
 }
 
-export class SiteApiError extends Error {
-	readonly status: number;
-	readonly code: string;
-
-	constructor(status: number, code: string, message: string) {
-		super(message);
+/** UI-2A: an ApiError (kind, Retry-After, X-Request-ID); same (status, code, message) API. */
+export class SiteApiError extends ApiError {
+	constructor(status: number, code: string, message: string, meta: ApiErrorMeta = {}) {
+		super(status, code, message, meta);
 		this.name = 'SiteApiError';
-		this.status = status;
-		this.code = code;
 	}
 }
 
@@ -109,8 +106,19 @@ async function send(
 	}
 }
 
-/** Fixed client messages; only the backend error code is read, never its message. */
+/** Failure of a request: fixed code/message mapping + Retry-After/X-Request-ID. */
 async function failure(res: Response, action: Action): Promise<SiteApiError> {
+	const classified = await classifyFailure(res, action);
+	return new SiteApiError(
+		classified.status,
+		classified.code,
+		classified.message,
+		responseErrorMeta(res)
+	);
+}
+
+/** Fixed client messages; only the backend error code is read, never its message. */
+async function classifyFailure(res: Response, action: Action): Promise<SiteApiError> {
 	let backendCode: unknown;
 	try {
 		backendCode = ((await res.json()) as { error?: { code?: unknown } })?.error?.code;

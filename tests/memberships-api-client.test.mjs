@@ -288,7 +288,11 @@ test('SoporteFlow — Etapa 5.4R-C: cliente API de memberships', async (t) => {
 		'55. hardening: sin storage, demo, cabeceras de identidad ni lógica de permisos',
 		() => {
 			const source = fs.readFileSync('src/lib/api/memberships.ts', 'utf8');
-			assert.ok(!/^import /m.test(source));
+			// UI-2A: the only allowed import is the shared, pure API error model (Retry-After/X-Request-ID).
+			assert.ok(
+				(source.match(/^import .*$/gm) ?? []).every((line) => /from '\.\/errors\.ts';$/.test(line)),
+				'sin imports salvo el modelo de error común'
+			);
 			for (const forbidden of [
 				'localStorage',
 				'sessionStorage',

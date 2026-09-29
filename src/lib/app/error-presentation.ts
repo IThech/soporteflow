@@ -1,10 +1,12 @@
 import { ApiError, defaultMessageFor, isApiError, networkApiError } from '../api/errors.ts';
+import { UNKNOWN_OUTCOME_MESSAGE } from './mutation.ts';
 
 /**
  * One mapping from ApiError to what a page shows (UI-1A, A1). Pages never write their own
  * strings per status. `action` tells the page what it may offer:
  * - 'login': 401 of the CURRENT context (callers only receive current errors) -> re-authenticate;
- * - 'retry': transient (network, 429 after cooldown, 5xx/503, invalid payload);
+ * - 'retry': transient (network, 429 after cooldown, 5xx/503, invalid payload). This is a MANUAL
+ *   retry of a safe READ (GET). Mutations use presentMutationFailure (never blind resubmits);
  * - 'none': permanent for this request (403, 404, 400/409/413/422 need user changes).
  * 403 never implies sign-out; 409 keeps the caller's form/state (the page decides).
  */
@@ -58,6 +60,38 @@ export function presentApiError(error: unknown): ErrorPresentation {
 		requestId: apiError.requestId,
 		retryAfterSeconds: apiError.retryAfterSeconds,
 		action
+	};
+}
+
+/**
+ * UI-2A — presentation of a FAILED MUTATION (POST/PATCH). Unlike presentApiError (reads), it never
+ * suggests repeating blindly:
+ * - `unknown` (answer lost after sending): action 'verify' with UNKNOWN_OUTCOME_MESSAGE; the UI
+ *   must re-check the resource before any new attempt;
+ * - `error` (definite server answer): 'login' on 401; 'resubmit' only where the server certainly
+ *   did not apply it and waiting/fixing may help (network before sending never reaches here;
+ *   429/503/5xx); otherwise 'none'. 'resubmit' is always a MANUAL user decision, never automatic.
+ */
+export interface MutationFailurePresentation extends Omit<ErrorPresentation, 'action'> {
+	action: 'login' | 'verify' | 'resubmit' | 'none';
+}
+
+export function presentMutationFailure(outcome: {
+	status: 'error' | 'unknown';
+	error: ApiError;
+}): MutationFailurePresentation {
+	const base = presentApiError(outcome.error);
+	if (outcome.status === 'unknown')
+		return {
+			...base,
+			tone: 'warning',
+			title: 'Resultado sin confirmar',
+			message: UNKNOWN_OUTCOME_MESSAGE,
+			action: 'verify'
+		};
+	return {
+		...base,
+		action: base.action === 'login' ? 'login' : base.action === 'retry' ? 'resubmit' : 'none'
 	};
 }
 
