@@ -42,6 +42,11 @@ function makeSampleIncident(overrides = {}) {
 /**
  * Simulates the edit coordinator in src/routes/app/incidents/[id]/+page.svelte
  * and the form logic in src/lib/components/incidents/RealIncidentEditForm.svelte.
+ *
+ * NOTE (UI-2C): this coordinator reproduces the PRE-UI-2C page. Since UI-2C the detail page
+ * sends these mutations through the UI-2A controller (`mutate`: single-shot, stale-safe, detail
+ * re-read) and the real page is covered by tests/ui-incident-detail.test.mjs. The legacy forms are
+ * kept temporarily; this reproduction is scheduled to be replaced in UI-2E.
  */
 function createEditCoordinator(initialIncident, options = {}) {
 	const updateIncidentFn = options.updateIncidentFn ?? updateIncident;
@@ -137,15 +142,8 @@ function getAvailableStatusOptions(currentStatus) {
 }
 
 test('SoporteFlow — Etapa 5.4H: Suite de Integración UI y Edición Real de Incidencias', async (t) => {
-	// 1. botón editar
-	await t.test('1. botón editar existe en componente de detalle cuando no se está editando', () => {
-		const detailSrc = fs.readFileSync(
-			path.join(root, 'src/lib/components/incidents/RealIncidentDetail.svelte'),
-			'utf-8'
-		);
-		assert.ok(detailSrc.includes('Editar incidencia'), 'Debe existir el botón Editar incidencia');
-		assert.ok(detailSrc.includes('onEdit'), 'Debe aceptar prop/callback onEdit');
-	});
+	// 1. UI-2C: the "Editar" button is rendered by the detail page (staff view with
+	// incidents:edit) and is tested in tests/ui-incident-detail.test.mjs (RealIncidentDetail retired).
 
 	// 2. abre formulario
 	await t.test('2. abre formulario al pulsar editar', () => {
@@ -529,7 +527,7 @@ test('SoporteFlow — Etapa 5.4H: Suite de Integración UI y Edición Real de In
 	// 27. history no visible
 	await t.test('27. el componente de detalle y edición no contienen ni renderizan history', () => {
 		const detailSrc = fs.readFileSync(
-			path.join(root, 'src/lib/components/incidents/RealIncidentDetail.svelte'),
+			path.join(root, 'src/lib/components/incidents/IncidentStaffContext.svelte'),
 			'utf-8'
 		);
 		const editSrc = fs.readFileSync(
@@ -543,7 +541,7 @@ test('SoporteFlow — Etapa 5.4H: Suite de Integración UI y Edición Real de In
 	// 28. no demo
 	await t.test('28. componentes reales no importan ni dependen de la demo', () => {
 		const detailSrc = fs.readFileSync(
-			path.join(root, 'src/lib/components/incidents/RealIncidentDetail.svelte'),
+			path.join(root, 'src/lib/components/incidents/IncidentStaffContext.svelte'),
 			'utf-8'
 		);
 		const editSrc = fs.readFileSync(
@@ -565,7 +563,7 @@ test('SoporteFlow — Etapa 5.4H: Suite de Integración UI y Edición Real de In
 	// 29. no localStorage
 	await t.test('29. componentes reales no interactúan con localStorage', () => {
 		const detailSrc = fs.readFileSync(
-			path.join(root, 'src/lib/components/incidents/RealIncidentDetail.svelte'),
+			path.join(root, 'src/lib/components/incidents/IncidentStaffContext.svelte'),
 			'utf-8'
 		);
 		const editSrc = fs.readFileSync(

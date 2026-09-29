@@ -42,6 +42,11 @@ function makeSampleIncident(overrides = {}) {
 /**
  * Simulates the team & assignee assignment coordinator logic in
  * src/routes/app/incidents/[id]/+page.svelte.
+ *
+ * NOTE (UI-2C): this coordinator reproduces the PRE-UI-2C page. Since UI-2C the detail page
+ * sends these mutations through the UI-2A controller (`mutate`: single-shot, stale-safe, detail
+ * re-read) and the real page is covered by tests/ui-incident-detail.test.mjs. The legacy forms are
+ * kept temporarily; this reproduction is scheduled to be replaced in UI-2E.
  */
 function createTeamAssignCoordinator(initialIncident, options = {}) {
 	const listTeamsFn = options.listTeamsFn ?? listTeams;
@@ -272,6 +277,7 @@ test('SoporteFlow — Etapa 5.4K-B: UI Real de Equipos y Técnico en Incidencias
 		root,
 		configFile: false,
 		envDir: false,
+		resolve: { alias: { $lib: path.resolve(root, 'src/lib') } },
 		plugins: [svelte({ configFile: false })],
 		server: { middlewareMode: true, hmr: false, watch: null },
 		appType: 'custom'
@@ -279,10 +285,21 @@ test('SoporteFlow — Etapa 5.4K-B: UI Real de Equipos y Técnico en Incidencias
 	t.after(() => componentServer.close());
 
 	const { render } = await componentServer.ssrLoadModule('svelte/server');
-	const detailModule = await componentServer.ssrLoadModule(
-		'/src/lib/components/incidents/RealIncidentDetail.svelte'
+	// UI-2C: the read-only detail is IncidentStaffContext (RealIncidentDetail was retired).
+	const staffContextModule = await componentServer.ssrLoadModule(
+		'/src/lib/components/incidents/IncidentStaffContext.svelte'
 	);
-	const RealIncidentDetail = detailModule.default;
+	const renderStaffContext = (item) =>
+		render(staffContextModule.default, {
+			props: {
+				incident: { ...item, audience: 'staff' },
+				selfUserId: null,
+				selfName: null,
+				siteNames: null,
+				categoryNames: null,
+				memberNames: null
+			}
+		}).body;
 	const assignFormModule = await componentServer.ssrLoadModule(
 		'/src/lib/components/incidents/RealIncidentAssignForm.svelte'
 	);
@@ -291,9 +308,7 @@ test('SoporteFlow — Etapa 5.4K-B: UI Real de Equipos y Técnico en Incidencias
 	// 1. muestra "Sin equipo"
 	await t.test('1. muestra "Sin equipo" en detalle cuando no tiene equipo asignado', () => {
 		const item = makeSampleIncident({ teamId: null, teamName: null });
-		const html = render(RealIncidentDetail, {
-			props: { incident: item, loading: false, error: null }
-		}).body;
+		const html = renderStaffContext(item);
 
 		assert.ok(html.includes('Sin equipo'), 'Debe mostrar texto "Sin equipo"');
 		assert.ok(html.includes('Equipo'), 'Debe incluir el encabezado "Equipo"');
@@ -305,9 +320,7 @@ test('SoporteFlow — Etapa 5.4K-B: UI Real de Equipos y Técnico en Incidencias
 			teamId: randomUUID(),
 			teamName: 'Soporte Nivel 1 - Hardware'
 		});
-		const html = render(RealIncidentDetail, {
-			props: { incident: item, loading: false, error: null }
-		}).body;
+		const html = renderStaffContext(item);
 
 		assert.ok(html.includes('Soporte Nivel 1 - Hardware'), 'Debe mostrar el nombre del equipo');
 		assert.equal(html.includes('Sin equipo'), false, 'No debe mostrar "Sin equipo"');
@@ -346,7 +359,7 @@ test('SoporteFlow — Etapa 5.4K-B: UI Real de Equipos y Técnico en Incidencias
 			'utf-8'
 		);
 		const detailSrc = fs.readFileSync(
-			path.join(root, 'src/lib/components/incidents/RealIncidentDetail.svelte'),
+			path.join(root, 'src/lib/components/incidents/IncidentStaffContext.svelte'),
 			'utf-8'
 		);
 		const pageSrc = fs.readFileSync(
@@ -918,9 +931,7 @@ test('SoporteFlow — Etapa 5.4K-B: UI Real de Equipos y Técnico en Incidencias
 			assignedToUserName: 'Mariana Duarte'
 		});
 
-		const detailHtml = render(RealIncidentDetail, {
-			props: { incident: item, loading: false, error: null }
-		}).body;
+		const detailHtml = renderStaffContext(item);
 
 		assert.equal(detailHtml.includes(rawTeamId), false, 'UUID de equipo no debe verse en detalle');
 		assert.equal(detailHtml.includes(rawUserId), false, 'UUID de técnico no debe verse en detalle');
@@ -972,7 +983,7 @@ test('SoporteFlow — Etapa 5.4K-B: UI Real de Equipos y Técnico en Incidencias
 			'utf-8'
 		);
 		const detailSrc = fs.readFileSync(
-			path.join(root, 'src/lib/components/incidents/RealIncidentDetail.svelte'),
+			path.join(root, 'src/lib/components/incidents/IncidentStaffContext.svelte'),
 			'utf-8'
 		);
 		const pageSrc = fs.readFileSync(

@@ -279,3 +279,120 @@ test('Mutaciones: pesimistas, sin reintento, con relectura y acceso perdido', as
 		assert.equal((await fresh).status, 'success');
 	});
 });
+
+// UI-2C M1/M2: use the real controller and hold reconciliation independently of the write.
+const reconciliationSwitches = [
+	['incident', (c) => c.setTarget({ identity: identity(USER_A, ORG_A, 1), incidentId: INC_2 })],
+	['tenant', (c) => c.setTarget({ identity: identity(USER_A, ORG_B, 2), incidentId: INC_1 })],
+	['user', (c) => c.setTarget({ identity: identity(USER_B, ORG_A, 1), incidentId: INC_1 })],
+	[
+		'A-B-A with identical final key',
+		(c) => {
+			c.setTarget({ identity: identity(USER_A, ORG_A, 1), incidentId: INC_2 });
+			c.setTarget({ identity: identity(USER_A, ORG_A, 1), incidentId: INC_1 });
+		}
+	],
+	['dispose', (c) => c.dispose()]
+];
+for (const outcome of ['success', 'unknown']) {
+	for (const [change, switchTarget] of reconciliationSwitches) {
+		test(
+			'M1: ' + outcome + ' becomes stale after ' + change + ' during reconciliation',
+			async () => {
+				const f = scriptedFetch();
+				const c = createIncidentDetailController({ fetchDetail: f.fetchDetail });
+				c.setTarget({ identity: identity(USER_A, ORG_A, 1), incidentId: INC_1 });
+				const write = deferred();
+				const pending = c.mutate('edit', () => write.promise);
+				if (outcome === 'success') write.resolve({ ok: true });
+				else write.reject(err(0, 'NETWORK_ERROR'));
+				await flush();
+				assert.equal(f.calls.length, 1);
+				assert.equal(c.get().mutations.edit.status, 'pending');
+				switchTarget(c);
+				assert.equal(f.calls[0].signal.aborted, true);
+				const freshWrite = deferred();
+				const fresh = change === 'dispose' ? null : c.mutate('edit', () => freshWrite.promise);
+				const snapshot = c.get();
+				// Neither a successful stale read nor a stale 401 may affect the new context.
+				if (outcome === 'success') f.calls[0].resolve(detailOf(ORG_A, INC_1));
+				else f.calls[0].reject(err(401, 'UNAUTHORIZED'));
+				assert.equal((await pending).status, 'stale');
+				assert.equal(c.get(), snapshot);
+				assert.equal(unauthenticatedError(c.get()), null);
+				if (fresh) {
+					let accidentalSends = 0;
+					assert.equal((await c.mutate('edit', async () => accidentalSends++)).status, 'busy');
+					assert.equal(accidentalSends, 0, 'old cleanup must not unlock the fresh operation');
+					freshWrite.reject(err(409, 'CONFLICT'));
+					assert.equal((await fresh).status, 'error');
+				}
+				c.dispose();
+			}
+		);
+	}
+	test('M2: ' + outcome + ' stays pending through write and reconciliation', async () => {
+		const f = scriptedFetch();
+		const c = createIncidentDetailController({ fetchDetail: f.fetchDetail });
+		c.setTarget({ identity: identity(USER_A, ORG_A, 1), incidentId: INC_1 });
+		const initial = c.load();
+		f.calls[0].resolve(detailOf(ORG_A, INC_1));
+		await initial;
+		let sends = 0;
+		const write = deferred();
+		const done = c.mutate('assign', () => (sends++, write.promise));
+		assert.equal((await c.mutate('assign', async () => sends++)).status, 'busy');
+		if (outcome === 'success') write.resolve({ ok: true });
+		else write.reject(err(0, 'NETWORK_ERROR'));
+		await flush();
+		assert.equal(c.get().status, 'refreshing');
+		assert.equal(c.get().mutations.assign.status, 'pending');
+		c.clearMutation('assign');
+		assert.equal(c.get().mutations.assign.status, 'pending', 'cannot hide a busy lifecycle');
+		assert.equal((await c.mutate('assign', async () => sends++)).status, 'busy');
+		assert.equal(sends, 1);
+		f.calls[1].resolve(detailOf(ORG_A, INC_1, { title: 'reconciled' }));
+		assert.equal((await done).status, outcome);
+		assert.equal(c.get().mutations.assign.status, outcome);
+		assert.equal(c.get().detail.title, 'reconciled');
+		const next = await c.mutate('assign', async () => {
+			sends++;
+			throw err(409, 'CONFLICT');
+		});
+		assert.equal(next.status, 'error', 'lock released after full reconciliation');
+		assert.equal(sends, 2);
+		c.dispose();
+	});
+}
+for (const status of [401, 403, 404, 500]) {
+	test('Reconciliation preserves current ' + status + ' and releases busy', async () => {
+		const f = scriptedFetch();
+		const c = createIncidentDetailController({ fetchDetail: f.fetchDetail });
+		c.setTarget({ identity: identity(USER_A, ORG_A, 1), incidentId: INC_1 });
+		const initial = c.load();
+		f.calls[0].resolve(detailOf(ORG_A, INC_1));
+		await initial;
+		const done = c.mutate('assign', async () => ({ ok: true }));
+		await flush();
+		assert.equal(c.get().mutations.assign.status, 'pending');
+		f.calls[1].reject(err(status, 'SAFE_TEST_ERROR'));
+		assert.equal((await done).status, 'success', 'write outcome remains confirmed');
+		assert.equal(c.get().detail, null);
+		assert.equal(c.get().status, status === 403 || status === 404 ? 'access-lost' : 'error');
+		assert.equal(unauthenticatedError(c.get())?.status ?? null, status === 401 ? 401 : null);
+		assert.equal(c.get().mutations.assign.status, 'success');
+		c.dispose();
+	});
+}
+test('Current write 401 is published without reconciliation', async () => {
+	const f = scriptedFetch();
+	const c = createIncidentDetailController({ fetchDetail: f.fetchDetail });
+	c.setTarget({ identity: identity(USER_A, ORG_A, 1), incidentId: INC_1 });
+	const result = await c.mutate('edit', async () => {
+		throw err(401, 'UNAUTHORIZED');
+	});
+	assert.equal(result.status, 'error');
+	assert.equal(unauthenticatedError(c.get())?.status, 401);
+	assert.equal(f.calls.length, 0);
+	c.dispose();
+});

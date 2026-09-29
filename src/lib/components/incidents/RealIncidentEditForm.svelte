@@ -6,7 +6,8 @@
 	type IncidentPriority = 'low' | 'medium' | 'high' | 'urgent';
 
 	interface Props {
-		incident: IncidentListItem;
+		/** Only number, status and priority are read (UI-2C passes the detail view). */
+		incident: Pick<IncidentListItem, 'incidentNumber' | 'status' | 'priority'>;
 		submitting?: boolean;
 		error?: string | null;
 		onSave: (changes: {

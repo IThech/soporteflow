@@ -130,6 +130,9 @@ export function createIncidentDetailController(deps: {
 	const now = deps.now ?? (() => Date.now());
 	const channels = createRequestChannels();
 	const mutationChannels = new Map<string, MutationChannel>();
+	// Tokens cover the entire write + reconciliation lifecycle, not just the HTTP write.
+	const activeOperations = new Map<string, number>();
+	let operationSequence = 0;
 	const listeners = new Set<(state: IncidentDetailState) => void>();
 	let state: IncidentDetailState = EMPTY;
 	let target: IncidentDetailTarget | null = null;
@@ -186,6 +189,7 @@ export function createIncidentDetailController(deps: {
 		setTarget(next) {
 			const key = detailTargetKey(next);
 			if (key === state.key) return;
+			activeOperations.clear();
 			target = next;
 			channels.setContext(key);
 			for (const channel of mutationChannels.values()) channel.setContext(key);
@@ -231,26 +235,37 @@ export function createIncidentDetailController(deps: {
 			const current = target;
 			if (!current) return { status: 'stale' };
 			const channel = mutationChannel(kind);
-			if (channel.pending) return { status: 'busy' };
-			const key = state.key;
-			set({ mutations: { ...state.mutations, [kind]: { status: 'pending' } } });
-			const result = await channel.run(() =>
-				send(current.identity.organizationId, current.incidentId)
-			);
-			if (result.status === 'stale' || result.status === 'busy' || state.key !== key)
-				return result.status === 'busy' ? result : { status: 'stale' };
-			set({ mutations: { ...state.mutations, [kind]: result } });
-			// Confirmed or unconfirmable: re-read the real state (and the actor's access to it).
-			if (result.status === 'success' || result.status === 'unknown') await readDetail(true);
-			return result;
+			if (activeOperations.has(kind) || channel.pending) return { status: 'busy' };
+			const operation = ++operationSequence;
+			activeOperations.set(kind, operation);
+			// Clearing on target change invalidates A permanently, even after A -> B -> A.
+			const isCurrent = () => activeOperations.get(kind) === operation;
+			try {
+				set({ mutations: { ...state.mutations, [kind]: { status: 'pending' } } });
+				if (!isCurrent()) return { status: 'stale' };
+				const result = await channel.run(() =>
+					send(current.identity.organizationId, current.incidentId)
+				);
+				if (!isCurrent() || result.status === 'stale') return { status: 'stale' };
+				if (result.status === 'busy') return result;
+				// Keep pending until the authoritative read has reconciled state and access.
+				if (result.status === 'success' || result.status === 'unknown') await readDetail(true);
+				if (!isCurrent()) return { status: 'stale' };
+				set({ mutations: { ...state.mutations, [kind]: result } });
+				return isCurrent() ? result : { status: 'stale' };
+			} finally {
+				// An old completion must never unlock a newer operation of the same kind.
+				if (isCurrent()) activeOperations.delete(kind);
+			}
 		},
 		clearMutation(kind) {
-			if (!(kind in state.mutations)) return;
+			if (activeOperations.has(kind) || !(kind in state.mutations)) return;
 			const rest = { ...state.mutations };
 			delete rest[kind];
 			set({ mutations: rest });
 		},
 		dispose() {
+			activeOperations.clear();
 			channels.invalidate();
 			for (const channel of mutationChannels.values()) channel.dispose();
 			mutationChannels.clear();

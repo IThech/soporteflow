@@ -1,522 +1,461 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { page } from '$app/stores';
-	import { getMe, AuthApiError } from '$lib/api/auth';
+	import { page } from '$app/state';
+	import { signOut } from '$lib/api/auth';
+	import { listCategories } from '$lib/api/categories';
+	import { getIncidentDetail } from '$lib/api/incident-detail';
+	import { assignIncident, listAssignees, listTeams, updateIncident } from '$lib/api/incidents';
+	import { listMemberships } from '$lib/api/memberships';
+	import { listSites } from '$lib/api/sites';
+	import { useOrganizationContext } from '$lib/app/context';
 	import {
-		getIncident,
-		updateIncident,
-		listTeams,
-		listAssignees,
-		assignIncident,
-		IncidentApiError,
-		type IncidentListItem,
-		type IncidentAssignee,
-		type IncidentTeam
-	} from '$lib/api/incidents';
+		presentApiError,
+		presentMutationFailure,
+		remainingSeconds
+	} from '$lib/app/error-presentation';
+	import { incidentActions } from '$lib/app/incident-actions';
+	import {
+		catalogSessionExpiry,
+		createIncidentDetailCatalogs,
+		nameCatalogsFor,
+		namesOf
+	} from '$lib/app/incident-detail-catalogs';
+	import {
+		createIncidentDetailController,
+		unauthenticatedError
+	} from '$lib/app/incident-detail-controller';
+	import {
+		incidentDetailPath,
+		incidentListPath,
+		isIncidentRouteId,
+		organizationSwitchTarget
+	} from '$lib/app/incident-detail-navigation';
+	import { presentDetailError } from '$lib/app/incident-detail-presentation';
+	import { SESSION_EXPIRED_PATH } from '$lib/app/incident-create-navigation';
+	import { attemptSignOut, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
+	import { tenantIdentityOf } from '$lib/app/tenant-identity';
+	import type { MutationResult } from '$lib/app/mutation';
 	import { session } from '$lib/stores/session';
-	import RealIncidentDetail from '$lib/components/incidents/RealIncidentDetail.svelte';
+	import AppShell from '$lib/components/shell/AppShell.svelte';
+	import OrganizationGate from '$lib/components/shell/OrganizationGate.svelte';
+	import IncidentHeader from '$lib/components/incidents/IncidentHeader.svelte';
+	import IncidentDescription from '$lib/components/incidents/IncidentDescription.svelte';
+	import IncidentStaffContext from '$lib/components/incidents/IncidentStaffContext.svelte';
+	import IncidentRequesterContext from '$lib/components/incidents/IncidentRequesterContext.svelte';
 	import RealIncidentEditForm from '$lib/components/incidents/RealIncidentEditForm.svelte';
 	import RealIncidentAssignForm from '$lib/components/incidents/RealIncidentAssignForm.svelte';
+	import Alert from '$lib/ui/Alert.svelte';
+	import Button from '$lib/ui/Button.svelte';
+	import PageHeader from '$lib/ui/PageHeader.svelte';
+	import Spinner from '$lib/ui/Spinner.svelte';
 
-	let sessionLoading = $state(!$session.isAuthenticated);
-	let incident = $state<IncidentListItem | null>(null);
-	let loading = $state(true);
-	let error = $state<string | null>(null);
-
-	let isEditing = $state(false);
-	let submitting = $state(false);
-	let updateError = $state<string | null>(null);
-	let editAbortController: AbortController | null = null;
-
-	let isAssigning = $state(false);
-	let teams = $state<IncidentTeam[]>([]);
-	let teamsLoading = $state(false);
-	let assignees = $state<IncidentAssignee[]>([]);
-	let assigneesLoading = $state(false);
-	let assignmentSubmitting = $state(false);
-	let assignmentError = $state<string | null>(null);
-	let assignAbortController: AbortController | null = null;
-	let assigneesAbortController: AbortController | null = null;
-	let assigneesRequestId = 0;
-
-	// In-memory cache while staying on page
-	let cachedTeams: IncidentTeam[] = [];
-	let cachedAssigneesByTeam: Record<string, IncidentAssignee[]> = {};
-
-	let detailRequestId = 0;
-	let detailAbortController: AbortController | null = null;
-
-	onMount(async () => {
-		if (!$session.isAuthenticated) {
-			sessionLoading = true;
-			try {
-				const context = await getMe();
-				session.setSession(context);
-			} catch (err) {
-				if (err instanceof AuthApiError && err.status === 401) {
-					session.clearSession();
-					await goto(resolve('/login?expired=true'));
-					return;
-				}
-				session.setError(
-					err instanceof AuthApiError ? err.message : 'Error al conectar con el servidor.'
-				);
-			} finally {
-				sessionLoading = false;
-			}
-		}
-
-		// Re-validate and sync activeOrganization with URL organizationId
-		const orgIdParam = $page.url.searchParams.get('organizationId');
-		if (!orgIdParam || !$session.organizations.some((org) => org.id === orgIdParam)) {
-			// Unauthorized or missing organizationId -> navigate to /app
-			await goto(resolve('/app'));
-			return;
-		}
-
-		session.setActiveOrganization(orgIdParam);
+	/**
+	 * /app/incidents/[id] (UI-2C). The page owns route/context, composition and navigation:
+	 * - organization context from the URL (UI-1 OrganizationContext; no own bootstrap);
+	 * - the detail through the UI-2A controller: identity = user + organization + generation +
+	 *   incident; stale answers never reach the state; access-lost after a mutation;
+	 * - staff/requester discriminated once: each audience has its own context component;
+	 * - staff names of site/category/requester only from catalogs the user may read.
+	 * Temporary (until UI-2E): the legacy edit/assign forms stay available to staff with the
+	 * capability; their requests go through the controller's pessimistic `mutate` (single-shot,
+	 * stale-safe, detail re-read afterwards).
+	 */
+	const context = useOrganizationContext();
+	const detail = createIncidentDetailController({
+		fetchDetail: (organizationId, incidentId, { signal }) =>
+			getIncidentDetail(organizationId, incidentId, { signal })
 	});
-
-	$effect(() => {
-		const isAuth = $session.isAuthenticated;
-		const currentOrg = $session.activeOrganization;
-		const currentUserId = $session.user?.id;
-		const targetIncidentId = $page.params.id;
-		const targetOrgId = $page.url.searchParams.get('organizationId');
-
-		detailRequestId += 1;
-		const thisRequestId = detailRequestId;
-
-		if (detailAbortController) {
-			detailAbortController.abort();
-			detailAbortController = null;
-		}
-
-		// Wait until session is ready and targetOrgId matches active organization
-		if (
-			!isAuth ||
-			!currentOrg ||
-			!targetOrgId ||
-			currentOrg.id !== targetOrgId ||
-			!targetIncidentId
-		) {
-			incident = null;
-			loading = false;
-			error = null;
-			return;
-		}
-
-		incident = null;
-		error = null;
-		loading = true;
-
-		const controller = new AbortController();
-		detailAbortController = controller;
-
-		(async () => {
-			try {
-				const data = await getIncident(targetOrgId, targetIncidentId, {
-					signal: controller.signal
-				});
-
-				if (
-					thisRequestId !== detailRequestId ||
-					$session.activeOrganization?.id !== targetOrgId ||
-					$session.user?.id !== currentUserId ||
-					$page.params.id !== targetIncidentId
-				) {
-					return;
-				}
-
-				incident = data;
-				error = null;
-			} catch (err: unknown) {
-				if (
-					thisRequestId !== detailRequestId ||
-					$session.activeOrganization?.id !== targetOrgId ||
-					$session.user?.id !== currentUserId ||
-					$page.params.id !== targetIncidentId
-				) {
-					return;
-				}
-
-				if ((err as Error)?.name === 'AbortError' || controller.signal.aborted) {
-					return;
-				}
-
-				if (err instanceof IncidentApiError && err.status === 401) {
-					session.clearSession();
-					incident = null;
-					error = null;
-					loading = false;
-					await goto(resolve('/login?expired=true'));
-					return;
-				}
-
-				if (err instanceof IncidentApiError) {
-					if (err.status === 403) {
-						error = 'No tienes permisos para consultar esta incidencia.';
-					} else if (err.status === 404) {
-						error = 'La incidencia no está disponible.';
-					} else {
-						error = err.message;
-					}
-				} else {
-					error = 'No se pudo cargar la incidencia. Inténtalo de nuevo.';
-				}
-			} finally {
-				if (
-					thisRequestId === detailRequestId &&
-					$session.activeOrganization?.id === targetOrgId &&
-					$session.user?.id === currentUserId &&
-					$page.params.id === targetIncidentId
-				) {
-					loading = false;
-				}
-			}
-		})();
-
-		return () => {
-			controller.abort();
-		};
+	const named = <T extends { id: string; name: string }>(items: T[]) =>
+		items.map(({ id, name }) => ({ id, name }));
+	const catalogs = createIncidentDetailCatalogs({
+		sites: (organizationId, signal) => listSites({ organizationId, signal }).then(named),
+		categories: (organizationId, signal) => listCategories({ organizationId, signal }).then(named),
+		memberships: (organizationId, signal) =>
+			listMemberships({ organizationId, signal }).then((members) =>
+				members
+					.filter((member) => member.user.active && member.user.name.trim())
+					.map((member) => ({ id: member.user.id, name: member.user.name }))
+			),
+		teams: (organizationId, signal) => listTeams(organizationId, { signal }).then(named),
+		assignees: (organizationId, teamId, signal) =>
+			listAssignees(organizationId, { ...(teamId ? { teamId } : {}), signal })
 	});
-
 	onDestroy(() => {
-		if (editAbortController) {
-			editAbortController.abort();
-		}
-		if (assignAbortController) {
-			assignAbortController.abort();
-		}
-		if (assigneesAbortController) {
-			assigneesAbortController.abort();
-		}
+		detail.dispose();
+		catalogs.dispose();
 	});
 
-	async function handleSaveEdit(changes: {
+	const explicitOrganization = $derived(page.url.searchParams.get('organizationId'));
+	const incidentId = $derived(page.params.id ?? '');
+	const validId = $derived(isIncidentRouteId(incidentId));
+	let signingOut = $state(false);
+	let signOutError = $state<string | null>(null);
+	let mode = $state<'view' | 'edit' | 'assign'>('view');
+	let formError = $state<string | null>(null);
+	let now = $state(Date.now());
+
+	/** Session expiry of the CURRENT context: handled once (several 401s may arrive together). */
+	let sessionExpired = false;
+	function expireSession() {
+		if (sessionExpired) return;
+		sessionExpired = true;
+		session.clearSession();
+		void goto(resolve(SESSION_EXPIRED_PATH));
+	}
+
+	// 1. Organization context from the URL (reloaded only when the organization changes).
+	$effect(() => {
+		const explicit = explicitOrganization;
+		untrack(() => {
+			const current = context.get();
+			if (explicit && current.status === 'ready' && current.activeOrganizationId === explicit)
+				return;
+			void context.load(explicit);
+		});
+	});
+
+	// 2. Session loss and canonical URL (a remembered/single organization is written into it).
+	$effect(() => {
+		const state = $context;
+		if (state.status === 'unauthenticated') return expireSession();
+		if (
+			state.status === 'ready' &&
+			!explicitOrganization &&
+			state.activeOrganizationId &&
+			isIncidentRouteId(incidentId)
+		)
+			void goto(resolve(incidentDetailPath(state.activeOrganizationId, incidentId)), {
+				replaceState: true,
+				keepFocus: true,
+				noScroll: true
+			});
+	});
+
+	const identity = $derived(tenantIdentityOf($context));
+	const capabilities = $derived(identity?.capabilities ?? []);
+
+	// 3. Target = identity + incident. A new one clears detail, panels and catalogs at once.
+	$effect(() => {
+		const current = identity;
+		const id = incidentId;
+		const target = current && isIncidentRouteId(id) ? { identity: current, incidentId: id } : null;
+		untrack(() => {
+			const before = detail.get().key;
+			detail.setTarget(target);
+			catalogs.setIdentity(current);
+			if (target && detail.get().key !== before) {
+				mode = 'view';
+				formError = null;
+				void detail.load();
+			}
+		});
+	});
+
+	// 4. Staff names (site, category, requester member), only with the matching capability.
+	$effect(() => {
+		const shown = $detail.detail;
+		const names = nameCatalogsFor(shown, capabilities, identity?.userId ?? null);
+		untrack(() => catalogs.loadNames(names));
+	});
+
+	// 5. A 401 of the CURRENT detail, mutation or catalog re-authenticates.
+	$effect(() => {
+		if (unauthenticatedError($detail) || catalogSessionExpiry($catalogs)) expireSession();
+	});
+
+	// 6. 429 cooldown clock (ticks only while a cooldown is active).
+	$effect(() => {
+		if ($detail.cooldownUntil === null) return;
+		now = Date.now();
+		const timer = setInterval(() => (now = Date.now()), 1000);
+		return () => clearInterval(timer);
+	});
+	const waitSeconds = $derived(remainingSeconds($detail.cooldownUntil, now));
+
+	const shown = $derived(
+		$detail.status === 'ready' || $detail.status === 'refreshing' ? $detail.detail : null
+	);
+	const available = $derived(shown ? incidentActions(shown, capabilities) : null);
+	const listHref = $derived(
+		identity ? resolve(incidentListPath(identity.organizationId)) : resolve('/app/incidents')
+	);
+	const failure = $derived(
+		$detail.error && ($detail.status === 'error' || $detail.status === 'access-lost')
+			? presentDetailError($detail.error, $detail.status === 'access-lost')
+			: null
+	);
+
+	/** Outcome of a legacy form mutation: close on success; keep the form with a safe message. */
+	function settle(result: MutationResult<unknown>) {
+		if (result.status === 'success') {
+			mode = 'view';
+			formError = null;
+		} else if (result.status === 'error' || result.status === 'unknown') {
+			formError = presentMutationFailure(result).message;
+		}
+	}
+
+	async function saveEdit(changes: {
 		status?: 'open' | 'pending' | 'resolved' | 'closed';
 		priority?: 'low' | 'medium' | 'high' | 'urgent';
 	}) {
-		if (submitting || !incident) return;
-		const targetOrgId = $session.activeOrganization?.id;
-		if (!targetOrgId) return;
-
-		submitting = true;
-		updateError = null;
-
-		if (editAbortController) {
-			editAbortController.abort();
-		}
-		const controller = new AbortController();
-		editAbortController = controller;
-
-		try {
-			const updated = await updateIncident(targetOrgId, incident.id, changes, {
-				signal: controller.signal
-			});
-			incident = updated;
-			isEditing = false;
-			updateError = null;
-		} catch (err: unknown) {
-			if ((err as Error)?.name === 'AbortError' || controller.signal.aborted) {
-				return;
-			}
-
-			if (err instanceof IncidentApiError && err.status === 401) {
-				session.clearSession();
-				await goto(resolve('/login?expired=true'));
-				return;
-			}
-
-			if (err instanceof IncidentApiError) {
-				updateError = err.message;
-			} else {
-				updateError = 'No se pudo actualizar la incidencia. Inténtalo de nuevo.';
-			}
-		} finally {
-			submitting = false;
-		}
+		formError = null;
+		settle(
+			await detail.mutate('edit', (organizationId, id) =>
+				updateIncident(organizationId, id, changes)
+			)
+		);
 	}
 
-	function handleCancelEdit() {
-		if (submitting) return;
-		isEditing = false;
-		updateError = null;
+	function openAssign() {
+		if (!shown || shown.audience !== 'staff') return;
+		mode = 'assign';
+		formError = null;
+		void catalogs.loadTeams();
+		void catalogs.loadAssignees(shown.teamId);
 	}
 
-	async function loadAssigneesForTeam(targetOrgId: string, teamId: string | null) {
-		const cacheKey = teamId ?? '__ALL__';
-		if (cachedAssigneesByTeam[cacheKey]) {
-			assignees = cachedAssigneesByTeam[cacheKey];
-			return;
-		}
-
-		assigneesRequestId += 1;
-		const thisRequestId = assigneesRequestId;
-
-		if (assigneesAbortController) {
-			assigneesAbortController.abort();
-		}
-		const controller = new AbortController();
-		assigneesAbortController = controller;
-
-		assigneesLoading = true;
-		try {
-			const fetched = await listAssignees(targetOrgId, {
-				...(teamId ? { teamId } : {}),
-				signal: controller.signal
-			});
-
-			if (thisRequestId !== assigneesRequestId) {
-				return;
-			}
-
-			cachedAssigneesByTeam[cacheKey] = fetched;
-			assignees = fetched;
-		} catch (err: unknown) {
-			if (thisRequestId !== assigneesRequestId) {
-				return;
-			}
-			if ((err as Error)?.name === 'AbortError' || controller.signal.aborted) {
-				return;
-			}
-			if (err instanceof IncidentApiError && err.status === 401) {
-				session.clearSession();
-				await goto(resolve('/login?expired=true'));
-				return;
-			}
-			if (err instanceof IncidentApiError) {
-				if (err.status === 403) {
-					assignmentError = 'No tienes permisos para asignar incidencias.';
-				} else {
-					assignmentError = err.message;
-				}
-			} else {
-				assignmentError = 'No se pudieron cargar los técnicos disponibles.';
-			}
-		} finally {
-			if (thisRequestId === assigneesRequestId) {
-				assigneesLoading = false;
-			}
-		}
-	}
-
-	async function handleOpenAssign() {
-		if (assignmentSubmitting) return;
-		isEditing = false;
-		isAssigning = true;
-		assignmentError = null;
-
-		const targetOrgId = $session.activeOrganization?.id;
-		if (!targetOrgId || !incident) return;
-
-		// Load teams on demand if not cached
-		if (cachedTeams.length === 0) {
-			teamsLoading = true;
-			try {
-				const fetchedTeams = await listTeams(targetOrgId);
-				cachedTeams = fetchedTeams;
-				teams = fetchedTeams;
-			} catch (err: unknown) {
-				if (err instanceof IncidentApiError && err.status === 401) {
-					session.clearSession();
-					await goto(resolve('/login?expired=true'));
-					return;
-				}
-				if (err instanceof IncidentApiError) {
-					if (err.status === 403) {
-						assignmentError = 'No tienes permisos para consultar los equipos de esta organización.';
-					} else {
-						assignmentError = err.message;
-					}
-				} else {
-					assignmentError = 'No se pudieron cargar los equipos disponibles.';
-				}
-				teamsLoading = false;
-				return;
-			} finally {
-				teamsLoading = false;
-			}
-		} else {
-			teams = cachedTeams;
-		}
-
-		// Load assignees for the incident's initial team
-		await loadAssigneesForTeam(targetOrgId, incident.teamId ?? null);
-	}
-
-	async function handleTeamChange(newTeamId: string | null) {
-		const targetOrgId = $session.activeOrganization?.id;
-		if (!targetOrgId) return;
-		assignmentError = null;
-		await loadAssigneesForTeam(targetOrgId, newTeamId);
-	}
-
-	async function handleSaveAssign(data: {
+	async function saveAssign(data: {
 		teamId?: string | null;
 		assignedToUserId?: string | null;
 		reason?: string;
 	}) {
-		if (assignmentSubmitting || !incident) return;
-		const targetOrgId = $session.activeOrganization?.id;
-		if (!targetOrgId) return;
-
-		// No-op check: both team and technician remain identical to current values
-		const initialTeamId = incident.teamId ?? null;
-		const initialUserId = incident.assignedToUserId ?? null;
-		const finalTeamId = data.teamId ?? null;
-		const finalUserId = data.assignedToUserId ?? null;
-
-		if (finalTeamId === initialTeamId && finalUserId === initialUserId) {
-			isAssigning = false;
-			assignmentError = null;
+		if (!shown || shown.audience !== 'staff') return;
+		// No effective change: nothing is sent.
+		if (
+			(data.teamId ?? null) === shown.teamId &&
+			(data.assignedToUserId ?? null) === shown.assignedToUserId
+		) {
+			mode = 'view';
 			return;
 		}
-
-		assignmentSubmitting = true;
-		assignmentError = null;
-
-		if (assignAbortController) {
-			assignAbortController.abort();
-		}
-		const controller = new AbortController();
-		assignAbortController = controller;
-
-		try {
-			const updated = await assignIncident(targetOrgId, incident.id, data, {
-				signal: controller.signal
-			});
-
-			// Resolve readable team name and technician name from local catalogs if not in response
-			const resolvedTeamName =
-				updated.teamName ??
-				(updated.teamId ? (cachedTeams.find((t) => t.id === updated.teamId)?.name ?? null) : null);
-			const resolvedTechName =
-				updated.assignedToUserName ??
-				(updated.assignedToUserId
-					? (assignees.find((a) => a.id === updated.assignedToUserId)?.name ?? null)
-					: null);
-
-			incident = {
-				...updated,
-				teamName: resolvedTeamName,
-				assignedToUserName: resolvedTechName
-			};
-			isAssigning = false;
-			assignmentError = null;
-		} catch (err: unknown) {
-			if ((err as Error)?.name === 'AbortError' || controller.signal.aborted) {
-				return;
-			}
-
-			if (err instanceof IncidentApiError && err.status === 401) {
-				session.clearSession();
-				await goto(resolve('/login?expired=true'));
-				return;
-			}
-
-			if (err instanceof IncidentApiError) {
-				if (err.status === 403) {
-					assignmentError = 'No tienes permisos para asignar esta incidencia.';
-				} else if (err.status === 404) {
-					assignmentError = 'No se pudo realizar la asignación.';
-				} else {
-					assignmentError = err.message;
-				}
-			} else {
-				assignmentError = 'No se pudo asignar la incidencia. Inténtalo de nuevo.';
-			}
-		} finally {
-			assignmentSubmitting = false;
-		}
+		formError = null;
+		settle(
+			await detail.mutate('assign', (organizationId, id) =>
+				assignIncident(organizationId, id, data)
+			)
+		);
 	}
 
-	function handleCancelAssign() {
-		if (assignmentSubmitting) return;
-		isAssigning = false;
-		assignmentError = null;
+	const assignError = $derived(
+		formError ??
+			($catalogs.teams.error ? presentApiError($catalogs.teams.error).message : null) ??
+			($catalogs.assignees.error ? presentApiError($catalogs.assignees.error).message : null)
+	);
+
+	function changeOrganization(id: string): boolean {
+		// Never carry this incident id to another tenant: go to the new organization's list.
+		void goto(resolve(organizationSwitchTarget(id)));
+		return true;
+	}
+
+	async function leave() {
+		signOutError = null;
+		signingOut = true;
+		// A 401 (session already gone) counts as signed out; any other failure keeps the session.
+		const result = await attemptSignOut(() => signOut());
+		signingOut = false;
+		if (!result.ok) {
+			signOutError = SIGN_OUT_FAILED_MESSAGE;
+			return;
+		}
+		session.clearSession();
+		await goto(resolve('/login'));
 	}
 </script>
 
-<div class="min-h-screen bg-slate-950 text-slate-100 antialiased">
-	<!-- Autonomous minimal header -->
-	<header class="border-b border-slate-800 bg-slate-900/80 px-4 py-4 backdrop-blur sm:px-6 lg:px-8">
-		<div class="mx-auto flex max-w-5xl items-center justify-between">
-			<div class="flex items-center space-x-3">
-				<span class="text-lg font-bold tracking-tight text-white">SoporteFlow</span>
-				<span
-					class="rounded-full border border-slate-700 bg-slate-800 px-2.5 py-0.5 text-xs text-slate-300"
-				>
-					Datos reales
-				</span>
-			</div>
-			{#if $session.activeOrganization}
-				<div class="text-xs text-slate-400">
-					Organización: <span class="font-medium text-slate-200"
-						>{$session.activeOrganization.name}</span
-					>
+<svelte:head>
+	<title>{shown ? `#${shown.incidentNumber} ${shown.title}` : 'Incidencia'} · SoporteFlow</title>
+</svelte:head>
+
+<!-- eslint-disable svelte/no-navigation-without-resolve -- hrefs are built from resolve() -->
+<AppShell
+	context={$context}
+	title={shown ? `#${shown.incidentNumber}` : 'Incidencia'}
+	current="incidents"
+	{signingOut}
+	{signOutError}
+	onOrganizationChange={changeOrganization}
+	onSignOut={leave}
+>
+	<nav class="sf-breadcrumb" aria-label="Ruta de navegación">
+		<ol>
+			<li><a href={listHref}>Incidencias</a></li>
+			<li aria-current="page">{shown ? `#${shown.incidentNumber}` : 'Incidencia'}</li>
+		</ol>
+	</nav>
+	<OrganizationGate context={$context} onretry={() => void context.load(explicitOrganization)}>
+		{#if !validId}
+			<PageHeader title="Incidencia no disponible" />
+			<Alert tone="warning" title="Incidencia no disponible">
+				<p>El enlace no corresponde a ninguna incidencia.</p>
+				{#snippet actions()}
+					<Button variant="secondary" size="sm" href={listHref}>Volver a incidencias</Button>
+				{/snippet}
+			</Alert>
+		{:else if shown}
+			<IncidentHeader
+				incident={shown}
+				organizationName={$context.status === 'ready' ? $context.activeOrganization?.name : null}
+			>
+				{#snippet actions()}
+					{#if mode === 'view' && available?.changeStatus.available}
+						<Button
+							variant="secondary"
+							size="sm"
+							onclick={() => ((mode = 'edit'), (formError = null))}
+						>
+							Editar
+						</Button>
+					{/if}
+					{#if mode === 'view' && available?.assign.available}
+						<Button variant="secondary" size="sm" onclick={openAssign}>
+							{shown.audience === 'staff' && (shown.assignedToUserId || shown.teamId)
+								? 'Reasignar'
+								: 'Asignar'}
+						</Button>
+					{/if}
+				{/snippet}
+			</IncidentHeader>
+			<div class="sf-detail-grid" aria-busy={$detail.status === 'refreshing' || undefined}>
+				<div class="sf-detail-main">
+					{#if shown.audience === 'staff' && mode === 'edit'}
+						<RealIncidentEditForm
+							incident={shown}
+							submitting={$detail.mutations.edit?.status === 'pending'}
+							error={formError}
+							onSave={saveEdit}
+							onCancel={() => ((mode = 'view'), (formError = null))}
+						/>
+					{:else if shown.audience === 'staff' && mode === 'assign'}
+						<RealIncidentAssignForm
+							currentTeamId={shown.teamId}
+							currentTeamName={shown.teamName}
+							currentAssigneeUserId={shown.assignedToUserId}
+							currentAssigneeUserName={shown.assignedToUserName}
+							teams={$catalogs.teams.items.map((team) => ({ ...team, description: null }))}
+							assignees={[...$catalogs.assignees.items]}
+							teamsLoading={$catalogs.teams.status === 'loading'}
+							assigneesLoading={$catalogs.assignees.status === 'loading'}
+							submitting={$detail.mutations.assign?.status === 'pending'}
+							error={assignError}
+							onTeamChange={(teamId) => void catalogs.loadAssignees(teamId)}
+							onSave={saveAssign}
+							onCancel={() => ((mode = 'view'), (formError = null))}
+						/>
+					{/if}
+					<IncidentDescription description={shown.description} />
 				</div>
-			{/if}
-		</div>
-	</header>
-
-	<main class="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
-		<!-- Back to incidents link -->
-		<div class="mb-6">
-			<a
-				href={resolve('/app')}
-				class="inline-flex items-center text-sm font-medium text-cyan-400 transition-colors hover:text-cyan-300"
-			>
-				&larr; Volver a incidencias
-			</a>
-		</div>
-
-		{#if sessionLoading}
-			<div
-				class="flex items-center justify-center p-12 text-center"
-				role="status"
-				aria-live="polite"
-			>
-				<span class="text-sm font-medium text-slate-400">Verificando sesión...</span>
+				<aside class="sf-detail-aside" aria-label="Contexto de la incidencia">
+					{#if shown.audience === 'staff'}
+						<IncidentStaffContext
+							incident={shown}
+							selfUserId={identity?.userId ?? null}
+							selfName={$context.user?.name ?? null}
+							siteNames={namesOf($catalogs.sites)}
+							categoryNames={namesOf($catalogs.categories)}
+							memberNames={namesOf($catalogs.memberships)}
+						/>
+					{:else}
+						<IncidentRequesterContext incident={shown} />
+					{/if}
+				</aside>
 			</div>
-		{:else if isEditing && incident}
-			<RealIncidentEditForm
-				{incident}
-				{submitting}
-				error={updateError}
-				onSave={handleSaveEdit}
-				onCancel={handleCancelEdit}
-			/>
-		{:else if isAssigning && incident}
-			<RealIncidentAssignForm
-				currentTeamId={incident.teamId}
-				currentTeamName={incident.teamName}
-				currentAssigneeUserId={incident.assignedToUserId}
-				currentAssigneeUserName={incident.assignedToUserName}
-				{teams}
-				{assignees}
-				{teamsLoading}
-				{assigneesLoading}
-				submitting={assignmentSubmitting}
-				error={assignmentError}
-				onTeamChange={handleTeamChange}
-				onSave={handleSaveAssign}
-				onCancel={handleCancelAssign}
-			/>
+		{:else if failure}
+			<PageHeader title="Detalle de incidencia" />
+			<Alert tone={failure.tone} title={failure.title} requestId={failure.requestId}>
+				<p>{failure.message}</p>
+				{#if waitSeconds > 0}<p aria-live="polite">Podrás reintentar en {waitSeconds} s.</p>{/if}
+				{#snippet actions()}
+					{#if failure.retry}
+						<Button
+							variant="secondary"
+							size="sm"
+							disabled={waitSeconds > 0}
+							onclick={() => void detail.load()}>Reintentar</Button
+						>
+					{/if}
+					<Button variant="secondary" size="sm" href={listHref}>Volver a incidencias</Button>
+				{/snippet}
+			</Alert>
 		{:else}
-			<RealIncidentDetail
-				{incident}
-				{loading}
-				{error}
-				onEdit={() => {
-					isEditing = true;
-					isAssigning = false;
-					updateError = null;
-				}}
-				onAssign={handleOpenAssign}
-			/>
+			<PageHeader title="Detalle de incidencia" />
+			<div class="sf-loading"><Spinner label="Cargando incidencia…" /></div>
 		{/if}
-	</main>
-</div>
+	</OrganizationGate>
+</AppShell>
+
+<style>
+	.sf-breadcrumb {
+		margin-bottom: var(--space-3);
+	}
+	.sf-breadcrumb ol {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-2);
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		font-size: var(--text-sm);
+		color: var(--text-muted);
+	}
+	.sf-breadcrumb li + li::before {
+		content: '/';
+		margin-right: var(--space-2);
+		color: var(--text-subtle);
+	}
+	.sf-breadcrumb a {
+		color: var(--text-secondary);
+		text-decoration: none;
+		border-radius: var(--radius-sm);
+	}
+	.sf-breadcrumb a:hover {
+		color: var(--accent);
+		text-decoration: underline;
+	}
+	.sf-breadcrumb a:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+	}
+	.sf-breadcrumb [aria-current='page'] {
+		color: var(--text-primary);
+		font-weight: 600;
+		font-family: var(--font-mono);
+	}
+	.sf-detail-grid {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
+		gap: var(--space-5);
+		align-items: start;
+	}
+	.sf-detail-main {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-4);
+		min-width: 0;
+	}
+	.sf-detail-aside {
+		min-width: 0;
+	}
+	.sf-detail-grid[aria-busy='true'] {
+		opacity: 0.7;
+		transition: opacity var(--duration) var(--ease);
+	}
+	.sf-loading {
+		display: flex;
+		justify-content: center;
+		padding: var(--space-8) var(--space-5);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-xl);
+		background: var(--surface-card);
+		box-shadow: var(--sf-shadow-card);
+	}
+	@media (max-width: 1023px) {
+		.sf-detail-grid {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+</style>

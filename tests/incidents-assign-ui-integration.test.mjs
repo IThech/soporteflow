@@ -34,6 +34,11 @@ function makeSampleIncident(overrides = {}) {
 
 /**
  * Simulates the assignment coordinator logic in src/routes/app/incidents/[id]/+page.svelte.
+ *
+ * NOTE (UI-2C): this coordinator reproduces the PRE-UI-2C page. Since UI-2C the detail page
+ * sends these mutations through the UI-2A controller (`mutate`: single-shot, stale-safe, detail
+ * re-read) and the real page is covered by tests/ui-incident-detail.test.mjs. The legacy forms are
+ * kept temporarily; this reproduction is scheduled to be replaced in UI-2E.
  */
 function createAssignCoordinator(initialIncident, options = {}) {
 	const listAssigneesFn = options.listAssigneesFn ?? listAssignees;
@@ -166,6 +171,7 @@ test('SoporteFlow — Etapa 5.4I-B: UI Real de Asignación y Reasignación de T�
 		root,
 		configFile: false,
 		envDir: false,
+		resolve: { alias: { $lib: path.resolve(root, 'src/lib') } },
 		plugins: [svelte({ configFile: false })],
 		server: { middlewareMode: true, hmr: false, watch: null },
 		appType: 'custom'
@@ -173,10 +179,22 @@ test('SoporteFlow — Etapa 5.4I-B: UI Real de Asignación y Reasignación de T�
 	t.after(() => componentServer.close());
 
 	const { render } = await componentServer.ssrLoadModule('svelte/server');
-	const detailModule = await componentServer.ssrLoadModule(
-		'/src/lib/components/incidents/RealIncidentDetail.svelte'
+	// UI-2C: the read-only detail is IncidentStaffContext (RealIncidentDetail was retired); the
+	// assign/reassign buttons belong to the page and are tested in tests/ui-incident-detail.test.mjs.
+	const staffContextModule = await componentServer.ssrLoadModule(
+		'/src/lib/components/incidents/IncidentStaffContext.svelte'
 	);
-	const RealIncidentDetail = detailModule.default;
+	const renderStaffContext = (item) =>
+		render(staffContextModule.default, {
+			props: {
+				incident: { ...item, audience: 'staff' },
+				selfUserId: null,
+				selfName: null,
+				siteNames: null,
+				categoryNames: null,
+				memberNames: null
+			}
+		}).body;
 	const assignFormModule = await componentServer.ssrLoadModule(
 		'/src/lib/components/incidents/RealIncidentAssignForm.svelte'
 	);
@@ -189,12 +207,10 @@ test('SoporteFlow — Etapa 5.4I-B: UI Real de Asignación y Reasignación de T�
 			assignedToUserName: null
 		});
 
-		const html = render(RealIncidentDetail, {
-			props: { incident: item, loading: false, error: null }
-		}).body;
+		const html = renderStaffContext(item);
 
 		assert.ok(html.includes('Sin asignar'), 'Debe mostrar texto "Sin asignar"');
-		assert.ok(html.includes('Asignado a'), 'Debe incluir el encabezado "Asignado a"');
+		assert.ok(html.includes('Técnico'), 'Debe incluir la etiqueta "Técnico"');
 	});
 
 	// 2. muestra nombre técnico existente
@@ -204,54 +220,14 @@ test('SoporteFlow — Etapa 5.4I-B: UI Real de Asignación y Reasignación de T�
 			assignedToUserName: 'Carlos Guardado'
 		});
 
-		const html = render(RealIncidentDetail, {
-			props: { incident: item, loading: false, error: null }
-		}).body;
+		const html = renderStaffContext(item);
 
 		assert.ok(html.includes('Carlos Guardado'), 'Debe mostrar el nombre del técnico');
 		assert.equal(html.includes('Sin asignar'), false, 'No debe mostrar "Sin asignar"');
 	});
 
-	// 3. botón "Asignar técnico"
-	await t.test('3. botón "Asignar técnico" aparece si no hay técnico y se pasa onAssign', () => {
-		const item = makeSampleIncident({ assignedToUserId: null });
-
-		const html = render(RealIncidentDetail, {
-			props: {
-				incident: item,
-				loading: false,
-				error: null,
-				onAssign: () => {}
-			}
-		}).body;
-
-		assert.ok(html.includes('Asignar técnico'), 'Debe mostrar botón "Asignar técnico"');
-		assert.equal(html.includes('Reasignar'), false, 'No debe mostrar botón "Reasignar"');
-	});
-
-	// 4. botón "Reasignar"
-	await t.test('4. botón "Reasignar" aparece si ya hay técnico y se pasa onAssign', () => {
-		const item = makeSampleIncident({
-			assignedToUserId: randomUUID(),
-			assignedToUserName: 'Elena Vega'
-		});
-
-		const html = render(RealIncidentDetail, {
-			props: {
-				incident: item,
-				loading: false,
-				error: null,
-				onAssign: () => {}
-			}
-		}).body;
-
-		assert.ok(html.includes('Reasignar'), 'Debe mostrar botón "Reasignar"');
-		assert.equal(
-			html.includes('Asignar técnico'),
-			false,
-			'No debe mostrar botón "Asignar técnico"'
-		);
-	});
+	// 3-4. UI-2C: the "Asignar"/"Reasignar" buttons are rendered by the page (only with
+	// incidents:assign on a staff view) and are tested in tests/ui-incident-detail.test.mjs.
 
 	// 5. carga catálogo real
 	await t.test('5. carga catálogo real con listAssignees()', async () => {
@@ -289,7 +265,7 @@ test('SoporteFlow — Etapa 5.4I-B: UI Real de Asignación y Reasignación de T�
 			'utf-8'
 		);
 		const detailSrc = fs.readFileSync(
-			path.join(root, 'src/lib/components/incidents/RealIncidentDetail.svelte'),
+			path.join(root, 'src/lib/components/incidents/IncidentStaffContext.svelte'),
 			'utf-8'
 		);
 		const pageSrc = fs.readFileSync(
@@ -614,9 +590,7 @@ test('SoporteFlow — Etapa 5.4I-B: UI Real de Asignación y Reasignación de T�
 			assignedToUserName: 'Paula Rivas'
 		});
 
-		const detailHtml = render(RealIncidentDetail, {
-			props: { incident: item, loading: false, error: null }
-		}).body;
+		const detailHtml = renderStaffContext(item);
 
 		assert.equal(
 			detailHtml.includes(rawUserId),
