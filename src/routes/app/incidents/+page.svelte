@@ -4,6 +4,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { signOut } from '$lib/api/auth';
+	import { attemptSignOut, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
 	import type { IncidentQueue } from '$lib/api/incidents';
 	import {
 		listIncidentsPage,
@@ -48,6 +49,7 @@
 
 	const explicitOrganization = $derived(page.url.searchParams.get('organizationId'));
 	let signingOut = $state(false);
+	let signOutError = $state<string | null>(null);
 	let now = $state(Date.now());
 
 	// 1. Organization context from the URL (reloaded only when the organization changes).
@@ -150,11 +152,14 @@
 		void goto(resolve(`/app/incidents?organizationId=${encodeURIComponent(id)}`));
 	}
 	async function leave() {
+		signOutError = null;
 		signingOut = true;
-		try {
-			await signOut();
-		} catch {
-			/* the server session may already be gone; leave anyway */
+		// A 401 (session already gone) counts as signed out; any other failure keeps the session.
+		const result = await attemptSignOut(() => signOut());
+		signingOut = false;
+		if (!result.ok) {
+			signOutError = SIGN_OUT_FAILED_MESSAGE;
+			return;
 		}
 		session.clearSession();
 		await goto(resolve('/login'));
@@ -173,6 +178,7 @@
 	title="Incidencias"
 	current="incidents"
 	{signingOut}
+	{signOutError}
 	onOrganizationChange={changeOrganization}
 	onSignOut={leave}
 >

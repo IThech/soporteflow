@@ -29,7 +29,7 @@
 		navigation: NavigationModel;
 		current?: 'incidents' | 'new-incident' | null;
 		switching?: boolean;
-		onOrganizationChange: (organizationId: string) => void;
+		onOrganizationChange: (organizationId: string) => boolean | void;
 		onNavigate?: () => void;
 	} = $props();
 

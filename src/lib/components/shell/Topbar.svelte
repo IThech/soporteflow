@@ -18,6 +18,7 @@
 		navOpen,
 		navId,
 		signingOut = false,
+		signOutError = null,
 		onToggleNav,
 		onSignOut,
 		actions
@@ -28,6 +29,8 @@
 		navOpen: boolean;
 		navId: string;
 		signingOut?: boolean;
+		/** A failed sign-out: shown in the menu; the session is NOT presented as closed. */
+		signOutError?: string | null;
 		onToggleNav: () => void;
 		onSignOut: () => void;
 		actions?: Snippet;
@@ -67,6 +70,9 @@
 							{#if userEmail}<p class="sf-user-panel-email">{userEmail}</p>{/if}
 						</div>
 					</div>
+					{#if signOutError}
+						<p class="sf-sign-out-error" role="alert">{signOutError}</p>
+					{/if}
 					<button type="button" onclick={onSignOut} disabled={signingOut} aria-busy={signingOut}>
 						<Icon name="log-out" size={16} />
 						{signingOut ? 'Cerrando sesión…' : 'Cerrar sesión'}
@@ -221,6 +227,15 @@
 		font-size: var(--text-xs);
 		color: var(--text-muted);
 		overflow-wrap: anywhere;
+	}
+	.sf-sign-out-error {
+		margin: 0 0 var(--space-1);
+		padding: var(--space-2);
+		border-radius: var(--radius);
+		background: var(--danger-soft);
+		color: var(--danger);
+		font-size: var(--text-xs);
+		line-height: 1.45;
 	}
 	.sf-user-panel button {
 		display: flex;

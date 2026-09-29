@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { UserOrganizationSummary } from '$lib/api/auth';
 	import Icon from '$lib/ui/Icon.svelte';
+	import { applyOrganizationChoice } from '$lib/app/organization-switch';
 	/**
 	 * Organization switcher for the dark sidebar. Changing the selection only reports the choice;
 	 * the page updates the URL and the organization context validates it.
@@ -15,7 +16,8 @@
 		organizations: readonly UserOrganizationSummary[];
 		activeOrganizationId: string | null;
 		disabled?: boolean;
-		onchange: (organizationId: string) => void;
+		/** Return false to refuse the change (the select then goes back to the active organization). */
+		onchange: (organizationId: string) => boolean | void;
 	} = $props();
 	const controlId = $props.id();
 </script>
@@ -36,7 +38,11 @@
 				class="sf-org-select"
 				value={activeOrganizationId ?? ''}
 				{disabled}
-				onchange={(event) => onchange(event.currentTarget.value)}
+				onchange={(event) => {
+					const select = event.currentTarget;
+					const reset = applyOrganizationChoice(onchange, select.value, activeOrganizationId);
+					if (reset !== null) select.value = reset;
+				}}
 			>
 				<option value="" disabled>Selecciona una organización</option>
 				{#each organizations as organization (organization.id)}

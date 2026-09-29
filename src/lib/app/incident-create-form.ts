@@ -1,0 +1,297 @@
+import type { ApiError } from '../api/errors.ts';
+import {
+	CreateIncidentInputError,
+	buildCreateIncidentPayload,
+	type CreateIncidentField,
+	type CreateIncidentRequest
+} from '../api/incident-create.ts';
+import { INCIDENT_CLIENT_MAX_LENGTH, INCIDENT_TITLE_MAX_LENGTH } from '../api/incident-detail.ts';
+import type { IncidentPriority } from '../api/incident-views.ts';
+import { presentApiError } from './error-presentation.ts';
+import type { CreatedIncidentOutcome } from './incident-create-controller.ts';
+import type { MutationResult } from './mutation.ts';
+import { tenantKey, type TenantIdentity } from './tenant-identity.ts';
+
+/**
+ * UI-2B — pure model of the "new incident" form (no Svelte, unit-tested in Node).
+ *
+ * The form edits a Draft; `toCreateRequest` turns it into the UI-2A CreateIncidentRequest:
+ * - requester (only with the selector): 'self' -> the actor's own user id, another member -> that
+ *   user id. Without the selector clientUserId is omitted (the server then uses the caller);
+ * - SLA 'auto' -> slaPolicyId OMITTED (server default policy); 'none' -> null (explicit "no SLA");
+ *   a policy -> its UUID. Choosing 'none'/a policy is only offered with the right capabilities;
+ * - empty site/category -> omitted.
+ * Which optional sections exist depends ONLY on real capabilities (never roles):
+ * - requester: incidents:view_all (server rule to choose another requester) + memberships:view;
+ * - site: sites:view;   category: categories:view;
+ * - SLA: sla:assign (else Automático only); naming a policy also needs sla:view.
+ * Values for the optional selects only ever come from the real catalogs (no typed UUIDs).
+ */
+
+export const PRIORITY_OPTIONS: readonly { value: IncidentPriority; label: string }[] = [
+	{ value: 'low', label: 'Baja' },
+	{ value: 'medium', label: 'Media' },
+	{ value: 'high', label: 'Alta' },
+	{ value: 'urgent', label: 'Urgente' }
+];
+
+export interface CreateIncidentDraft {
+	title: string;
+	description: string;
+	client: string;
+	priority: IncidentPriority;
+	/** 'self' or the user id of another active member (from the memberships catalog). */
+	requester: string;
+	/** '' = none. */
+	siteId: string;
+	/** '' = none. */
+	categoryId: string;
+	/** 'auto' | 'none' | policy UUID (select value). */
+	sla: string;
+}
+
+export const REQUESTER_SELF = 'self';
+export const SLA_AUTO = 'auto';
+export const SLA_NONE = 'none';
+
+export function emptyCreateDraft(): CreateIncidentDraft {
+	return {
+		title: '',
+		description: '',
+		client: '',
+		priority: 'medium',
+		requester: REQUESTER_SELF,
+		siteId: '',
+		categoryId: '',
+		sla: SLA_AUTO
+	};
+}
+
+/** true when the user typed or chose anything (a discard must then be confirmed). */
+export function isDraftDirty(draft: CreateIncidentDraft): boolean {
+	const empty = emptyCreateDraft();
+	return (Object.keys(empty) as (keyof CreateIncidentDraft)[]).some((key) =>
+		typeof draft[key] === 'string' && typeof empty[key] === 'string'
+			? (draft[key] as string).trim() !== (empty[key] as string)
+			: draft[key] !== empty[key]
+	);
+}
+
+export interface CreateFormSections {
+	requester: boolean;
+	site: boolean;
+	category: boolean;
+	/** Offer SLA choices at all (Automático / Sin SLA). */
+	sla: boolean;
+	/** Offer named policies (needs the policies catalog). */
+	slaPolicies: boolean;
+	readonly any: boolean;
+}
+
+export function createFormSections(capabilities: readonly string[]): CreateFormSections {
+	const has = (id: string) => capabilities.includes(id);
+	const sections = {
+		requester: has('incidents:view_all') && has('memberships:view'),
+		site: has('sites:view'),
+		category: has('categories:view'),
+		sla: has('sla:assign'),
+		slaPolicies: has('sla:assign') && has('sla:view')
+	};
+	return { ...sections, any: Object.values(sections).some(Boolean) };
+}
+
+export type CreateFieldErrors = Partial<Record<CreateIncidentField, string>>;
+
+/** Field order used to focus the first invalid field. */
+export const CREATE_FIELD_ORDER: readonly CreateIncidentField[] = [
+	'title',
+	'description',
+	'client',
+	'priority',
+	'clientUserId',
+	'siteId',
+	'categoryId',
+	'slaPolicyId'
+];
+
+/** Same rules as the server (and UI-2A's payload builder); no invented limits. */
+export function validateCreateDraft(draft: CreateIncidentDraft): CreateFieldErrors {
+	const errors: CreateFieldErrors = {};
+	const title = draft.title.trim();
+	if (!title) errors.title = 'El título es obligatorio.';
+	else if (title.length > INCIDENT_TITLE_MAX_LENGTH)
+		errors.title = `El título no puede superar ${INCIDENT_TITLE_MAX_LENGTH} caracteres.`;
+	if (!draft.description.trim()) errors.description = 'La descripción es obligatoria.';
+	const client = draft.client.trim();
+	if (!client) errors.client = 'El cliente es obligatorio.';
+	else if (client.length > INCIDENT_CLIENT_MAX_LENGTH)
+		errors.client = `El cliente no puede superar ${INCIDENT_CLIENT_MAX_LENGTH} caracteres.`;
+	if (!PRIORITY_OPTIONS.some((option) => option.value === draft.priority))
+		errors.priority = 'Selecciona una prioridad válida.';
+	return errors;
+}
+
+/**
+ * Draft -> UI-2A request. Optional values are only taken when their section is offered, so a
+ * stale select value can never smuggle a field the user may not set.
+ */
+export function toCreateRequest(
+	draft: CreateIncidentDraft,
+	sections: CreateFormSections,
+	/** The signed-in user (identity.userId): the explicit "Yo" of the requester selector. */
+	actorUserId: string
+): CreateIncidentRequest {
+	const request: CreateIncidentRequest = {
+		title: draft.title,
+		description: draft.description,
+		client: draft.client,
+		priority: draft.priority
+	};
+	// With the selector (the actor may choose: incidents:view_all) the server keeps exactly what it
+	// receives — an omitted clientUserId is stored as null — so "Yo" must be sent explicitly.
+	// Without the selector nothing is sent: the server sets the actor itself (it may not choose).
+	if (sections.requester)
+		request.clientUserId = draft.requester === REQUESTER_SELF ? actorUserId : draft.requester;
+	if (sections.site && draft.siteId) request.siteId = draft.siteId;
+	if (sections.category && draft.categoryId) request.categoryId = draft.categoryId;
+	if (sections.sla) {
+		if (draft.sla === SLA_NONE) request.slaPolicyId = null;
+		else if (draft.sla !== SLA_AUTO && sections.slaPolicies) request.slaPolicyId = draft.sla;
+		// SLA_AUTO: property omitted -> the server applies the organization's default policy.
+	}
+	return request;
+}
+
+/** Final gate before submitting: the UI-2A builder (same rules the controller will send). */
+export function checkCreateRequest(
+	organizationId: string,
+	request: CreateIncidentRequest
+): CreateFieldErrors {
+	try {
+		buildCreateIncidentPayload(organizationId, request);
+		return {};
+	} catch (error) {
+		if (error instanceof CreateIncidentInputError && error.field)
+			return { [error.field]: error.message };
+		throw error;
+	}
+}
+
+/** Server error codes of POST /api/incidents that belong to one field. */
+const FIELD_ERRORS: Readonly<Record<string, [CreateIncidentField, string]>> = {
+	SITE_NOT_FOUND: ['siteId', 'La sede seleccionada ya no está disponible.'],
+	SITE_INACTIVE: ['siteId', 'La sede seleccionada está inactiva.'],
+	CATEGORY_NOT_FOUND: ['categoryId', 'La categoría seleccionada ya no está disponible.'],
+	CATEGORY_INACTIVE: ['categoryId', 'La categoría seleccionada está inactiva.'],
+	SLA_POLICY_NOT_FOUND: ['slaPolicyId', 'La política SLA seleccionada ya no está disponible.'],
+	SLA_POLICY_INACTIVE: ['slaPolicyId', 'La política SLA seleccionada está inactiva.'],
+	CLIENT_USER_MEMBERSHIP_NOT_FOUND: [
+		'clientUserId',
+		'El solicitante seleccionado ya no pertenece a la organización.'
+	],
+	CLIENT_USER_INACTIVE: ['clientUserId', 'El solicitante seleccionado está inactivo.']
+};
+
+export interface CreateErrorView {
+	title: string;
+	message: string;
+	requestId?: string;
+	/** Error to show next to a field (the draft is always kept). */
+	field?: { name: CreateIncidentField; message: string };
+}
+
+/**
+ * Safe Spanish presentation of a definite creation failure. Backend messages are never shown
+ * (they are technical English); only its stable code selects a field message.
+ */
+export function presentCreateError(error: ApiError): CreateErrorView {
+	const base = presentApiError(error);
+	const field = FIELD_ERRORS[error.code];
+	if (field)
+		return {
+			title: 'Revisa los datos de la incidencia',
+			message: field[1],
+			requestId: base.requestId,
+			field: { name: field[0], message: field[1] }
+		};
+	const messages: Partial<Record<ApiError['kind'], [string, string]>> = {
+		'invalid-input': [
+			'Revisa los datos de la incidencia',
+			'El servidor no aceptó los datos. Revisa los campos y vuelve a intentarlo.'
+		],
+		forbidden: [
+			'Acceso no permitido',
+			'No tienes permisos para crear esta incidencia con los datos indicados.'
+		],
+		'payload-too-large': [
+			'Solicitud demasiado grande',
+			'El contenido es demasiado extenso. Reduce la descripción y vuelve a intentarlo.'
+		],
+		conflict: [
+			'No se pudo crear la incidencia',
+			'Los datos entran en conflicto con el estado actual. Revísalos y vuelve a intentarlo.'
+		],
+		unprocessable: [
+			'No se pudo crear la incidencia',
+			'La solicitud no se pudo procesar. Revisa los datos y vuelve a intentarlo.'
+		],
+		'not-found': [
+			'No se pudo crear la incidencia',
+			'Alguno de los datos seleccionados ya no está disponible.'
+		]
+	};
+	const custom = messages[error.kind];
+	return {
+		title: custom?.[0] ?? base.title,
+		message: custom?.[1] ?? base.message,
+		requestId: base.requestId
+	};
+}
+
+/**
+ * What the page must do with a submission result (the page only executes it):
+ * - `ignore`: stale (identity changed meanwhile) or busy — no navigation, message or draft change;
+ * - `open-detail`: confirmed and readable — navigate to that incident of the SAME organization;
+ * - `show-created`: confirmed but not readable — success notice, no detail navigation;
+ * - `keep-draft`: definite error (field errors, optional 429 cooldown) or unknown outcome
+ *   (verify before resending) — the draft is kept and nothing is resent automatically.
+ */
+export type CreationFollowUp =
+	| { kind: 'ignore' }
+	| { kind: 'open-detail'; incidentId: string; organizationId: string }
+	| { kind: 'show-created' }
+	| {
+			kind: 'keep-draft';
+			outcome: 'error' | 'unknown';
+			fieldErrors: CreateFieldErrors;
+			cooldownSeconds: number | null;
+	  };
+
+export function planCreationFollowUp(
+	result: MutationResult<CreatedIncidentOutcome>,
+	owner: TenantIdentity,
+	current: TenantIdentity | null
+): CreationFollowUp {
+	if (result.status === 'stale' || result.status === 'busy') return { kind: 'ignore' };
+	if (tenantKey(owner) !== tenantKey(current)) return { kind: 'ignore' };
+	if (result.status === 'success')
+		return result.value.readability === 'readable'
+			? {
+					kind: 'open-detail',
+					incidentId: result.value.incident.id,
+					organizationId: owner.organizationId
+				}
+			: { kind: 'show-created' };
+	if (result.status === 'unknown')
+		return { kind: 'keep-draft', outcome: 'unknown', fieldErrors: {}, cooldownSeconds: null };
+	const view = presentCreateError(result.error);
+	return {
+		kind: 'keep-draft',
+		outcome: 'error',
+		fieldErrors: view.field ? { [view.field.name]: view.field.message } : {},
+		cooldownSeconds:
+			result.error.status === 429 && result.error.retryAfterSeconds !== undefined
+				? result.error.retryAfterSeconds
+				: null
+	};
+}

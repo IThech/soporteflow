@@ -18,6 +18,7 @@
 		title,
 		current = null,
 		signingOut = false,
+		signOutError = null,
 		onOrganizationChange,
 		onSignOut,
 		actions,
@@ -27,7 +28,10 @@
 		title: string;
 		current?: 'incidents' | 'new-incident' | null;
 		signingOut?: boolean;
-		onOrganizationChange: (organizationId: string) => void;
+		/** Safe message of a failed sign-out (shown in the user menu). */
+		signOutError?: string | null;
+		/** May return false to refuse the change (e.g. the page keeps an unsaved draft). */
+		onOrganizationChange: (organizationId: string) => boolean | void;
 		onSignOut: () => void;
 		actions?: Snippet;
 		children: Snippet;
@@ -71,8 +75,9 @@
 			{current}
 			switching={context.status === 'loading'}
 			onOrganizationChange={(id) => {
-				navOpen = false;
-				onOrganizationChange(id);
+				const accepted = onOrganizationChange(id);
+				if (accepted !== false) navOpen = false;
+				return accepted;
 			}}
 			onNavigate={() => (navOpen = false)}
 		/>
@@ -90,6 +95,7 @@
 			{navOpen}
 			{navId}
 			{signingOut}
+			{signOutError}
 			onToggleNav={toggleNav}
 			{onSignOut}
 			{actions}
