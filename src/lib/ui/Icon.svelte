@@ -16,7 +16,9 @@
 		'chevron-right': 'm9.5 6 6 6-6 6',
 		menu: 'M4 7h16M4 12h16M4 17h16',
 		'log-out': 'M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16.5 14.5 12 10 7.5M14.5 12H4',
-		'filter-x': 'M4 5h16l-6 7.5V19l-4 1.5v-8L4 5Z'
+		'filter-x': 'M4 5h16l-6 7.5V19l-4 1.5v-8L4 5Z',
+		lock: 'M7 11V7a5 5 0 0 1 10 0v4M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z',
+		'message-square': 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'
 	} as const;
 	export type IconName = keyof typeof PATHS;
 </script>

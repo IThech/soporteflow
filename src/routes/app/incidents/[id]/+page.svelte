@@ -42,6 +42,7 @@
 	import OrganizationGate from '$lib/components/shell/OrganizationGate.svelte';
 	import IncidentHeader from '$lib/components/incidents/IncidentHeader.svelte';
 	import IncidentDescription from '$lib/components/incidents/IncidentDescription.svelte';
+	import IncidentActivity from '$lib/components/incidents/IncidentActivity.svelte';
 	import IncidentStaffContext from '$lib/components/incidents/IncidentStaffContext.svelte';
 	import IncidentRequesterContext from '$lib/components/incidents/IncidentRequesterContext.svelte';
 	import RealIncidentEditForm from '$lib/components/incidents/RealIncidentEditForm.svelte';
@@ -347,6 +348,13 @@
 						/>
 					{/if}
 					<IncidentDescription description={shown.description} />
+					<IncidentActivity
+						incident={shown}
+						{identity}
+						{capabilities}
+						detailController={detail}
+						onSessionExpiry={expireSession}
+					/>
 				</div>
 				<aside class="sf-detail-aside" aria-label="Contexto de la incidencia">
 					{#if shown.audience === 'staff'}
