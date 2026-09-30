@@ -49,6 +49,7 @@ export interface IncidentDtoSource extends SlaComplianceInput {
 	status: string;
 	priority: string;
 	clientUserId: string | null;
+	clientId?: string | null;
 	siteId: string | null;
 	categoryId?: string | null;
 	createdAt: Date | string;
@@ -85,7 +86,10 @@ export function toIncidentDto<T extends IncidentDtoSource>(
 	audience: 'staff' | 'requester',
 	now: Date = new Date()
 ) {
-	return audience === 'staff'
-		? withSlaCompliance(incident, now)
-		: toRequesterIncidentDto(incident, now);
+	if (audience === 'requester') {
+		return toRequesterIncidentDto(incident, now);
+	}
+	const { clientId, ...rest } = incident as T & { clientId?: unknown };
+	void clientId;
+	return withSlaCompliance(rest as T, now);
 }

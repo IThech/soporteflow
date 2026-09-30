@@ -72,6 +72,10 @@
 		{ value: '', label },
 		...view.options.map((option) => ({ value: option.value, label: option.label }))
 	];
+	const clientSelectOptions = $derived([
+		{ value: '', label: 'Selecciona un cliente' },
+		...catalogs.clients.options.map((option) => ({ value: option.value, label: option.label }))
+	]);
 	const slaOptions = $derived([
 		{ value: SLA_AUTO, label: 'Automático' },
 		...(sections.slaPolicies
@@ -82,6 +86,13 @@
 			: []),
 		{ value: SLA_NONE, label: 'Sin SLA' }
 	]);
+
+	$effect(() => {
+		if (draft.clientId && catalogs.clients.status === 'ready') {
+			const found = catalogs.clients.options.find((o) => o.value === draft.clientId);
+			if (found) draft.client = found.label;
+		}
+	});
 </script>
 
 {#snippet catalogState(name: CreateCatalogName, view: CatalogView)}
@@ -136,20 +147,40 @@
 				<Field
 					label="Cliente"
 					required
-					hint="Nombre o referencia del cliente asociado a la incidencia."
-					error={errors.client}
+					hint={sections.clients
+						? 'Selecciona la empresa o cuenta atendida.'
+						: 'Nombre o referencia del cliente asociado a la incidencia.'}
+					error={errors.clientId || errors.client}
 				>
 					{#snippet children(control)}
-						<Input
-							{control}
-							bind:value={draft.client}
-							bind:element={controls.client}
-							placeholder="Introduce el cliente"
-							maxlength={INCIDENT_CLIENT_MAX_LENGTH}
-							disabled={submitting}
-						/>
+						{#if sections.clients}
+							<Select
+								{control}
+								bind:value={draft.clientId}
+								bind:element={controls.clientId}
+								options={clientSelectOptions}
+								disabled={submitting || catalogs.clients.status === 'loading'}
+							/>
+						{:else}
+							<Input
+								{control}
+								bind:value={draft.client}
+								bind:element={controls.client}
+								placeholder="Introduce el cliente"
+								maxlength={INCIDENT_CLIENT_MAX_LENGTH}
+								disabled={submitting}
+							/>
+						{/if}
 					{/snippet}
 				</Field>
+				{#if sections.clients}
+					{@render catalogState('clients', catalogs.clients)}
+					{#if catalogs.clients.status === 'ready' && catalogs.clients.options.length === 0}
+						<p class="sf-catalog-empty" role="note">
+							No hay clientes disponibles. Crea un cliente desde Administración.
+						</p>
+					{/if}
+				{/if}
 			</div>
 			<div class="sf-span-narrow">
 				<Field label="Prioridad" required error={errors.priority}>

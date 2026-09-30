@@ -96,6 +96,36 @@ export const categories = pgTable(
 );
 
 /**
+ * Customer organizations/companies serviced by the tenant (e.g. Nodhouses, ColorNou).
+ * Names are unique per organization ignoring case and redundant whitespace, enforced by
+ * clients_org_normalized_name_unique_idx so concurrent writes cannot create duplicates.
+ * (id, organization_id) is unique to allow tenant-safe composite FKs (incidents.client_id).
+ */
+export const clients = pgTable(
+	'clients',
+	{
+		id: uuid('id').defaultRandom().primaryKey(),
+		organizationId: uuid('organization_id')
+			.notNull()
+			.references(() => organizations.id, { onDelete: 'cascade' }),
+		name: varchar('name', { length: 255 }).notNull(),
+		description: text('description'),
+		active: boolean('active').default(true).notNull(),
+		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
+	},
+	(table) => [
+		unique('clients_org_name_unique').on(table.organizationId, table.name),
+		unique('clients_id_org_unique').on(table.id, table.organizationId),
+		uniqueIndex('clients_org_normalized_name_unique_idx').on(
+			table.organizationId,
+			sql`lower(regexp_replace(btrim(${table.name}), '\\s+', ' ', 'g'))`
+		),
+		check('clients_name_check', sql`btrim(${table.name}) <> ''`)
+	]
+);
+
+/**
  * Operational teams with visibility policy (shared vs restricted).
  */
 export const teams = pgTable(

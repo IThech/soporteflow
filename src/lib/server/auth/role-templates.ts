@@ -62,7 +62,10 @@ export const ROLE_TEMPLATES = [
 			'automations:view',
 			'automations:manage',
 			// 5.4X-A: audit trail readable by tenant administrators only.
-			'audit:view'
+			'audit:view',
+			// 5.4Y: clients administration.
+			'clients:view',
+			'clients:manage'
 		]
 	},
 	{
@@ -85,7 +88,9 @@ export const ROLE_TEMPLATES = [
 			// 5.4T-A: technicians need the operational SLA targets, never their configuration.
 			'sla:view',
 			// 5.4T-B: technicians may choose/change an incident's SLA among existing policies.
-			'sla:assign'
+			'sla:assign',
+			// 5.4Y: technicians need to view clients to choose them when creating/editing incidents.
+			'clients:view'
 		]
 	},
 	{

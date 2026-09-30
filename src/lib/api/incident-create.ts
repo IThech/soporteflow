@@ -29,7 +29,8 @@ import type { IncidentPriority } from './incident-views.ts';
 export interface CreateIncidentRequest {
 	title: string;
 	description: string;
-	client: string;
+	clientId?: string | null;
+	client?: string;
 	priority: IncidentPriority;
 	siteId?: string | null;
 	categoryId?: string | null;
@@ -40,6 +41,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 	'title',
 	'description',
 	'client',
+	'clientId',
 	'priority',
 	'siteId',
 	'categoryId',
@@ -93,9 +95,17 @@ export function buildCreateIncidentPayload(
 	const payload: Record<string, unknown> = {
 		organizationId,
 		title: requiredText(input.title, 'title', 'El título', INCIDENT_TITLE_MAX_LENGTH),
-		description: requiredText(input.description, 'description', 'La descripción'),
-		client: requiredText(input.client, 'client', 'El cliente', INCIDENT_CLIENT_MAX_LENGTH)
+		description: requiredText(input.description, 'description', 'La descripción')
 	};
+	if (input.clientId) {
+		const val = optionalId(input.clientId, 'clientId', 'El cliente');
+		payload.clientId = val;
+		if (input.client) payload.client = input.client.trim();
+	} else if (input.client) {
+		payload.client = requiredText(input.client, 'client', 'El cliente', INCIDENT_CLIENT_MAX_LENGTH);
+	} else {
+		throw new CreateIncidentInputError('clientId', 'El cliente es obligatorio.');
+	}
 	if (typeof input.priority !== 'string' || !PRIORITIES.includes(input.priority))
 		throw new CreateIncidentInputError('priority', 'La prioridad no es válida.');
 	payload.priority = input.priority;

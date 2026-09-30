@@ -1,5 +1,6 @@
 import { ApiError, isApiError, networkApiError } from '../api/errors.ts';
 import type { Category } from '../api/categories.ts';
+import type { Client } from '../api/clients.ts';
 import type { Site } from '../api/sites.ts';
 import type { SlaPolicy } from '../api/sla-policies.ts';
 import { presentApiError } from './error-presentation.ts';
@@ -14,7 +15,7 @@ import {
 import { tenantKey, type TenantIdentity } from './tenant-identity.ts';
 
 /**
- * UI-2B — the optional catalogs of the creation form (sites, categories,
+ * UI-2B — the optional catalogs of the creation form (clients, sites, categories,
  * SLA policies), on top of the UI-2A tenant-bound cache: keyed by user + organization +
  * generation, deduplicated, never persisted, dropped on any identity change.
  *
@@ -30,7 +31,7 @@ export interface CatalogOption {
 	readonly hint?: string;
 }
 
-export type CreateCatalogName = 'sites' | 'categories' | 'slaPolicies';
+export type CreateCatalogName = 'clients' | 'sites' | 'categories' | 'slaPolicies';
 
 export interface CatalogView {
 	readonly status: 'idle' | 'loading' | 'ready' | 'error';
@@ -43,12 +44,20 @@ export interface CatalogView {
 export type CreateCatalogsState = Readonly<Record<CreateCatalogName, CatalogView>>;
 
 export interface CreateCatalogLoaders {
+	clients: (organizationId: string, signal: AbortSignal) => Promise<Client[]>;
 	sites: (organizationId: string, signal: AbortSignal) => Promise<Site[]>;
 	categories: (organizationId: string, signal: AbortSignal) => Promise<Category[]>;
 	slaPolicies: (organizationId: string, signal: AbortSignal) => Promise<SlaPolicy[]>;
 }
 
 const byLabel = (a: CatalogOption, b: CatalogOption) => a.label.localeCompare(b.label, 'es');
+
+export function clientOptions(clients: readonly Client[]): CatalogOption[] {
+	return clients
+		.filter((client) => client.active)
+		.map((client) => ({ value: client.id, label: client.name }))
+		.sort(byLabel);
+}
 
 export function siteOptions(sites: readonly Site[]): CatalogOption[] {
 	return sites
@@ -90,12 +99,14 @@ const IDLE: CatalogView = Object.freeze({
 	errorMessage: null
 });
 const EMPTY_STATE: CreateCatalogsState = Object.freeze({
+	clients: IDLE,
 	sites: IDLE,
 	categories: IDLE,
 	slaPolicies: IDLE
 });
 
 const CACHE_NAME: Record<CreateCatalogName, CatalogName> = {
+	clients: 'clients',
 	sites: 'sites',
 	categories: 'categories',
 	slaPolicies: 'slaPolicies'
@@ -103,6 +114,7 @@ const CACHE_NAME: Record<CreateCatalogName, CatalogName> = {
 
 /** Server-side filters each loader applies (part of the cache key, so variants never mix). */
 const CACHE_FILTERS: Record<CreateCatalogName, Readonly<Record<string, boolean>>> = {
+	clients: { activeOnly: true },
 	sites: { activeOnly: true },
 	categories: { activeOnly: true },
 	slaPolicies: { active: true }
@@ -110,6 +122,7 @@ const CACHE_FILTERS: Record<CreateCatalogName, Readonly<Record<string, boolean>>
 
 export function catalogsFor(sections: CreateFormSections): CreateCatalogName[] {
 	const names: CreateCatalogName[] = [];
+	if (sections.clients) names.push('clients');
 	if (sections.site) names.push('sites');
 	if (sections.category) names.push('categories');
 	if (sections.slaPolicies) names.push('slaPolicies');
@@ -141,6 +154,8 @@ export function createIncidentCreateCatalogs(
 
 	function options(name: CreateCatalogName, raw: unknown) {
 		switch (name) {
+			case 'clients':
+				return clientOptions(raw as Client[]);
 			case 'sites':
 				return siteOptions(raw as Site[]);
 			case 'categories':

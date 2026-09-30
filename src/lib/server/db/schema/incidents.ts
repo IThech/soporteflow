@@ -13,7 +13,7 @@ import {
 	varchar
 } from 'drizzle-orm/pg-core';
 import { organizations, memberships } from './identity';
-import { categories, sites, teams } from './structure';
+import { categories, clients, sites, teams } from './structure';
 import { slaPolicies } from './sla';
 
 /**
@@ -47,6 +47,7 @@ export const incidents = pgTable(
 		status: varchar('status', { length: 30 }).default('open').notNull(),
 		priority: varchar('priority', { length: 30 }).default('medium').notNull(),
 		client: varchar('client', { length: 255 }).notNull(),
+		clientId: uuid('client_id'),
 		clientUserId: uuid('client_user_id'),
 		createdByUserId: uuid('created_by_user_id').notNull(),
 		siteId: uuid('site_id'),
@@ -109,6 +110,11 @@ export const incidents = pgTable(
 			foreignColumns: [teams.id, teams.organizationId]
 		}).onDelete('restrict'),
 		foreignKey({
+			name: 'incidents_client_org_fk',
+			columns: [table.clientId, table.organizationId],
+			foreignColumns: [clients.id, clients.organizationId]
+		}).onDelete('restrict'),
+		foreignKey({
 			name: 'incidents_category_org_fk',
 			columns: [table.categoryId, table.organizationId],
 			foreignColumns: [categories.id, categories.organizationId]
@@ -135,6 +141,7 @@ export const incidents = pgTable(
 			sql`(${table.slaPolicyId} IS NULL AND ${table.slaFirstResponseMinutes} IS NULL AND ${table.slaResolutionMinutes} IS NULL AND ${table.slaAppliedAt} IS NULL AND ${table.firstResponseDueAt} IS NULL AND ${table.resolutionDueAt} IS NULL) OR (${table.slaPolicyId} IS NOT NULL AND ${table.slaFirstResponseMinutes} BETWEEN 1 AND 5256000 AND ${table.slaResolutionMinutes} BETWEEN ${table.slaFirstResponseMinutes} AND 5256000 AND ${table.slaAppliedAt} IS NOT NULL AND ${table.firstResponseDueAt} = ${table.slaAppliedAt} + ${table.slaFirstResponseMinutes} * interval '1 minute' AND ${table.resolutionDueAt} = ${table.slaAppliedAt} + ${table.slaResolutionMinutes} * interval '1 minute')`
 		),
 		index('incidents_org_status_idx').on(table.organizationId, table.status, table.createdAt),
+		index('incidents_org_client_id_idx').on(table.organizationId, table.clientId),
 		index('incidents_org_site_idx').on(table.organizationId, table.siteId),
 		index('incidents_org_team_idx').on(table.organizationId, table.teamId),
 		index('incidents_org_support_level_idx').on(table.organizationId, table.supportLevel),

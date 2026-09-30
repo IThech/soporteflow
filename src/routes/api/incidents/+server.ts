@@ -109,6 +109,7 @@ export const POST: RequestHandler = async (event) => {
 		'title',
 		'description',
 		'client',
+		'clientId',
 		'priority',
 		'siteId',
 		'categoryId',
@@ -188,6 +189,23 @@ export const POST: RequestHandler = async (event) => {
 		}
 	}
 
+	const clientId = body.clientId;
+	if (clientId !== undefined && clientId !== null && !isValidUuid(clientId)) {
+		return json(
+			{ error: { code: 'INVALID_INPUT', message: 'clientId must be a valid UUID or null.' } },
+			{ status: 400 }
+		);
+	}
+	if (
+		clientId === undefined &&
+		(typeof body.client !== 'string' || body.client.trim().length === 0)
+	) {
+		return json(
+			{ error: { code: 'INVALID_INPUT', message: 'clientId or client is required.' } },
+			{ status: 400 }
+		);
+	}
+
 	// 5. Execute service. 5.4W-B: the checks above are pre-checks; inside the creation transaction
 	// (organization FOR SHARE) the capabilities are re-read and every decision that depended on
 	// them (create, choosing the SLA) is re-validated. The requester is always the principal.
@@ -207,7 +225,8 @@ export const POST: RequestHandler = async (event) => {
 					{
 						title: body.title as string,
 						description: body.description as string,
-						client: body.client as string,
+						client: body.client as string | undefined,
+						clientId: clientId as string | null | undefined,
 						priority: body.priority as IncidentPriority | undefined,
 						clientUserId,
 						siteId: body.siteId as string | null | undefined,
@@ -258,6 +277,7 @@ export const POST: RequestHandler = async (event) => {
 					);
 				case 'SITE_NOT_FOUND':
 				case 'CATEGORY_NOT_FOUND':
+				case 'CLIENT_NOT_FOUND':
 				case 'CLIENT_USER_MEMBERSHIP_NOT_FOUND':
 					return json(
 						{
@@ -270,6 +290,7 @@ export const POST: RequestHandler = async (event) => {
 					);
 				case 'SITE_INACTIVE':
 				case 'CATEGORY_INACTIVE':
+				case 'CLIENT_INACTIVE':
 				case 'CLIENT_USER_INACTIVE':
 					return json(
 						{

@@ -26,7 +26,7 @@
 	}: {
 		context: OrganizationContextState;
 		title: string;
-		current?: 'incidents' | 'new-incident' | null;
+		current?: 'incidents' | 'new-incident' | 'admin-clients' | null;
 		signingOut?: boolean;
 		/** Safe message of a failed sign-out (shown in the user menu). */
 		signOutError?: string | null;

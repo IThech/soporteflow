@@ -26,7 +26,9 @@ export const ADMIN_CAPABILITIES = [
 	'sla:manage',
 	'webhooks:view',
 	'automations:view',
-	'audit:view'
+	'audit:view',
+	'clients:manage',
+	'clients:view'
 ] as const;
 
 const has = (caps: Capabilities, id: string) => caps.includes(id);
@@ -98,12 +100,17 @@ export interface NavigationModel {
 	newIncident: boolean;
 	/** Some admin capability exists; the admin area itself arrives in UI-3 (no dead link now). */
 	adminCapable: boolean;
+	adminClients?: boolean;
 }
 
 export function navigationModel(caps: Capabilities): NavigationModel {
-	return {
+	const model: NavigationModel = {
 		incidents: incidentReadScope(caps).any,
 		newIncident: has(caps, 'incidents:create'),
 		adminCapable: ADMIN_CAPABILITIES.some((id) => has(caps, id))
 	};
+	if (has(caps, 'clients:manage')) {
+		model.adminClients = true;
+	}
+	return model;
 }

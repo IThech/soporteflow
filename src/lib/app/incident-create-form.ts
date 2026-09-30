@@ -37,6 +37,7 @@ export const PRIORITY_OPTIONS: readonly { value: IncidentPriority; label: string
 export interface CreateIncidentDraft {
 	title: string;
 	description: string;
+	clientId: string;
 	client: string;
 	priority: IncidentPriority;
 	/** '' = none. */
@@ -54,6 +55,7 @@ export function emptyCreateDraft(): CreateIncidentDraft {
 	return {
 		title: '',
 		description: '',
+		clientId: '',
 		client: '',
 		priority: 'medium',
 		siteId: '',
@@ -79,6 +81,7 @@ export interface CreateFormSections {
 	sla: boolean;
 	/** Offer named policies (needs the policies catalog). */
 	slaPolicies: boolean;
+	clients: boolean;
 	readonly any: boolean;
 }
 
@@ -88,7 +91,8 @@ export function createFormSections(capabilities: readonly string[]): CreateFormS
 		site: has('sites:view'),
 		category: has('categories:view'),
 		sla: has('sla:assign'),
-		slaPolicies: has('sla:assign') && has('sla:view')
+		slaPolicies: has('sla:assign') && has('sla:view'),
+		clients: has('clients:view')
 	};
 	return { ...sections, any: Object.values(sections).some(Boolean) };
 }
@@ -99,6 +103,7 @@ export type CreateFieldErrors = Partial<Record<CreateIncidentField, string>>;
 export const CREATE_FIELD_ORDER: readonly CreateIncidentField[] = [
 	'title',
 	'description',
+	'clientId',
 	'client',
 	'priority',
 	'siteId',
@@ -114,10 +119,11 @@ export function validateCreateDraft(draft: CreateIncidentDraft): CreateFieldErro
 	else if (title.length > INCIDENT_TITLE_MAX_LENGTH)
 		errors.title = `El título no puede superar ${INCIDENT_TITLE_MAX_LENGTH} caracteres.`;
 	if (!draft.description.trim()) errors.description = 'La descripción es obligatoria.';
-	const client = draft.client.trim();
-	if (!client) errors.client = 'El cliente es obligatorio.';
-	else if (client.length > INCIDENT_CLIENT_MAX_LENGTH)
+	if (!draft.clientId && !draft.client.trim()) {
+		errors.clientId = 'El cliente es obligatorio.';
+	} else if (draft.client.trim().length > INCIDENT_CLIENT_MAX_LENGTH) {
 		errors.client = `El cliente no puede superar ${INCIDENT_CLIENT_MAX_LENGTH} caracteres.`;
+	}
 	if (!PRIORITY_OPTIONS.some((option) => option.value === draft.priority))
 		errors.priority = 'Selecciona una prioridad válida.';
 	return errors;
@@ -134,9 +140,13 @@ export function toCreateRequest(
 	const request: CreateIncidentRequest = {
 		title: draft.title,
 		description: draft.description,
-		client: draft.client,
 		priority: draft.priority
 	};
+	if (draft.clientId) {
+		request.clientId = draft.clientId;
+	} else if (draft.client) {
+		request.client = draft.client;
+	}
 	if (sections.site && draft.siteId) request.siteId = draft.siteId;
 	if (sections.category && draft.categoryId) request.categoryId = draft.categoryId;
 	if (sections.sla) {
@@ -164,6 +174,8 @@ export function checkCreateRequest(
 
 /** Server error codes of POST /api/incidents that belong to one field. */
 const FIELD_ERRORS: Readonly<Record<string, [CreateIncidentField, string]>> = {
+	CLIENT_NOT_FOUND: ['clientId', 'El cliente seleccionado ya no está disponible.'],
+	CLIENT_INACTIVE: ['clientId', 'El cliente seleccionado está inactivo.'],
 	SITE_NOT_FOUND: ['siteId', 'La sede seleccionada ya no está disponible.'],
 	SITE_INACTIVE: ['siteId', 'La sede seleccionada está inactiva.'],
 	CATEGORY_NOT_FOUND: ['categoryId', 'La categoría seleccionada ya no está disponible.'],

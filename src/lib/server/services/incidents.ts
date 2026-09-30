@@ -18,6 +18,7 @@ import {
 	slaPolicies
 } from '../db/schema';
 export { getActiveTeams } from './teams';
+import { lockActiveClient } from './clients';
 import {
 	SLA_OBJECTIVE_STATUSES,
 	SLA_OVERALL_STATUSES,
@@ -67,6 +68,9 @@ export type IncidentServiceErrorCode =
 	| 'CATEGORY_NOT_FOUND'
 	| 'CATEGORY_NAME_DUPLICATE'
 	| 'CATEGORY_INACTIVE'
+	| 'CLIENT_NOT_FOUND'
+	| 'CLIENT_INACTIVE'
+	| 'CLIENT_NAME_DUPLICATE'
 	| 'ROLE_CODE_CONFLICT'
 	| 'ROLE_TEMPLATE_NOT_FOUND'
 	| 'ROLE_NOT_FOUND'
@@ -455,7 +459,8 @@ export interface IncidentServiceContext {
 export interface CreateIncidentInput {
 	title: string;
 	description: string;
-	client: string;
+	client?: string;
+	clientId?: string | null;
 	priority?: IncidentPriority;
 	clientUserId?: string | null;
 	siteId?: string | null;
@@ -529,11 +534,17 @@ export async function createIncidentRecord(
 		throw new IncidentServiceError('INVALID_INPUT', 'description must be a non-empty string');
 	}
 
-	if (typeof input?.client !== 'string' || input.client.trim().length === 0) {
-		throw new IncidentServiceError('INVALID_INPUT', 'client must be a non-empty string');
-	}
-	if (input.client.trim().length > 255) {
-		throw new IncidentServiceError('INVALID_INPUT', 'client must not exceed 255 characters');
+	if (input?.clientId !== undefined && input.clientId !== null) {
+		if (!isValidUuid(input.clientId)) {
+			throw new IncidentServiceError('INVALID_INPUT', 'clientId must be a valid UUID');
+		}
+	} else {
+		if (typeof input?.client !== 'string' || input.client.trim().length === 0) {
+			throw new IncidentServiceError('INVALID_INPUT', 'client must be a non-empty string');
+		}
+		if (input.client.trim().length > 255) {
+			throw new IncidentServiceError('INVALID_INPUT', 'client must not exceed 255 characters');
+		}
 	}
 
 	const priority: IncidentPriority = input.priority ?? 'medium';
@@ -658,6 +669,15 @@ export async function createIncidentRecord(
 			}
 		}
 
+		// D.0 Validate optional clientId (tenant-scoped, active), locked until commit
+		let clientName = input.client ? input.client.trim() : '';
+		let clientIdValue: string | null = null;
+		if (input.clientId) {
+			const clientRecord = await lockActiveClient(tx, context.organizationId, input.clientId);
+			clientName = clientRecord.name;
+			clientIdValue = clientRecord.id;
+		}
+
 		// D. Validate optional siteId (must belong to tenant and be active), locked until commit
 		if (input.siteId) {
 			await lockActiveSite(tx, context.organizationId, input.siteId);
@@ -698,7 +718,8 @@ export async function createIncidentRecord(
 				incidentNumber,
 				title: input.title.trim(),
 				description: input.description.trim(),
-				client: input.client.trim(),
+				client: clientName,
+				clientId: clientIdValue,
 				status: 'open',
 				priority,
 				supportLevel: 'N1',
@@ -1042,6 +1063,7 @@ export async function getIncidentById(
 			status: incidents.status,
 			priority: incidents.priority,
 			client: incidents.client,
+			clientId: incidents.clientId,
 			clientUserId: incidents.clientUserId,
 			createdByUserId: incidents.createdByUserId,
 			siteId: incidents.siteId,

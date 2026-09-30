@@ -5,6 +5,7 @@
 	import { page } from '$app/state';
 	import { signOut } from '$lib/api/auth';
 	import { listCategories } from '$lib/api/categories';
+	import { listClients } from '$lib/api/clients';
 	import { submitIncidentCreation } from '$lib/api/incident-create';
 	import { listSites } from '$lib/api/sites';
 	import { listSlaPolicies } from '$lib/api/sla-policies';
@@ -59,6 +60,7 @@
 		submit: (organizationId, input) => submitIncidentCreation(organizationId, input)
 	});
 	const catalogs = createIncidentCreateCatalogs({
+		clients: (organizationId, signal) => listClients({ organizationId, activeOnly: true, signal }),
 		sites: (organizationId, signal) => listSites({ organizationId, activeOnly: true, signal }),
 		categories: (organizationId, signal) =>
 			listCategories({ organizationId, activeOnly: true, signal }),

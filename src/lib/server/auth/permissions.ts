@@ -258,6 +258,21 @@ export const PERMISSION_CATALOG = [
 		description: 'Consultar el registro de auditoría administrativa de la organización.',
 		category: 'audit',
 		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	// 5.4Y: client catalog administration (migration 0029).
+	{
+		id: 'clients:view',
+		name: 'Ver clientes',
+		description: 'Consultar el catálogo de clientes de la organización.',
+		category: 'clients',
+		allowedScopeTypes: ORGANIZATION_ONLY
+	},
+	{
+		id: 'clients:manage',
+		name: 'Gestionar clientes',
+		description: 'Crear, editar, activar y desactivar clientes.',
+		category: 'clients',
+		allowedScopeTypes: ORGANIZATION_ONLY
 	}
 ] as const satisfies readonly PermissionDefinition[];
 

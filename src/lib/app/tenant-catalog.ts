@@ -17,7 +17,7 @@ import { tenantKey, type TenantIdentity } from './tenant-identity.ts';
  */
 
 export type CatalogName =
-	'sites' | 'categories' | 'teams' | 'assignees' | 'memberships' | 'slaPolicies';
+	'sites' | 'categories' | 'teams' | 'assignees' | 'memberships' | 'slaPolicies' | 'clients';
 
 export type CatalogFilters = Readonly<Record<string, string | number | boolean | null | undefined>>;
 
