@@ -267,6 +267,12 @@
 			return iso;
 		}
 	}
+
+	const adminHref = $derived(
+		activeOrg
+			? `${resolve('/app/admin')}?organizationId=${encodeURIComponent(activeOrg.id)}`
+			: resolve('/app/admin')
+	);
 </script>
 
 <svelte:head>
@@ -285,6 +291,12 @@
 >
 	<OrganizationGate context={$context} onretry={() => void context.load(explicitOrganization)}>
 		<div class="sf-clients-container">
+			<nav class="sf-breadcrumb" aria-label="Ruta de navegación">
+				<ol>
+					<li><a href={adminHref}>Administración</a></li>
+					<li aria-current="page">Clientes</li>
+				</ol>
+			</nav>
 			<PageHeader
 				title="Clientes"
 				description="Gestión y catálogo de cuentas o empresas atendidas en {activeOrg?.name ??
@@ -581,6 +593,38 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-6);
+	}
+
+	.sf-breadcrumb ol {
+		display: flex;
+		align-items: center;
+		gap: var(--space-2);
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		font-size: var(--text-xs);
+		color: var(--text-muted);
+	}
+
+	.sf-breadcrumb li:not(:last-child)::after {
+		content: '/';
+		margin-left: var(--space-2);
+		color: var(--text-subtle);
+	}
+
+	.sf-breadcrumb a {
+		color: var(--text-muted);
+		text-decoration: none;
+	}
+
+	.sf-breadcrumb a:hover {
+		color: var(--text);
+		text-decoration: underline;
+	}
+
+	.sf-breadcrumb [aria-current='page'] {
+		color: var(--text);
+		font-weight: 600;
 	}
 
 	.sf-guard-box,

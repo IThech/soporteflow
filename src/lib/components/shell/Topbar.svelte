@@ -15,6 +15,7 @@
 		title,
 		userName,
 		userEmail = null,
+		adminHref = null,
 		navOpen,
 		navId,
 		signingOut = false,
@@ -26,6 +27,7 @@
 		title: string;
 		userName: string | null;
 		userEmail?: string | null;
+		adminHref?: string | null;
 		navOpen: boolean;
 		navId: string;
 		signingOut?: boolean;
@@ -35,9 +37,11 @@
 		onSignOut: () => void;
 		actions?: Snippet;
 	} = $props();
-	const initials = $derived(userInitials(userName, userEmail));
+	const displayName = $derived(userName?.trim() || userEmail?.trim() || 'Usuario');
+	const initials = $derived(userInitials(displayName, userEmail));
 </script>
 
+<!-- eslint-disable svelte/no-navigation-without-resolve -- adminHref is resolved in parent -->
 <header class="sf-topbar">
 	<button
 		type="button"
@@ -53,20 +57,31 @@
 	<div class="sf-topbar-actions">
 		{#if actions}<div class="sf-page-actions">{@render actions()}</div>{/if}
 		<ThemeSelector />
-		{#if userName}
+		{#if adminHref}
+			<a
+				href={adminHref}
+				class="sf-topbar-admin-btn"
+				title="Administración"
+				aria-label="Administración"
+			>
+				<Icon name="building" size={16} />
+				<span class="sf-topbar-admin-label">Administración</span>
+			</a>
+		{/if}
+		{#if userName || userEmail}
 			<span class="sf-divider" aria-hidden="true"></span>
 			<details class="sf-user-menu">
 				<summary>
 					<span class="sf-sr-only">Menú de usuario:</span>
 					<span class="sf-avatar" aria-hidden="true">{initials}</span>
-					<span class="sf-user-name">{userName}</span>
+					<span class="sf-user-name">{displayName}</span>
 					<span class="sf-user-chevron"><Icon name="chevron-down" size={14} /></span>
 				</summary>
 				<div class="sf-user-panel">
 					<div class="sf-user-identity">
 						<span class="sf-avatar sf-avatar-lg" aria-hidden="true">{initials}</span>
 						<div>
-							<p class="sf-user-panel-name">{userName}</p>
+							<p class="sf-user-panel-name">{displayName}</p>
 							{#if userEmail}<p class="sf-user-panel-email">{userEmail}</p>{/if}
 						</div>
 					</div>
@@ -129,6 +144,42 @@
 		align-items: center;
 		gap: var(--space-2);
 		margin-right: var(--space-1);
+	}
+	.sf-topbar-admin-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-1-5);
+		height: 2.25rem;
+		padding: 0 var(--space-2-5);
+		border-radius: var(--radius);
+		border: 1px solid var(--border);
+		background: var(--surface);
+		color: var(--text);
+		font-size: var(--text-sm);
+		font-weight: 500;
+		text-decoration: none;
+		line-height: 1;
+		transition:
+			background-color var(--duration) var(--ease),
+			border-color var(--duration) var(--ease),
+			color var(--duration) var(--ease);
+	}
+	.sf-topbar-admin-btn:hover {
+		background: var(--surface-subtle);
+		border-color: var(--border-emphasis, var(--border));
+		color: var(--text-emphasis);
+	}
+	.sf-topbar-admin-btn:focus-visible {
+		outline: 2px solid var(--sf-cyan-500);
+		outline-offset: 2px;
+	}
+	@media (max-width: 640px) {
+		.sf-topbar-admin-label {
+			display: none;
+		}
+		.sf-topbar-admin-btn {
+			padding: 0 var(--space-2);
+		}
 	}
 	.sf-divider {
 		width: 1px;

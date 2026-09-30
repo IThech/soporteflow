@@ -27,7 +27,7 @@
 		organizations: readonly UserOrganizationSummary[];
 		activeOrganizationId: string | null;
 		navigation: NavigationModel;
-		current?: 'incidents' | 'new-incident' | 'admin-clients' | null;
+		current?: 'incidents' | 'new-incident' | 'admin' | 'admin-clients' | null;
 		switching?: boolean;
 		onOrganizationChange: (organizationId: string) => boolean | void;
 		onNavigate?: () => void;
@@ -38,7 +38,6 @@
 	);
 	const incidentsHref = $derived(resolve('/app/incidents') + query);
 	const newIncidentHref = $derived(resolve('/app/incidents/new') + query);
-	const adminClientsHref = $derived(resolve('/app/admin/clients') + query);
 	const markId = $props.id();
 </script>
 
@@ -110,20 +109,6 @@
 				{/if}
 			</ul>
 		</nav>
-		{#if navigation.adminClients}
-			<nav class="sf-nav" aria-labelledby="{markId}-admin">
-				<p class="sf-nav-label" id="{markId}-admin">Administración</p>
-				<ul>
-					<li>
-						<a
-							href={adminClientsHref}
-							aria-current={current === 'admin-clients' ? 'page' : undefined}
-							onclick={() => onNavigate?.()}><Icon name="building" /><span>Clientes</span></a
-						>
-					</li>
-				</ul>
-			</nav>
-		{/if}
 	{/if}
 </aside>
 

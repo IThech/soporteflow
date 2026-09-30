@@ -1,7 +1,9 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { resolve } from '$app/paths';
 	import type { OrganizationContextState } from '$lib/app/organization-context';
 	import { navigationModel } from '$lib/app/capabilities';
+	import { session } from '$lib/stores/session';
 	import Sidebar from './Sidebar.svelte';
 	import Topbar from './Topbar.svelte';
 
@@ -26,7 +28,7 @@
 	}: {
 		context: OrganizationContextState;
 		title: string;
-		current?: 'incidents' | 'new-incident' | 'admin-clients' | null;
+		current?: 'incidents' | 'new-incident' | 'admin' | 'admin-clients' | null;
 		signingOut?: boolean;
 		/** Safe message of a failed sign-out (shown in the user menu). */
 		signOutError?: string | null;
@@ -41,6 +43,22 @@
 	let navOpen = $state(false);
 	const navigation = $derived(
 		navigationModel(context.status === 'ready' ? context.capabilities : [])
+	);
+
+	const currentUser = $derived(context.user ?? $session.user);
+	const resolvedName = $derived(
+		currentUser?.name?.trim() ||
+			currentUser?.email?.trim() ||
+			(context.status === 'ready' || $session.isAuthenticated ? 'Usuario' : null)
+	);
+	const resolvedEmail = $derived(currentUser?.email?.trim() ?? null);
+	const canAccessAdmin = $derived(
+		context.status === 'ready' && context.capabilities.includes('clients:manage')
+	);
+	const adminHref = $derived(
+		canAccessAdmin && context.activeOrganizationId
+			? `${resolve('/app/admin')}?organizationId=${encodeURIComponent(context.activeOrganizationId)}`
+			: null
 	);
 
 	function toggleNav() {
@@ -63,6 +81,7 @@
 	}}
 />
 
+<!-- eslint-disable svelte/no-navigation-without-resolve -- hrefs are built from resolve() -->
 <div class="sf-shell" data-sf-ui>
 	<a class="sf-skip" href="#sf-main">Saltar al contenido</a>
 	<div class="sf-sidebar-slot" data-open={navOpen}>
@@ -90,8 +109,9 @@
 	<div class="sf-workspace">
 		<Topbar
 			{title}
-			userName={context.user?.name ?? null}
-			userEmail={context.user?.email ?? null}
+			userName={resolvedName}
+			userEmail={resolvedEmail}
+			{adminHref}
 			{navOpen}
 			{navId}
 			{signingOut}

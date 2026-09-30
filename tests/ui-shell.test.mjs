@@ -206,6 +206,49 @@ test('UI-1 shell y workspace (render SSR)', async (t) => {
 		assert.doesNotMatch(readOnly, /incidents\/new|Nueva incidencia/);
 	});
 
+	await t.test(
+		'navegación desacoplada: Administración en Topbar solo con clients:manage, Sidebar estrictamente operativo',
+		() => {
+			// 1. Admin with clients:manage has topbar admin button, but sidebar is strictly operational
+			const adminHtml = shell(
+				readyContext(['incidents:view_all', 'incidents:create', 'clients:manage'])
+			);
+			assert.match(
+				adminHtml,
+				new RegExp(`href="/app/admin\\?organizationId=${ORG_A.id}"[^>]*class="sf-topbar-admin-btn`),
+				'Topbar incluye botón de administración para usuarios con clients:manage'
+			);
+			assert.match(adminHtml, /<span class="sf-topbar-admin-label[^"]*">Administración<\/span>/);
+
+			// Extract sidebar HTML only
+			const sidebarMatch = /<aside[^>]*>([\s\S]*?)<\/aside>/.exec(adminHtml);
+			assert.ok(sidebarMatch, 'sidebar presente');
+			assert.doesNotMatch(
+				sidebarMatch[1],
+				/\/app\/admin/,
+				'Sidebar no contiene ningún enlace a administración'
+			);
+
+			// 2. Technician with clients:view only (no clients:manage) does NOT see administration in topbar
+			const techHtml = shell(
+				readyContext(['incidents:view_all', 'incidents:create', 'clients:view'])
+			);
+			assert.doesNotMatch(
+				techHtml,
+				/sf-topbar-admin-btn|href="\/app\/admin/,
+				'Técnico con clients:view no ve enlace de administración en topbar'
+			);
+
+			// 3. Requester without clients:manage does NOT see administration in topbar
+			const reqHtml = shell(readyContext(['incidents:view_own', 'incidents:create']));
+			assert.doesNotMatch(
+				reqHtml,
+				/sf-topbar-admin-btn|href="\/app\/admin/,
+				'Requester no ve enlace de administración en topbar'
+			);
+		}
+	);
+
 	await t.test('UI-1C: page header con eyebrow, h1 y descripción', () => {
 		const html = text(
 			render(PageHeader, {
