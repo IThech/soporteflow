@@ -379,4 +379,57 @@ test('SoporteFlow — Clientes: Administración, aislamiento y selector en nueva
 			assert.equal(inactiveInc.json.error?.code, 'CLIENT_INACTIVE');
 		}
 	);
+
+	// 7. Modal architecture & design tokens in /app/admin/clients
+	await t.test(
+		'7. Modal de clientes: integridad con tokens de diseño, data-sf-ui y accesibilidad',
+		async () => {
+			const fs = await import('node:fs');
+			const path = await import('node:path');
+			const content = fs.readFileSync(
+				path.resolve('src/routes/app/admin/clients/+page.svelte'),
+				'utf8'
+			);
+
+			// Must be inside AppShell and sf-clients-container
+			const appShellCloseIndex = content.indexOf('</AppShell>');
+			const modalIndex = content.indexOf('class="sf-modal-backdrop"');
+			assert.ok(modalIndex !== -1, 'sf-modal-backdrop presente en el código');
+			assert.ok(
+				modalIndex < appShellCloseIndex,
+				'El modal debe renderizarse DENTRO de AppShell para heredar el contexto data-sf-ui'
+			);
+
+			// Must have data-sf-ui explicitly on the backdrop as well
+			assert.match(
+				content,
+				/class="sf-modal-backdrop"[^>]*data-sf-ui|data-sf-ui[^>]*class="sf-modal-backdrop"/,
+				'Backdrop del modal incluye data-sf-ui'
+			);
+
+			// CSS rules must use theme design tokens
+			assert.match(
+				content,
+				/\.sf-modal-dialog\s*\{[^}]*background:\s*var\(--surface-card/,
+				'El diálogo usa var(--surface-card)'
+			);
+			assert.match(
+				content,
+				/\.sf-modal-backdrop\s*\{[^}]*background:\s*var\(--overlay/,
+				'El overlay usa var(--overlay)'
+			);
+
+			// Accessible keyboard handling (Escape) and focus
+			assert.match(
+				content,
+				/onkeydown=[\s\S]*?Escape[\s\S]*?closeDialog/,
+				'Cierre accesible con tecla Escape'
+			);
+			assert.match(
+				content,
+				/bind:element=\{nameInputElement\}/,
+				'Enlace de elemento para auto-foco'
+			);
+		}
+	);
 });

@@ -69,7 +69,6 @@
 			</a>
 		{/if}
 		{#if userName || userEmail}
-			<span class="sf-divider" aria-hidden="true"></span>
 			<details class="sf-user-menu">
 				<summary>
 					<span class="sf-sr-only">Menú de usuario:</span>
@@ -137,7 +136,12 @@
 	.sf-topbar-actions {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
+		gap: var(--space-2-5, 0.625rem);
+	}
+	@media (min-width: 641px) {
+		.sf-topbar-actions {
+			gap: var(--space-4);
+		}
 	}
 	.sf-page-actions {
 		display: flex;
@@ -166,8 +170,8 @@
 	}
 	.sf-topbar-admin-btn:hover {
 		background: var(--surface-subtle);
-		border-color: var(--border-emphasis, var(--border));
-		color: var(--text-emphasis);
+		border-color: var(--border-strong, var(--border));
+		color: var(--text-primary, var(--text));
 	}
 	.sf-topbar-admin-btn:focus-visible {
 		outline: 2px solid var(--sf-cyan-500);
@@ -180,12 +184,6 @@
 		.sf-topbar-admin-btn {
 			padding: 0 var(--space-2);
 		}
-	}
-	.sf-divider {
-		width: 1px;
-		height: 1.5rem;
-		margin: 0 var(--space-1);
-		background: var(--border);
 	}
 	.sf-user-menu {
 		position: relative;
@@ -330,8 +328,7 @@
 	}
 	@media (max-width: 639px) {
 		.sf-user-name,
-		.sf-user-chevron,
-		.sf-divider {
+		.sf-user-chevron {
 			display: none;
 		}
 		.sf-user-menu summary {

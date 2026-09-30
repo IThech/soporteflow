@@ -52,6 +52,8 @@
 	let formDescription = $state('');
 	let formError = $state<string | null>(null);
 	let formSubmitting = $state(false);
+	let nameInputElement = $state<HTMLElement | null>(null);
+	let triggerElement = $state<HTMLElement | null>(null);
 
 	// Action in progress (activation/deactivation by clientId)
 	let togglingId = $state<string | null>(null);
@@ -145,7 +147,8 @@
 		return list;
 	});
 
-	function openCreateDialog() {
+	function openCreateDialog(e?: MouseEvent) {
+		triggerElement = (e?.currentTarget as HTMLElement) ?? null;
 		dialogMode = 'create';
 		editingClient = null;
 		formName = '';
@@ -153,7 +156,8 @@
 		formError = null;
 	}
 
-	function openEditDialog(client: Client) {
+	function openEditDialog(client: Client, e?: MouseEvent) {
+		triggerElement = (e?.currentTarget as HTMLElement) ?? null;
 		dialogMode = 'edit';
 		editingClient = client;
 		formName = client.name;
@@ -168,7 +172,17 @@
 		formName = '';
 		formDescription = '';
 		formError = null;
+		triggerElement?.focus();
+		triggerElement = null;
 	}
+
+	$effect(() => {
+		if (dialogMode !== 'closed') {
+			setTimeout(() => {
+				nameInputElement?.focus();
+			}, 30);
+		}
+	});
 
 	async function handleSaveClient(e: SubmitEvent) {
 		e.preventDefault();
@@ -278,6 +292,12 @@
 <svelte:head>
 	<title>Clientes · SoporteFlow</title>
 </svelte:head>
+
+<svelte:window
+	onkeydown={(e) => {
+		if (e.key === 'Escape' && dialogMode !== 'closed') closeDialog();
+	}}
+/>
 
 <!-- eslint-disable svelte/no-navigation-without-resolve -- hrefs are built from resolve() -->
 <AppShell
@@ -501,92 +521,112 @@
 					</div>
 				{/if}
 			{/if}
+			<!-- Diálogo modal de Crear / Editar cliente -->
+			{#if dialogMode !== 'closed'}
+				<div
+					class="sf-modal-backdrop"
+					data-sf-ui
+					role="presentation"
+					onclick={(e) => e.target === e.currentTarget && closeDialog()}
+				>
+					<div
+						class="sf-modal-dialog"
+						role="dialog"
+						aria-modal="true"
+						aria-labelledby="client-dialog-title"
+						tabindex="-1"
+					>
+						<header class="sf-modal-header">
+							<h2 id="client-dialog-title" class="sf-modal-title">
+								{dialogMode === 'create' ? 'Nuevo cliente' : 'Editar cliente'}
+							</h2>
+							<button
+								type="button"
+								class="sf-modal-close"
+								aria-label="Cerrar modal"
+								onclick={closeDialog}
+							>
+								<svg
+									width="18"
+									height="18"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									stroke-width="2"
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									aria-hidden="true"
+								>
+									<line x1="18" y1="6" x2="6" y2="18"></line>
+									<line x1="6" y1="6" x2="18" y2="18"></line>
+								</svg>
+							</button>
+						</header>
+
+						<form onsubmit={handleSaveClient} class="sf-modal-form">
+							{#if formError}
+								<Alert tone="danger" title="Error en el formulario">
+									<p>{formError}</p>
+								</Alert>
+							{/if}
+
+							<Field
+								label="Nombre del cliente o empresa"
+								required
+								hint="Nombre representativo (ej. Nodhouses, IV Pediatría)"
+							>
+								{#snippet children(control)}
+									<Input
+										{control}
+										bind:element={nameInputElement}
+										bind:value={formName}
+										placeholder="Introduce el nombre"
+										maxlength={255}
+										disabled={formSubmitting}
+									/>
+								{/snippet}
+							</Field>
+
+							<Field
+								label="Descripción o notas"
+								hint="Información de contacto, referencia fiscal o datos adicionales (opcional)"
+							>
+								{#snippet children(control)}
+									<Textarea
+										{control}
+										bind:value={formDescription}
+										placeholder="Notas adicionales…"
+										rows={3}
+										disabled={formSubmitting}
+									/>
+								{/snippet}
+							</Field>
+
+							<footer class="sf-modal-footer">
+								<Button
+									type="button"
+									variant="secondary"
+									disabled={formSubmitting}
+									onclick={closeDialog}
+								>
+									Cancelar
+								</Button>
+								<Button type="submit" variant="primary" disabled={formSubmitting}>
+									{#if formSubmitting}
+										<Spinner size="sm" />
+										<span>Guardando…</span>
+									{:else}
+										<span>{dialogMode === 'create' ? 'Crear cliente' : 'Guardar cambios'}</span>
+									{/if}
+								</Button>
+							</footer>
+						</form>
+					</div>
+				</div>
+			{/if}
 		</div>
 	</OrganizationGate>
 </AppShell>
-
-<!-- Diálogo modal de Crear / Editar cliente -->
-{#if dialogMode !== 'closed'}
-	<div
-		class="sf-modal-backdrop"
-		role="presentation"
-		onclick={(e) => e.target === e.currentTarget && closeDialog()}
-	>
-		<div
-			class="sf-modal-dialog"
-			role="dialog"
-			aria-modal="true"
-			aria-labelledby="client-dialog-title"
-		>
-			<header class="sf-modal-header">
-				<h2 id="client-dialog-title" class="sf-modal-title">
-					{dialogMode === 'create' ? 'Nuevo cliente' : 'Editar cliente'}
-				</h2>
-				<button
-					type="button"
-					class="sf-modal-close"
-					aria-label="Cerrar modal"
-					onclick={closeDialog}
-				>
-					✕
-				</button>
-			</header>
-
-			<form onsubmit={handleSaveClient} class="sf-modal-form">
-				{#if formError}
-					<Alert tone="danger" title="Error en el formulario">
-						<p>{formError}</p>
-					</Alert>
-				{/if}
-
-				<Field
-					label="Nombre del cliente o empresa"
-					required
-					hint="Nombre representativo (ej. Nodhouses, IV Pediatría)"
-				>
-					{#snippet children(control)}
-						<Input
-							{control}
-							bind:value={formName}
-							placeholder="Introduce el nombre"
-							maxlength={255}
-							disabled={formSubmitting}
-						/>
-					{/snippet}
-				</Field>
-
-				<Field
-					label="Descripción o notas"
-					hint="Información de contacto, referencia fiscal o datos adicionales (opcional)"
-				>
-					{#snippet children(control)}
-						<Textarea
-							{control}
-							bind:value={formDescription}
-							placeholder="Notas adicionales…"
-							rows={3}
-							disabled={formSubmitting}
-						/>
-					{/snippet}
-				</Field>
-
-				<footer class="sf-modal-footer">
-					<Button type="button" variant="secondary" disabled={formSubmitting} onclick={closeDialog}>
-						Cancelar
-					</Button>
-					<Button type="submit" variant="primary" disabled={formSubmitting}>
-						{#if formSubmitting}
-							<Spinner size="sm" />
-							<span>Guardando…</span>
-						{:else}
-							<span>{dialogMode === 'create' ? 'Crear cliente' : 'Guardar cambios'}</span>
-						{/if}
-					</Button>
-				</footer>
-			</form>
-		</div>
-	</div>
-{/if}
 
 <style>
 	.sf-clients-container {
@@ -804,8 +844,8 @@
 	.sf-modal-backdrop {
 		position: fixed;
 		inset: 0;
-		background: rgba(15, 23, 42, 0.6);
-		backdrop-filter: blur(2px);
+		background: var(--overlay, rgba(7, 13, 30, 0.65));
+		backdrop-filter: blur(4px);
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -814,15 +854,31 @@
 	}
 
 	.sf-modal-dialog {
-		background: var(--surface-card);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-xl);
-		box-shadow: var(--sf-shadow-modal);
+		background: var(--surface-card, var(--surface, #ffffff));
+		border: 1px solid var(--border-strong, var(--border));
+		border-radius: var(--radius-xl, 1rem);
+		box-shadow:
+			0 20px 25px -5px rgb(0 0 0 / 0.25),
+			0 8px 10px -6px rgb(0 0 0 / 0.25),
+			var(--shadow, none);
 		width: 100%;
 		max-width: 520px;
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
+		color: var(--text-primary, var(--text));
+		animation: sf-modal-in var(--duration) var(--ease);
+	}
+
+	@keyframes sf-modal-in {
+		from {
+			opacity: 0;
+			transform: scale(0.97) translateY(-4px);
+		}
+		to {
+			opacity: 1;
+			transform: scale(1) translateY(0);
+		}
 	}
 
 	.sf-modal-header {
@@ -831,28 +887,41 @@
 		justify-content: space-between;
 		padding: var(--space-4) var(--space-6);
 		border-bottom: 1px solid var(--border);
+		background: var(--surface-subtle, var(--surface));
 	}
 
 	.sf-modal-title {
 		font-size: var(--text-lg);
 		font-weight: 700;
-		color: var(--text-emphasis);
+		color: var(--text-primary, var(--text));
 		margin: 0;
 	}
 
 	.sf-modal-close {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 2rem;
+		height: 2rem;
 		background: transparent;
 		border: none;
-		font-size: 1.25rem;
 		color: var(--text-muted);
 		cursor: pointer;
-		padding: var(--space-1);
-		line-height: 1;
+		padding: 0;
 		border-radius: var(--radius);
+		transition:
+			background-color var(--duration) var(--ease),
+			color var(--duration) var(--ease);
 	}
 
 	.sf-modal-close:hover {
-		color: var(--text);
+		background: var(--surface-subtle);
+		color: var(--text-primary, var(--text));
+	}
+
+	.sf-modal-close:focus-visible {
+		outline: 2px solid var(--sf-cyan-500);
+		outline-offset: 2px;
 	}
 
 	.sf-modal-form {
@@ -860,6 +929,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-4);
+		background: var(--surface-card, var(--surface));
 	}
 
 	.sf-modal-footer {
@@ -867,7 +937,7 @@
 		align-items: center;
 		justify-content: flex-end;
 		gap: var(--space-3);
-		margin-top: var(--space-4);
+		margin-top: var(--space-2);
 		padding-top: var(--space-4);
 		border-top: 1px solid var(--border-subtle);
 	}
