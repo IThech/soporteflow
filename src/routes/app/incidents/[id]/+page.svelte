@@ -36,7 +36,6 @@
 	import { SESSION_EXPIRED_PATH } from '$lib/app/incident-create-navigation';
 	import { attemptSignOut, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
 	import { tenantIdentityOf } from '$lib/app/tenant-identity';
-	import type { MutationResult } from '$lib/app/mutation';
 	import { session } from '$lib/stores/session';
 	import AppShell from '$lib/components/shell/AppShell.svelte';
 	import OrganizationGate from '$lib/components/shell/OrganizationGate.svelte';
@@ -45,8 +44,10 @@
 	import IncidentActivity from '$lib/components/incidents/IncidentActivity.svelte';
 	import IncidentStaffContext from '$lib/components/incidents/IncidentStaffContext.svelte';
 	import IncidentRequesterContext from '$lib/components/incidents/IncidentRequesterContext.svelte';
-	import RealIncidentEditForm from '$lib/components/incidents/RealIncidentEditForm.svelte';
-	import RealIncidentAssignForm from '$lib/components/incidents/RealIncidentAssignForm.svelte';
+	import IncidentActionToolbar from '$lib/components/incidents/IncidentActionToolbar.svelte';
+	import IncidentAssignModal from '$lib/components/incidents/IncidentAssignModal.svelte';
+	import IncidentConfirmModal from '$lib/components/incidents/IncidentConfirmModal.svelte';
+	import type { IncidentPriority, IncidentStatus } from '$lib/api/incident-views';
 	import Alert from '$lib/ui/Alert.svelte';
 	import Button from '$lib/ui/Button.svelte';
 	import PageHeader from '$lib/ui/PageHeader.svelte';
@@ -93,8 +94,23 @@
 	const validId = $derived(isIncidentRouteId(incidentId));
 	let signingOut = $state(false);
 	let signOutError = $state<string | null>(null);
-	let mode = $state<'view' | 'edit' | 'assign'>('view');
-	let formError = $state<string | null>(null);
+	let assignModalOpen = $state(false);
+	let confirmModal = $state<{
+		open: boolean;
+		action: 'close' | 'reopen';
+		title: string;
+		description: string;
+		confirmLabel: string;
+		tone: 'primary' | 'danger' | 'warning';
+	}>({
+		open: false,
+		action: 'close',
+		title: '',
+		description: '',
+		confirmLabel: '',
+		tone: 'primary'
+	});
+	let actionError = $state<string | null>(null);
 	let now = $state(Date.now());
 
 	/** Session expiry of the CURRENT context: handled once (several 401s may arrive together). */
@@ -147,8 +163,9 @@
 			detail.setTarget(target);
 			catalogs.setIdentity(current);
 			if (target && detail.get().key !== before) {
-				mode = 'view';
-				formError = null;
+				assignModalOpen = false;
+				confirmModal.open = false;
+				actionError = null;
 				void detail.load();
 			}
 		});
@@ -188,32 +205,32 @@
 			: null
 	);
 
-	/** Outcome of a legacy form mutation: close on success; keep the form with a safe message. */
-	function settle(result: MutationResult<unknown>) {
-		if (result.status === 'success') {
-			mode = 'view';
-			formError = null;
-		} else if (result.status === 'error' || result.status === 'unknown') {
-			formError = presentMutationFailure(result).message;
+	const isMutating = $derived(Object.values($detail.mutations).some((m) => m.status === 'pending'));
+
+	async function handleStatusChange(targetStatus: IncidentStatus) {
+		actionError = null;
+		const result = await detail.mutate('status', (organizationId, id) =>
+			updateIncident(organizationId, id, { status: targetStatus })
+		);
+		if (result.status === 'error' || result.status === 'unknown') {
+			actionError = presentMutationFailure(result).message;
 		}
 	}
 
-	async function saveEdit(changes: {
-		status?: 'open' | 'pending' | 'resolved' | 'closed';
-		priority?: 'low' | 'medium' | 'high' | 'urgent';
-	}) {
-		formError = null;
-		settle(
-			await detail.mutate('edit', (organizationId, id) =>
-				updateIncident(organizationId, id, changes)
-			)
+	async function handlePriorityChange(priority: IncidentPriority) {
+		actionError = null;
+		const result = await detail.mutate('priority', (organizationId, id) =>
+			updateIncident(organizationId, id, { priority })
 		);
+		if (result.status === 'error' || result.status === 'unknown') {
+			actionError = presentMutationFailure(result).message;
+		}
 	}
 
 	function openAssign() {
 		if (!shown || shown.audience !== 'staff') return;
-		mode = 'assign';
-		formError = null;
+		assignModalOpen = true;
+		actionError = null;
 		void catalogs.loadTeams();
 		void catalogs.loadAssignees(shown.teamId);
 	}
@@ -224,24 +241,65 @@
 		reason?: string;
 	}) {
 		if (!shown || shown.audience !== 'staff') return;
-		// No effective change: nothing is sent.
 		if (
 			(data.teamId ?? null) === shown.teamId &&
 			(data.assignedToUserId ?? null) === shown.assignedToUserId
 		) {
-			mode = 'view';
+			assignModalOpen = false;
 			return;
 		}
-		formError = null;
-		settle(
-			await detail.mutate('assign', (organizationId, id) =>
-				assignIncident(organizationId, id, data)
-			)
+		actionError = null;
+		const result = await detail.mutate('assign', (organizationId, id) =>
+			assignIncident(organizationId, id, data)
 		);
+		if (result.status === 'success') {
+			assignModalOpen = false;
+		} else if (result.status === 'error' || result.status === 'unknown') {
+			actionError = presentMutationFailure(result).message;
+		}
+	}
+
+	function requestClose() {
+		actionError = null;
+		confirmModal = {
+			open: true,
+			action: 'close',
+			title: 'Cerrar incidencia',
+			description:
+				'¿Confirmas el cierre de esta incidencia? Al cerrarla, pasará a modo de solo lectura y no se podrán añadir nuevos comentarios ni notas internas a menos que sea reabierta.',
+			confirmLabel: 'Confirmar cierre',
+			tone: 'danger'
+		};
+	}
+
+	function requestReopen() {
+		actionError = null;
+		confirmModal = {
+			open: true,
+			action: 'reopen',
+			title: 'Reabrir incidencia',
+			description:
+				'¿Confirmas la reapertura de esta incidencia? La incidencia volverá a estar activa y se reactivarán las opciones de gestión y conversación.',
+			confirmLabel: 'Reabrir incidencia',
+			tone: 'primary'
+		};
+	}
+
+	async function executeConfirm() {
+		const targetStatus: IncidentStatus = confirmModal.action === 'close' ? 'closed' : 'open';
+		actionError = null;
+		const result = await detail.mutate('status', (organizationId, id) =>
+			updateIncident(organizationId, id, { status: targetStatus })
+		);
+		if (result.status === 'success') {
+			confirmModal.open = false;
+		} else if (result.status === 'error' || result.status === 'unknown') {
+			actionError = presentMutationFailure(result).message;
+		}
 	}
 
 	const assignError = $derived(
-		formError ??
+		actionError ??
 			($catalogs.teams.error ? presentApiError($catalogs.teams.error).message : null) ??
 			($catalogs.assignees.error ? presentApiError($catalogs.assignees.error).message : null)
 	);
@@ -302,50 +360,33 @@
 				organizationName={$context.status === 'ready' ? $context.activeOrganization?.name : null}
 			>
 				{#snippet actions()}
-					{#if mode === 'view' && available?.changeStatus.available}
-						<Button
-							variant="secondary"
-							size="sm"
-							onclick={() => ((mode = 'edit'), (formError = null))}
-						>
-							Editar
-						</Button>
-					{/if}
-					{#if mode === 'view' && available?.assign.available}
-						<Button variant="secondary" size="sm" onclick={openAssign}>
-							{shown.audience === 'staff' && (shown.assignedToUserId || shown.teamId)
-								? 'Reasignar'
-								: 'Asignar'}
-						</Button>
+					{#if available}
+						<IncidentActionToolbar
+							incident={shown}
+							{available}
+							mutating={isMutating}
+							onStatusChange={handleStatusChange}
+							onPriorityChange={handlePriorityChange}
+							onOpenAssign={openAssign}
+							onRequestClose={requestClose}
+							onRequestReopen={requestReopen}
+						/>
 					{/if}
 				{/snippet}
 			</IncidentHeader>
 			<div class="sf-detail-grid" aria-busy={$detail.status === 'refreshing' || undefined}>
 				<div class="sf-detail-main">
-					{#if shown.audience === 'staff' && mode === 'edit'}
-						<RealIncidentEditForm
-							incident={shown}
-							submitting={$detail.mutations.edit?.status === 'pending'}
-							error={formError}
-							onSave={saveEdit}
-							onCancel={() => ((mode = 'view'), (formError = null))}
-						/>
-					{:else if shown.audience === 'staff' && mode === 'assign'}
-						<RealIncidentAssignForm
-							currentTeamId={shown.teamId}
-							currentTeamName={shown.teamName}
-							currentAssigneeUserId={shown.assignedToUserId}
-							currentAssigneeUserName={shown.assignedToUserName}
-							teams={$catalogs.teams.items.map((team) => ({ ...team, description: null }))}
-							assignees={[...$catalogs.assignees.items]}
-							teamsLoading={$catalogs.teams.status === 'loading'}
-							assigneesLoading={$catalogs.assignees.status === 'loading'}
-							submitting={$detail.mutations.assign?.status === 'pending'}
-							error={assignError}
-							onTeamChange={(teamId) => void catalogs.loadAssignees(teamId)}
-							onSave={saveAssign}
-							onCancel={() => ((mode = 'view'), (formError = null))}
-						/>
+					{#if actionError}
+						<div class="sf-action-error" role="alert">
+							<Alert tone="danger" title="Error en la acción">
+								<p>{actionError}</p>
+								{#snippet actions()}
+									<Button variant="secondary" size="sm" onclick={() => (actionError = null)}>
+										Descartar
+									</Button>
+								{/snippet}
+							</Alert>
+						</div>
 					{/if}
 					<IncidentDescription description={shown.description} />
 					<IncidentActivity
@@ -371,6 +412,42 @@
 					{/if}
 				</aside>
 			</div>
+
+			{#if shown.audience === 'staff'}
+				<IncidentAssignModal
+					open={assignModalOpen}
+					currentTeamId={shown.teamId}
+					currentTeamName={shown.teamName}
+					currentAssigneeUserId={shown.assignedToUserId}
+					currentAssigneeUserName={shown.assignedToUserName}
+					teams={$catalogs.teams.items}
+					assignees={$catalogs.assignees.items}
+					teamsLoading={$catalogs.teams.status === 'loading'}
+					assigneesLoading={$catalogs.assignees.status === 'loading'}
+					submitting={$detail.mutations.assign?.status === 'pending'}
+					error={assignError}
+					onTeamChange={(teamId) => void catalogs.loadAssignees(teamId)}
+					onSave={saveAssign}
+					onCancel={() => {
+						assignModalOpen = false;
+						actionError = null;
+					}}
+				/>
+
+				<IncidentConfirmModal
+					open={confirmModal.open}
+					title={confirmModal.title}
+					description={confirmModal.description}
+					confirmLabel={confirmModal.confirmLabel}
+					tone={confirmModal.tone}
+					submitting={$detail.mutations.status?.status === 'pending'}
+					onConfirm={executeConfirm}
+					onCancel={() => {
+						confirmModal.open = false;
+						actionError = null;
+					}}
+				/>
+			{/if}
 		{:else if failure}
 			<PageHeader title="Detalle de incidencia" />
 			<Alert tone={failure.tone} title={failure.title} requestId={failure.requestId}>
@@ -444,6 +521,9 @@
 		flex-direction: column;
 		gap: var(--space-4);
 		min-width: 0;
+	}
+	.sf-action-error {
+		margin-bottom: var(--space-1);
 	}
 	.sf-detail-aside {
 		min-width: 0;

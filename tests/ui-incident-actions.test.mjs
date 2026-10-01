@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createServer } from 'vite';
+import { svelte } from '@sveltejs/vite-plugin-svelte';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const root = path.resolve(__dirname, '..');
 import { ApiError } from '../src/lib/api/errors.ts';
 import {
 	buildAssignmentPatch,
@@ -192,5 +200,210 @@ test('Seguridad: módulos UI-2A sin roles, storage, {@html} ni imports de servid
 		assert.doesNotMatch(code, /from ['"][^'"]*(\$lib\/server|\/server\/|drizzle)/, file);
 		assert.doesNotMatch(code, /role\s*===|organization_admin|technician/, file);
 		assert.doesNotMatch(code, /\/messages\b/, `${file}: no existe un endpoint /messages`);
+	}
+});
+
+test('UI-2E SSR: Toolbar de acciones renderiza controles según estado y permisos', async () => {
+	const server = await createServer({
+		root,
+		configFile: false,
+		envDir: false,
+		logLevel: 'silent',
+		resolve: { alias: { $lib: path.resolve(root, 'src/lib') } },
+		plugins: [svelte({ configFile: false })],
+		server: { middlewareMode: true, hmr: false, watch: null },
+		appType: 'custom'
+	});
+
+	try {
+		const { render } = await server.ssrLoadModule('svelte/server');
+		const mod = await server.ssrLoadModule(
+			'/src/lib/components/incidents/IncidentActionToolbar.svelte'
+		);
+		const Toolbar = mod.default;
+
+		const baseIncident = {
+			id: '11111111-1111-4111-8111-111111111111',
+			incidentNumber: 101,
+			title: 'Test',
+			description: 'Test desc',
+			status: 'open',
+			priority: 'high',
+			audience: 'staff',
+			client: 'Cliente A',
+			teamId: null,
+			assignedToUserId: null
+		};
+
+		// 1. Estado 'open' con staff completo: Resolver, Poner en espera, Asignar, Prioridad
+		const openActions = incidentActions(baseIncident, ALL);
+		const openHtml = render(Toolbar, {
+			props: {
+				incident: baseIncident,
+				available: openActions,
+				onStatusChange: () => {},
+				onPriorityChange: () => {},
+				onOpenAssign: () => {},
+				onRequestClose: () => {},
+				onRequestReopen: () => {}
+			}
+		}).body;
+
+		assert.ok(openHtml.includes('Resolver'), 'botón Resolver en estado open');
+		assert.ok(openHtml.includes('Poner en espera'), 'botón Poner en espera en estado open');
+		assert.ok(openHtml.includes('Asignar'), 'botón Asignar cuando no tiene técnico');
+		assert.ok(openHtml.includes('Prioridad:'), 'selector de prioridad');
+
+		// 2. Estado 'pending': Resolver, Reanudar
+		const pendingIncident = { ...baseIncident, status: 'pending' };
+		const pendingActions = incidentActions(pendingIncident, ALL);
+		const pendingHtml = render(Toolbar, {
+			props: {
+				incident: pendingIncident,
+				available: pendingActions,
+				onStatusChange: () => {},
+				onPriorityChange: () => {},
+				onOpenAssign: () => {},
+				onRequestClose: () => {},
+				onRequestReopen: () => {}
+			}
+		}).body;
+
+		assert.ok(pendingHtml.includes('Resolver'), 'botón Resolver en estado pending');
+		assert.ok(pendingHtml.includes('Reanudar'), 'botón Reanudar en estado pending');
+
+		// 3. Estado 'resolved': Cerrar, Reabrir
+		const resolvedIncident = { ...baseIncident, status: 'resolved' };
+		const resolvedActions = incidentActions(resolvedIncident, ALL);
+		const resolvedHtml = render(Toolbar, {
+			props: {
+				incident: resolvedIncident,
+				available: resolvedActions,
+				onStatusChange: () => {},
+				onPriorityChange: () => {},
+				onOpenAssign: () => {},
+				onRequestClose: () => {},
+				onRequestReopen: () => {}
+			}
+		}).body;
+
+		assert.ok(resolvedHtml.includes('Cerrar'), 'botón Cerrar en estado resolved');
+		assert.ok(resolvedHtml.includes('Reabrir'), 'botón Reabrir en estado resolved');
+
+		// 4. Estado 'closed': solo Reabrir, sin prioridad ni asignación
+		const closedIncident = { ...baseIncident, status: 'closed' };
+		const closedActions = incidentActions(closedIncident, ALL);
+		const closedHtml = render(Toolbar, {
+			props: {
+				incident: closedIncident,
+				available: closedActions,
+				onStatusChange: () => {},
+				onPriorityChange: () => {},
+				onOpenAssign: () => {},
+				onRequestClose: () => {},
+				onRequestReopen: () => {}
+			}
+		}).body;
+
+		assert.ok(closedHtml.includes('Reabrir'), 'botón Reabrir en estado closed');
+		assert.equal(closedHtml.includes('Prioridad:'), false, 'cerrada: sin selector de prioridad');
+		assert.equal(closedHtml.includes('Asignar'), false, 'cerrada: sin botón de asignar');
+
+		// 5. Requester: sin toolbar de staff
+		const reqIncident = { ...baseIncident, audience: 'requester' };
+		const reqActions = incidentActions(reqIncident, ALL);
+		const reqHtml = render(Toolbar, {
+			props: {
+				incident: reqIncident,
+				available: reqActions,
+				onStatusChange: () => {},
+				onPriorityChange: () => {},
+				onOpenAssign: () => {},
+				onRequestClose: () => {},
+				onRequestReopen: () => {}
+			}
+		}).body;
+
+		assert.equal(reqHtml.includes('role="toolbar"'), false, 'requester no renderiza toolbar');
+	} finally {
+		await server.close();
+	}
+});
+
+test('UI-2E SSR: Modales IncidentConfirmModal e IncidentAssignModal accesibles', async () => {
+	const server = await createServer({
+		root,
+		configFile: false,
+		envDir: false,
+		logLevel: 'silent',
+		resolve: { alias: { $lib: path.resolve(root, 'src/lib') } },
+		plugins: [svelte({ configFile: false })],
+		server: { middlewareMode: true, hmr: false, watch: null },
+		appType: 'custom'
+	});
+
+	try {
+		const { render } = await server.ssrLoadModule('svelte/server');
+		const confirmMod = await server.ssrLoadModule(
+			'/src/lib/components/incidents/IncidentConfirmModal.svelte'
+		);
+		const assignMod = await server.ssrLoadModule(
+			'/src/lib/components/incidents/IncidentAssignModal.svelte'
+		);
+		const ConfirmModal = confirmMod.default;
+		const AssignModal = assignMod.default;
+
+		// 1. ConfirmModal abierto
+		const confirmHtml = render(ConfirmModal, {
+			props: {
+				open: true,
+				title: 'Cerrar incidencia',
+				description: '¿Confirmas el cierre definitivo de esta incidencia?',
+				confirmLabel: 'Confirmar cierre',
+				tone: 'danger',
+				onConfirm: () => {},
+				onCancel: () => {}
+			}
+		}).body;
+
+		assert.ok(confirmHtml.includes('role="alertdialog"'), 'alertdialog para confirmación');
+		assert.ok(confirmHtml.includes('aria-modal="true"'), 'aria-modal');
+		assert.ok(confirmHtml.includes('Cerrar incidencia'), 'título');
+		assert.ok(confirmHtml.includes('Confirmar cierre'), 'botón de confirmación');
+
+		// 2. AssignModal abierto
+		const assignHtml = render(AssignModal, {
+			props: {
+				open: true,
+				currentTeamId: '11111111-2222-4333-8444-555555555555',
+				currentTeamName: 'Soporte N1',
+				currentAssigneeUserId: '22222222-3333-4444-8555-666666666666',
+				currentAssigneeUserName: 'Carlos Técnico',
+				teams: [{ id: '11111111-2222-4333-8444-555555555555', name: 'Soporte N1' }],
+				assignees: [
+					{
+						id: '22222222-3333-4444-8555-666666666666',
+						name: 'Carlos Técnico',
+						email: 'carlos@test.com'
+					}
+				],
+				onSave: () => {},
+				onCancel: () => {}
+			}
+		}).body;
+
+		assert.ok(assignHtml.includes('role="dialog"'), 'dialog para asignación');
+		assert.ok(assignHtml.includes('aria-modal="true"'), 'aria-modal');
+		assert.ok(
+			assignHtml.includes('Reasignar incidencia'),
+			'título reasignar cuando ya estaba asignada'
+		);
+		assert.ok(
+			assignHtml.includes('Motivo de la reasignación'),
+			'motivo requerido si ya estaba asignada'
+		);
+		assert.ok(assignHtml.includes('Guardar asignación'), 'botón de guardado');
+	} finally {
+		await server.close();
 	}
 });

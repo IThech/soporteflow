@@ -1972,3 +1972,144 @@ export async function updateIncidentSla(
 	}
 	return incident;
 }
+
+export type SafeIncidentHistoryType =
+	| 'created'
+	| 'status_changed'
+	| 'priority_changed'
+	| 'assigned'
+	| 'reassigned'
+	| 'support_level_changed'
+	| 'site_changed'
+	| 'category_changed'
+	| 'resolved'
+	| 'closed'
+	| 'reopened'
+	| 'sla_applied'
+	| 'sla_changed'
+	| 'sla_cleared'
+	| 'sla_first_response_met'
+	| 'sla_first_response_breached'
+	| 'sla_resolution_met'
+	| 'sla_resolution_breached';
+
+export interface IncidentHistoryItem {
+	id: string;
+	type: SafeIncidentHistoryType;
+	occurredAt: string;
+	actor: { type: 'user' | 'system'; label: 'Usuario' | 'Sistema' };
+	changes?: {
+		status?: {
+			from?: 'open' | 'pending' | 'resolved' | 'closed';
+			to?: 'open' | 'pending' | 'resolved' | 'closed';
+		};
+		priority?: {
+			from?: 'low' | 'medium' | 'high' | 'urgent';
+			to?: 'low' | 'medium' | 'high' | 'urgent';
+		};
+		supportLevel?: { from?: 'N1' | 'N2' | 'N3'; to?: 'N1' | 'N2' | 'N3' };
+		assignmentChanged?: true;
+		siteChanged?: true;
+		categoryChanged?: true;
+	};
+}
+
+export interface IncidentHistoryPage {
+	items: IncidentHistoryItem[];
+	nextCursor: string | null;
+}
+
+export interface ListIncidentHistoryInput {
+	organizationId: string;
+	incidentId: string;
+	limit?: number;
+	cursor?: string;
+	signal?: AbortSignal;
+	customFetch?: typeof fetch;
+}
+
+/**
+ * GET /api/incidents/<id>/history?organizationId=<UUID>[&limit][&cursor]
+ * Returns safe projected incident activity history.
+ */
+export async function listIncidentHistory(
+	input: ListIncidentHistoryInput
+): Promise<IncidentHistoryPage> {
+	if (!CATEGORY_UUID.test(input.organizationId) || !CATEGORY_UUID.test(input.incidentId)) {
+		throw new IncidentApiError(
+			0,
+			'INVALID_INPUT',
+			'Identificador de organización o incidencia inválido.'
+		);
+	}
+	const query = new URLSearchParams({ organizationId: input.organizationId });
+	if (input.limit !== undefined) {
+		if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+			throw new IncidentApiError(0, 'INVALID_INPUT', 'El tamaño de página no es válido.');
+		}
+		query.set('limit', String(input.limit));
+	}
+	if (input.cursor !== undefined) {
+		query.set('cursor', input.cursor);
+	}
+	const fetchFn = input.customFetch ?? fetch;
+	const url = `/api/incidents/${encodeURIComponent(input.incidentId)}/history?${query.toString()}`;
+	let res: Response;
+	try {
+		res = await fetchFn(url, { method: 'GET', signal: input.signal });
+	} catch (err: unknown) {
+		if (err instanceof DOMException && err.name === 'AbortError') throw err;
+		throw new IncidentApiError(0, 'NETWORK_ERROR', 'No se pudo conectar con el servidor.');
+	}
+	if (!res.ok) {
+		let code = 'INTERNAL_ERROR';
+		let message = 'No se pudo cargar el historial.';
+		if (res.status === 400) {
+			code = 'INVALID_INPUT';
+			message = 'Parámetros de historial inválidos.';
+		} else if (res.status === 401) {
+			code = 'UNAUTHORIZED';
+			message = 'Tu sesión ya no es válida.';
+		} else if (res.status === 403) {
+			code = 'FORBIDDEN';
+			message = 'No tienes permisos para ver el historial de esta incidencia.';
+		} else if (res.status === 404) {
+			code = 'NOT_FOUND';
+			message = 'La incidencia no está disponible.';
+		} else if (res.status >= 500) {
+			code = 'SERVER_ERROR';
+			message = 'Error en el servidor al consultar el historial.';
+		}
+		throw new IncidentApiError(res.status, code, message, responseErrorMeta(res));
+	}
+	let data: unknown;
+	try {
+		data = await res.json();
+	} catch {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	if (!data || typeof data !== 'object' || !Array.isArray((data as { items?: unknown }).items)) {
+		throw new IncidentApiError(
+			res.status,
+			'INVALID_PAYLOAD',
+			'No se pudo interpretar la respuesta del servidor.'
+		);
+	}
+	const items = (data as { items: unknown[] }).items.filter((item): item is IncidentHistoryItem =>
+		Boolean(
+			item &&
+			typeof item === 'object' &&
+			typeof (item as IncidentHistoryItem).id === 'string' &&
+			typeof (item as IncidentHistoryItem).type === 'string'
+		)
+	);
+	const nextCursor =
+		typeof (data as { nextCursor?: unknown }).nextCursor === 'string'
+			? (data as { nextCursor: string }).nextCursor
+			: null;
+	return { items, nextCursor };
+}

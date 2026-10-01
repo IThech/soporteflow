@@ -14,6 +14,7 @@
 	import IncidentCommentComposer from './IncidentCommentComposer.svelte';
 	import IncidentInternalNoteList from './IncidentInternalNoteList.svelte';
 	import IncidentInternalNoteComposer from './IncidentInternalNoteComposer.svelte';
+	import IncidentHistoryList from './IncidentHistoryList.svelte';
 
 	let {
 		incident,
@@ -51,6 +52,14 @@
 	const canAddInternalNote = $derived(isStaff && available.addInternalNote.available);
 	const isClosed = $derived(incident.status === 'closed');
 
+	type ActivityTab = 'comments' | 'internalNotes' | 'history';
+
+	const visibleTabs = $derived<ActivityTab[]>([
+		'comments',
+		...(canViewInternalNotes ? (['internalNotes'] as const) : []),
+		'history'
+	]);
+
 	// Synchronize target with conversation controller
 	$effect(() => {
 		const id = incident.id;
@@ -75,6 +84,22 @@
 		});
 	});
 
+	// Re-load history if loaded and incident is updated via mutation
+	let lastUpdatedAt: string | null = null;
+	$effect(() => {
+		const current = incident.updatedAt;
+		untrack(() => {
+			if (lastUpdatedAt && current !== lastUpdatedAt) {
+				lastUpdatedAt = current;
+				if (conv.get().history.status !== 'idle') {
+					void conv.loadHistory({ reset: true });
+				}
+			} else {
+				lastUpdatedAt = current;
+			}
+		});
+	});
+
 	// Session expiry check on 401
 	$effect(() => {
 		if (unauthenticatedConversationError(convState)) {
@@ -82,7 +107,7 @@
 		}
 	});
 
-	function handleTabSelect(tab: 'comments' | 'internalNotes') {
+	function handleTabSelect(tab: 'comments' | 'internalNotes' | 'history') {
 		conv.setActiveTab(tab);
 		if (
 			tab === 'internalNotes' &&
@@ -90,14 +115,30 @@
 			convState.internalNotes.status === 'idle'
 		) {
 			void conv.loadInternalNotes();
+		} else if (tab === 'history' && convState.history.status === 'idle') {
+			void conv.loadHistory();
 		}
 	}
 
-	function handleTabKeydown(e: KeyboardEvent, current: 'comments' | 'internalNotes') {
-		if (!canViewInternalNotes) return;
-		if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+	function handleTabKeydown(e: KeyboardEvent, current: 'comments' | 'internalNotes' | 'history') {
+		const tabs = visibleTabs;
+		const currentIndex = tabs.indexOf(current);
+		if (currentIndex === -1) return;
+
+		let nextIndex = -1;
+		if (e.key === 'ArrowRight') {
+			nextIndex = (currentIndex + 1) % tabs.length;
+		} else if (e.key === 'ArrowLeft') {
+			nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+		} else if (e.key === 'Home') {
+			nextIndex = 0;
+		} else if (e.key === 'End') {
+			nextIndex = tabs.length - 1;
+		}
+
+		if (nextIndex !== -1) {
 			e.preventDefault();
-			const nextTab = current === 'comments' ? 'internalNotes' : 'comments';
+			const nextTab = tabs[nextIndex];
 			handleTabSelect(nextTab);
 			const el = document.getElementById(`${uid}-tab-${nextTab}`);
 			el?.focus();
@@ -107,27 +148,28 @@
 
 <section class="sf-activity-section" aria-labelledby="{uid}-heading">
 	<header class="sf-activity-header">
-		{#if canViewInternalNotes}
-			<h2 id="{uid}-heading" class="sf-sr-only">Actividad y notas de la incidencia</h2>
-			<div class="sf-activity-tabs" role="tablist" aria-label="Vistas de actividad">
-				<button
-					type="button"
-					role="tab"
-					id="{uid}-tab-comments"
-					class="sf-tab-btn"
-					class:sf-tab-active={convState.activeTab === 'comments'}
-					aria-selected={convState.activeTab === 'comments'}
-					aria-controls="{uid}-panel-comments"
-					tabindex={convState.activeTab === 'comments' ? 0 : -1}
-					onclick={() => handleTabSelect('comments')}
-					onkeydown={(e) => handleTabKeydown(e, 'comments')}
-				>
-					<Icon name="message-square" size={16} />
-					<span>Conversación</span>
-					{#if convState.comments.items.length > 0}
-						<span class="sf-tab-counter">{convState.comments.items.length}</span>
-					{/if}
-				</button>
+		<h2 id="{uid}-heading" class="sf-sr-only">Actividad, notas e historial de la incidencia</h2>
+		<div class="sf-activity-tabs" role="tablist" aria-label="Vistas de actividad">
+			<button
+				type="button"
+				role="tab"
+				id="{uid}-tab-comments"
+				class="sf-tab-btn"
+				class:sf-tab-active={convState.activeTab === 'comments'}
+				aria-selected={convState.activeTab === 'comments'}
+				aria-controls="{uid}-panel-comments"
+				tabindex={convState.activeTab === 'comments' ? 0 : -1}
+				onclick={() => handleTabSelect('comments')}
+				onkeydown={(e) => handleTabKeydown(e, 'comments')}
+			>
+				<Icon name="message-square" size={16} />
+				<span>Conversación</span>
+				{#if convState.comments.items.length > 0}
+					<span class="sf-tab-counter">{convState.comments.items.length}</span>
+				{/if}
+			</button>
+
+			{#if canViewInternalNotes}
 				<button
 					type="button"
 					role="tab"
@@ -148,26 +190,35 @@
 						</span>
 					{/if}
 				</button>
-			</div>
-		{:else}
-			<div class="sf-activity-single-heading">
-				<h2 id="{uid}-heading">Conversación</h2>
-				{#if convState.comments.items.length > 0}
-					<span class="sf-comments-count">
-						{convState.comments.items.length}
-						{convState.comments.items.length === 1 ? 'mensaje' : 'mensajes'}
-					</span>
+			{/if}
+
+			<button
+				type="button"
+				role="tab"
+				id="{uid}-tab-history"
+				class="sf-tab-btn"
+				class:sf-tab-active={convState.activeTab === 'history'}
+				aria-selected={convState.activeTab === 'history'}
+				aria-controls="{uid}-panel-history"
+				tabindex={convState.activeTab === 'history' ? 0 : -1}
+				onclick={() => handleTabSelect('history')}
+				onkeydown={(e) => handleTabKeydown(e, 'history')}
+			>
+				<Icon name="history" size={16} />
+				<span>Historial</span>
+				{#if convState.history.items.length > 0}
+					<span class="sf-tab-counter">{convState.history.items.length}</span>
 				{/if}
-			</div>
-		{/if}
+			</button>
+		</div>
 	</header>
 
 	<div class="sf-activity-content">
-		{#if !canViewInternalNotes || convState.activeTab === 'comments'}
+		{#if convState.activeTab === 'comments'}
 			<div
 				id="{uid}-panel-comments"
-				role={canViewInternalNotes ? 'tabpanel' : undefined}
-				aria-labelledby={canViewInternalNotes ? '{uid}-tab-comments' : undefined}
+				role="tabpanel"
+				aria-labelledby="{uid}-tab-comments"
 				class="sf-tabpanel"
 			>
 				<IncidentCommentList
@@ -219,6 +270,23 @@
 					onSubmit={() => void conv.addInternalNote(undefined, detailController)}
 				/>
 			</div>
+		{:else if convState.activeTab === 'history'}
+			<div
+				id="{uid}-panel-history"
+				role="tabpanel"
+				aria-labelledby="{uid}-tab-history"
+				class="sf-tabpanel"
+			>
+				<IncidentHistoryList
+					items={convState.history.items}
+					status={convState.history.status}
+					loadingMore={convState.history.loadingMore}
+					nextCursor={convState.history.nextCursor}
+					error={convState.history.error}
+					onRetry={() => void conv.loadHistory({ reset: true })}
+					onLoadMore={() => void conv.loadHistory({ reset: false })}
+				/>
+			</div>
 		{/if}
 	</div>
 </section>
@@ -240,23 +308,6 @@
 		justify-content: space-between;
 		border-bottom: 1px solid var(--border);
 		padding-bottom: var(--space-3);
-	}
-	.sf-activity-single-heading {
-		display: flex;
-		align-items: center;
-		gap: var(--space-3);
-	}
-	.sf-activity-single-heading h2 {
-		margin: 0;
-		font-size: var(--text-2xs);
-		font-weight: 700;
-		letter-spacing: var(--tracking-wide);
-		text-transform: uppercase;
-		color: var(--text-muted);
-	}
-	.sf-comments-count {
-		font-size: var(--text-xs);
-		color: var(--text-muted);
 	}
 	.sf-activity-tabs {
 		display: flex;

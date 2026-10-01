@@ -3,8 +3,11 @@ import {
 	createIncidentComment,
 	createIncidentInternalNote,
 	listIncidentComments,
+	listIncidentHistory,
 	listIncidentInternalNotes,
 	type IncidentCommentPage,
+	type IncidentHistoryItem,
+	type IncidentHistoryPage,
 	type IncidentInternalNote,
 	type IncidentInternalNotePage,
 	type IncidentPublicComment
@@ -44,9 +47,10 @@ export interface IncidentConversationState {
 	readonly organizationId: string | null;
 	readonly incidentId: string | null;
 	readonly audience: 'requester' | 'staff' | null;
-	readonly activeTab: 'comments' | 'internalNotes';
+	readonly activeTab: 'comments' | 'internalNotes' | 'history';
 	readonly comments: FeedState<IncidentPublicComment>;
 	readonly internalNotes: FeedState<IncidentInternalNote>;
+	readonly history: FeedState<IncidentHistoryItem>;
 	readonly commentComposer: ComposerState;
 	readonly internalNoteComposer: ComposerState;
 }
@@ -57,11 +61,12 @@ export interface IncidentConversationController {
 	setTarget(target: IncidentConversationTarget | null): void;
 	loadComments(options?: { reset?: boolean }): Promise<void>;
 	loadInternalNotes(options?: { reset?: boolean }): Promise<void>;
+	loadHistory(options?: { reset?: boolean }): Promise<void>;
 	setCommentDraft(draft: string): void;
 	setInternalNoteDraft(draft: string): void;
 	clearCommentOutcome(): void;
 	clearInternalNoteOutcome(): void;
-	setActiveTab(tab: 'comments' | 'internalNotes'): void;
+	setActiveTab(tab: 'comments' | 'internalNotes' | 'history'): void;
 	addComment(
 		body?: string,
 		detailController?: IncidentDetailController
@@ -96,6 +101,7 @@ const EMPTY_STATE: IncidentConversationState = Object.freeze({
 	activeTab: 'comments',
 	comments: EMPTY_FEED,
 	internalNotes: EMPTY_FEED,
+	history: EMPTY_FEED,
 	commentComposer: EMPTY_COMPOSER,
 	internalNoteComposer: EMPTY_COMPOSER
 });
@@ -110,6 +116,7 @@ export function unauthenticatedConversationError(
 	const candidates: (ApiError | null)[] = [
 		state.comments.error,
 		state.internalNotes.error,
+		state.history.error,
 		state.commentComposer.error,
 		state.internalNoteComposer.error
 	];
@@ -148,6 +155,12 @@ export function createIncidentConversation(deps?: {
 		cursor?: string;
 		signal: AbortSignal;
 	}) => Promise<IncidentInternalNotePage>;
+	listHistory?: (options: {
+		organizationId: string;
+		incidentId: string;
+		cursor?: string;
+		signal: AbortSignal;
+	}) => Promise<IncidentHistoryPage>;
 	createComment?: (options: {
 		organizationId: string;
 		incidentId: string;
@@ -172,6 +185,15 @@ export function createIncidentConversation(deps?: {
 		deps?.listInternalNotes ??
 		((opts) =>
 			listIncidentInternalNotes({
+				organizationId: opts.organizationId,
+				incidentId: opts.incidentId,
+				cursor: opts.cursor,
+				signal: opts.signal
+			}));
+	const fetchHistory =
+		deps?.listHistory ??
+		((opts) =>
+			listIncidentHistory({
 				organizationId: opts.organizationId,
 				incidentId: opts.incidentId,
 				cursor: opts.cursor,
@@ -251,6 +273,7 @@ export function createIncidentConversation(deps?: {
 				activeTab: 'comments',
 				comments: EMPTY_FEED,
 				internalNotes: EMPTY_FEED,
+				history: EMPTY_FEED,
 				commentComposer: EMPTY_COMPOSER,
 				internalNoteComposer: EMPTY_COMPOSER
 			});
@@ -375,6 +398,56 @@ export function createIncidentConversation(deps?: {
 						status: isReset ? 'error' : state.internalNotes.status,
 						items: isReset ? [] : state.internalNotes.items,
 						nextCursor: isReset ? null : state.internalNotes.nextCursor,
+						loadingMore: false,
+						error: apiError
+					}
+				});
+			}
+		},
+		async loadHistory(options = {}) {
+			const target = currentTarget;
+			if (!target) return;
+			const isReset = options.reset === true || state.history.status === 'idle';
+			const cursor = isReset ? undefined : (state.history.nextCursor ?? undefined);
+
+			if (!isReset && !cursor) return;
+
+			set({
+				history: {
+					...state.history,
+					status: isReset ? 'loading' : state.history.status,
+					loadingMore: !isReset,
+					error: isReset ? null : state.history.error
+				}
+			});
+
+			try {
+				const page = await channels.channel('history').run((signal) =>
+					fetchHistory({
+						organizationId: target.identity.organizationId,
+						incidentId: target.incidentId,
+						cursor,
+						signal
+					})
+				);
+				const merged = isReset ? page.items : deduplicate(state.history.items, page.items);
+				set({
+					history: {
+						status: 'ready',
+						items: merged,
+						nextCursor: page.nextCursor,
+						loadingMore: false,
+						error: null
+					}
+				});
+			} catch (err: unknown) {
+				if (isStaleRequest(err)) return;
+				const apiError = toApiError(err);
+				set({
+					history: {
+						status: isReset ? 'error' : state.history.status,
+						items: isReset ? [] : state.history.items,
+						nextCursor: isReset ? null : state.history.nextCursor,
 						loadingMore: false,
 						error: apiError
 					}

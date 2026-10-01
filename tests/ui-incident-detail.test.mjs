@@ -284,18 +284,19 @@ export function unauthenticatedError() { return null; }`;
 			assert.equal(html.includes(uuid), false, uuid);
 	});
 
-	await t.test('26. sin acciones falsas; Editar/Asignar solo staff con capability', () => {
-		const forbidden = /Añadir comentario|Añadir nota|Cambiar SLA|Historial|Eliminar/;
+	await t.test('26. sin acciones falsas; acciones solo staff con capability', () => {
+		const forbidden = /Añadir comentario|Añadir nota|Cambiar SLA|Eliminar/;
+		const actionsRegex = />\s*(Resolver|Reabrir|Asignar|Reasignar)\s*</;
 		const staffNoCaps = renderPage({
 			capabilities: ['incidents:view_all'],
 			detail: detailState({ status: 'ready', detail: staffDetail() })
 		});
-		assert.doesNotMatch(staffNoCaps, />\s*(Editar|Asignar|Reasignar)\s*</);
+		assert.doesNotMatch(staffNoCaps, actionsRegex);
 		assert.doesNotMatch(staffNoCaps, forbidden);
 		const staffCaps = renderPage({
 			detail: detailState({ status: 'ready', detail: staffDetail() })
 		});
-		assert.match(staffCaps, />\s*Editar\s*</);
+		assert.match(staffCaps, />\s*Resolver\s*</);
 		assert.match(staffCaps, />\s*Reasignar\s*</, 'ya asignada');
 		assert.doesNotMatch(staffCaps, forbidden);
 		const unassigned = renderPage({
@@ -308,13 +309,13 @@ export function unauthenticatedError() { return null; }`;
 		const closed = renderPage({
 			detail: detailState({ status: 'ready', detail: staffDetail({ status: 'closed' }) })
 		});
-		assert.match(closed, />\s*Editar\s*</, 'reabrir sigue disponible');
+		assert.match(closed, />\s*Reabrir\s*</, 'reabrir sigue disponible');
 		assert.doesNotMatch(closed, />\s*(Asignar|Reasignar)\s*</, 'cerrada: sin asignación');
 		const requester = renderPage({
 			capabilities: ['incidents:view_requested', ...STAFF_CAPS],
 			detail: detailState({ status: 'ready', detail: requesterDetail() })
 		});
-		assert.doesNotMatch(requester, />\s*(Editar|Asignar|Reasignar)\s*</);
+		assert.doesNotMatch(requester, actionsRegex);
 	});
 
 	await t.test('14/15/18/19. errores: 403/404 neutros, 500/503 con referencia y reintento', () => {
