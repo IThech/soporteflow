@@ -26,13 +26,13 @@
 	{#if organizations.length === 1}
 		<p class="sf-org-label">Organización</p>
 		<div class="sf-org-card">
-			<span class="sf-org-icon"><Icon name="building" size={16} /></span>
+			<span class="sf-org-icon"><Icon name="building-2" size={16} /></span>
 			<p class="sf-org-name">{organizations[0].name}</p>
 		</div>
 	{:else if organizations.length > 1}
 		<label class="sf-org-label" for={controlId}>Organización</label>
 		<div class="sf-org-card sf-org-card-interactive" data-disabled={disabled}>
-			<span class="sf-org-icon"><Icon name="building" size={16} /></span>
+			<span class="sf-org-icon"><Icon name="building-2" size={16} /></span>
 			<select
 				id={controlId}
 				class="sf-org-select"
@@ -56,13 +56,14 @@
 
 <style>
 	.sf-org {
-		padding: 0 var(--space-1) var(--space-3);
+		margin-top: var(--space-2);
+		padding: 0 0 var(--space-4);
 		border-bottom: 1px solid var(--sf-navy-border);
 	}
 	.sf-org-label {
 		display: block;
 		margin: 0 0 var(--space-2);
-		padding: 0 var(--space-2);
+		padding: 0 var(--space-3);
 		font-size: var(--text-2xs);
 		font-weight: 600;
 		letter-spacing: var(--tracking-wide);
@@ -73,7 +74,7 @@
 		position: relative;
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
+		gap: var(--space-2-5);
 		min-height: 2.75rem;
 		padding: var(--space-2) var(--space-3);
 		border-radius: var(--radius-lg);
@@ -103,7 +104,7 @@
 	}
 	.sf-org-card-interactive .sf-org-icon {
 		position: absolute;
-		left: var(--space-2);
+		left: var(--space-2-5);
 		pointer-events: none;
 	}
 	.sf-org-name {
@@ -117,7 +118,7 @@
 		appearance: none;
 		width: 100%;
 		min-height: 2.75rem;
-		padding: 0 2.25rem 0 2.875rem;
+		padding: 0 2.25rem 0 3rem;
 		border: 0;
 		border-radius: var(--radius-lg);
 		background: transparent;
