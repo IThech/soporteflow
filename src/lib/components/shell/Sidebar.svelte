@@ -43,7 +43,7 @@
 
 <!-- eslint-disable svelte/no-navigation-without-resolve -- hrefs are built from resolve() + query -->
 <aside {id} class="sf-sidebar" data-open={open} aria-label="Navegación principal">
-	<div class="sf-brand">
+	{#snippet brandContent()}
 		<svg class="sf-brand-mark" width="32" height="32" viewBox="0 0 32 32" aria-hidden="true">
 			<defs>
 				<linearGradient id="{markId}-bg" x1="0" y1="0" x2="1" y2="1">
@@ -77,7 +77,23 @@
 		<span class="sf-brand-name" aria-hidden="true"
 			>Soporte<span class="sf-brand-accent">Flow</span></span
 		><span class="sf-sr-only">SoporteFlow</span>
-	</div>
+	{/snippet}
+
+	{#if navigation.incidents}
+		<a
+			href={incidentsHref}
+			class="sf-brand"
+			onclick={() => onNavigate?.()}
+			title="Ir a Incidencias"
+			aria-label="SoporteFlow - Ir a Incidencias"
+		>
+			{@render brandContent()}
+		</a>
+	{:else}
+		<div class="sf-brand">
+			{@render brandContent()}
+		</div>
+	{/if}
 	<OrganizationSwitcher
 		{organizations}
 		{activeOrganizationId}
@@ -130,7 +146,18 @@
 		display: flex;
 		align-items: center;
 		gap: var(--space-3);
-		padding: var(--space-1) var(--space-2) var(--space-3);
+		padding: var(--space-1) var(--space-2) var(--space-2);
+		text-decoration: none;
+		border-radius: var(--radius-lg);
+		color: inherit;
+		transition: opacity var(--duration) var(--ease);
+	}
+	.sf-brand:hover {
+		opacity: 0.92;
+	}
+	.sf-brand:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring-sidebar);
 	}
 	.sf-brand-mark {
 		flex: none;

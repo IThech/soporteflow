@@ -56,14 +56,14 @@
 
 <style>
 	.sf-org {
-		margin-top: var(--space-2);
+		margin-top: var(--space-3);
 		padding: 0 0 var(--space-4);
 		border-bottom: 1px solid var(--sf-navy-border);
 	}
 	.sf-org-label {
 		display: block;
 		margin: 0 0 var(--space-2);
-		padding: 0 var(--space-3);
+		padding: 0 var(--space-1);
 		font-size: var(--text-2xs);
 		font-weight: 600;
 		letter-spacing: var(--tracking-wide);
@@ -74,13 +74,16 @@
 		position: relative;
 		display: flex;
 		align-items: center;
-		gap: var(--space-2-5);
 		min-height: 2.75rem;
-		padding: var(--space-2) var(--space-3);
+		height: 2.75rem;
 		border-radius: var(--radius-lg);
 		border: 1px solid var(--sf-navy-border);
 		background: var(--sf-navy-800);
 		color: var(--sf-navy-text-active);
+	}
+	.sf-org-card:not(.sf-org-card-interactive) {
+		gap: var(--space-2-5);
+		padding: 0 var(--space-3) 0 var(--space-2-5);
 	}
 	.sf-org-card-interactive {
 		padding: 0;
@@ -105,6 +108,8 @@
 	.sf-org-card-interactive .sf-org-icon {
 		position: absolute;
 		left: var(--space-2-5);
+		top: 50%;
+		transform: translateY(-50%);
 		pointer-events: none;
 	}
 	.sf-org-name {
@@ -112,13 +117,16 @@
 		min-width: 0;
 		font-size: var(--text-sm);
 		font-weight: 600;
+		line-height: 1.25;
 		overflow-wrap: anywhere;
 	}
 	.sf-org-select {
 		appearance: none;
 		width: 100%;
+		height: 100%;
 		min-height: 2.75rem;
-		padding: 0 2.25rem 0 3rem;
+		line-height: 2.75rem;
+		padding: 0 2.25rem 0 3.125rem;
 		border: 0;
 		border-radius: var(--radius-lg);
 		background: transparent;
@@ -143,6 +151,10 @@
 	.sf-org-chevron {
 		position: absolute;
 		right: var(--space-3);
+		top: 50%;
+		transform: translateY(-50%);
+		display: inline-grid;
+		place-items: center;
 		color: var(--sf-navy-text-muted);
 		pointer-events: none;
 	}

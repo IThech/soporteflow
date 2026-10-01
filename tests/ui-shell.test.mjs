@@ -158,6 +158,13 @@ test('UI-1 shell y workspace (render SSR)', async (t) => {
 				new RegExp(`href="/app/incidents\\?organizationId=${ORG_A.id}"[^>]*aria-current="page"`)
 			);
 			assert.match(html, /Nueva incidencia/);
+			assert.match(
+				html,
+				new RegExp(
+					`<a href="/app/incidents\\?organizationId=${ORG_A.id}"[^>]*class="sf-brand[^"]*"[^>]*title="Ir a Incidencias"[^>]*aria-label="SoporteFlow - Ir a Incidencias"`
+				),
+				'el logo sf-brand es un enlace navegable al listado de incidencias'
+			);
 			assert.doesNotMatch(
 				html,
 				/Administración|href="\/app\/admin/,
