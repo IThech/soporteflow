@@ -32,6 +32,23 @@ document +=
 	`trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
 const pdf = Buffer.from(document);
 const metadata = { name: 'document.pdf', type: 'application/pdf', size: pdf.length };
+const png = Buffer.from(
+	'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jh6sAAAAASUVORK5CYII=',
+	'base64'
+);
+const jpg = Buffer.from(
+	'/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD9U6KKKAP/2Q==',
+	'base64'
+);
+const webp = Buffer.from('UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAUAmJaQAA3AA/vz0AAA=', 'base64');
+function makePdf(targetLength) {
+	const header = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< >>\n%');
+	const footer = Buffer.from('\n%%EOF\n');
+	const padLength = targetLength - header.length - footer.length;
+	if (padLength < 0) throw new Error('Target length too small for PDF');
+	const padding = Buffer.alloc(padLength, 0x20);
+	return Buffer.concat([header, padding, footer]);
+}
 const deferred = () => {
 	let resolve;
 	let reject;
@@ -608,5 +625,774 @@ test('storage selection: NODE_ENV=production + DEPLOYMENT_ENV=dev allows DEV sto
 			ATTACHMENT_DEV_ROOT: '   '
 		}),
 		false
+	);
+});
+
+test('audit 2: size limits - 5 MiB boundary accepted, > 5 MiB rejected (413), zero orphans in storage', async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), 'sf-audit2-size-'));
+	const prev = process.env.ATTACHMENT_DEV_ROOT;
+	process.env.ATTACHMENT_DEV_ROOT = root;
+	t.after(async () => {
+		if (prev === undefined) delete process.env.ATTACHMENT_DEV_ROOT;
+		else process.env.ATTACHMENT_DEV_ROOT = prev;
+		await rm(root, { recursive: true, force: true });
+	});
+	const f = await fixture(t);
+	const user = await identity(f);
+	const session = await createSession(f, user.id);
+	const [org] = await f.db
+		.insert(f.schema.organizations)
+		.values({ name: 'SizeOrg', slug: randomUUID(), status: 'active' })
+		.returning();
+	const [member] = await f.db
+		.insert(f.schema.memberships)
+		.values({ organizationId: org.id, userId: user.id })
+		.returning();
+	const [inc] = await f.db
+		.insert(f.schema.incidents)
+		.values({
+			organizationId: org.id,
+			incidentNumber: 1,
+			title: 'Size Test',
+			description: 'Desc',
+			client: 'Client',
+			createdByUserId: user.id,
+			clientUserId: user.id
+		})
+		.returning();
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:view_requested'
+	});
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:add_comment'
+	});
+
+	const route = await f.server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/attachments/+server.ts'
+	);
+	function uploadEvent(file) {
+		const url = new URL(
+			`http://localhost/api/incidents/${inc.id}/attachments?organizationId=${org.id}`
+		);
+		const body = new FormData();
+		body.append('file', file);
+		const request = new Request(url, { method: 'POST', headers: session.headers, body });
+		return { request, url, params: { id: inc.id } };
+	}
+
+	// Unit validation check
+	const exact5MbPdf = makePdf(5242880);
+	assert.doesNotThrow(() =>
+		validateAttachment(
+			{ name: 'boundary.pdf', type: 'application/pdf', size: 5242880 },
+			exact5MbPdf
+		)
+	);
+	const oversizedPdf = makePdf(5242881);
+	assert.throws(
+		() =>
+			validateAttachment(
+				{ name: 'over.pdf', type: 'application/pdf', size: 5242881 },
+				oversizedPdf
+			),
+		(e) => e.status === 413 && e.code === 'PAYLOAD_TOO_LARGE'
+	);
+
+	// 1. Boundary: exactly 5 MiB (5242880 bytes) is valid and accepted -> 201
+	const boundaryFile = new File([exact5MbPdf], 'boundary.pdf', { type: 'application/pdf' });
+	const resBoundary = await route.POST(uploadEvent(boundaryFile));
+	assert.equal(resBoundary.status, 201);
+	const { item } = await resBoundary.json();
+	assert.equal(item.size, 5242880);
+	assert.equal((await readdir(root)).length, 1);
+
+	// 2. Oversized: 5 MiB + 1 byte (5242881 bytes) is rejected -> 413
+	const oversizedFile = new File([oversizedPdf], 'oversized.pdf', { type: 'application/pdf' });
+	const resOversized = await route.POST(uploadEvent(oversizedFile));
+	assert.equal(resOversized.status, 413);
+	const errBody = await resOversized.json();
+	assert.equal(errBody.error.code, 'PAYLOAD_TOO_LARGE');
+
+	// 3. Verify zero orphaned files left in storage (still exactly 1 file from the boundary upload)
+	assert.equal((await readdir(root)).length, 1);
+});
+
+test('audit 3: quantity limit - 5 allowed, 6th rejected (409 ATTACHMENT_LIMIT), exactly 5 in DB and on disk', async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), 'sf-audit3-qty-'));
+	const prev = process.env.ATTACHMENT_DEV_ROOT;
+	process.env.ATTACHMENT_DEV_ROOT = root;
+	t.after(async () => {
+		if (prev === undefined) delete process.env.ATTACHMENT_DEV_ROOT;
+		else process.env.ATTACHMENT_DEV_ROOT = prev;
+		await rm(root, { recursive: true, force: true });
+	});
+	const f = await fixture(t);
+	const user = await identity(f);
+	const session = await createSession(f, user.id);
+	const [org] = await f.db
+		.insert(f.schema.organizations)
+		.values({ name: 'QtyOrg', slug: randomUUID(), status: 'active' })
+		.returning();
+	const [member] = await f.db
+		.insert(f.schema.memberships)
+		.values({ organizationId: org.id, userId: user.id })
+		.returning();
+	const [inc] = await f.db
+		.insert(f.schema.incidents)
+		.values({
+			organizationId: org.id,
+			incidentNumber: 1,
+			title: 'Qty Test',
+			description: 'Desc',
+			client: 'Client',
+			createdByUserId: user.id,
+			clientUserId: user.id
+		})
+		.returning();
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:view_requested'
+	});
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:add_comment'
+	});
+
+	const route = await f.server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/attachments/+server.ts'
+	);
+	function uploadEvent(file) {
+		const url = new URL(
+			`http://localhost/api/incidents/${inc.id}/attachments?organizationId=${org.id}`
+		);
+		const body = new FormData();
+		body.append('file', file);
+		const request = new Request(url, { method: 'POST', headers: session.headers, body });
+		return { request, url, params: { id: inc.id } };
+	}
+
+	// 1. Upload attachments 1 to 5 -> all succeed with 201
+	for (let i = 1; i <= 5; i++) {
+		const file = new File([pdf], `doc${i}.pdf`, { type: 'application/pdf' });
+		const res = await route.POST(uploadEvent(file));
+		assert.equal(res.status, 201, `attachment ${i} must succeed with 201`);
+	}
+
+	// 2. Attempt 6th upload -> 409 ATTACHMENT_LIMIT
+	const file6 = new File([pdf], 'doc6.pdf', { type: 'application/pdf' });
+	const res6 = await route.POST(uploadEvent(file6));
+	assert.equal(res6.status, 409);
+	const body6 = await res6.json();
+	assert.equal(body6.error.code, 'ATTACHMENT_LIMIT');
+
+	// 3. Verify exactly 5 rows in DB
+	const dbRows = await f.db
+		.select()
+		.from(f.schema.incidentAttachments)
+		.where(eq(f.schema.incidentAttachments.incidentId, inc.id));
+	assert.equal(dbRows.length, 5);
+
+	// 4. Verify exactly 5 files in storage on disk (no 6th orphan)
+	const diskFiles = await readdir(root);
+	assert.equal(diskFiles.length, 5);
+});
+
+test('audit 4: extension, MIME and signature validation - PDF, JPG, JPEG, PNG, WebP accepted; disguises and 0-byte rejected', async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), 'sf-audit4-mime-'));
+	const prev = process.env.ATTACHMENT_DEV_ROOT;
+	process.env.ATTACHMENT_DEV_ROOT = root;
+	t.after(async () => {
+		if (prev === undefined) delete process.env.ATTACHMENT_DEV_ROOT;
+		else process.env.ATTACHMENT_DEV_ROOT = prev;
+		await rm(root, { recursive: true, force: true });
+	});
+	const f = await fixture(t);
+	const user = await identity(f);
+	const session = await createSession(f, user.id);
+	const [org] = await f.db
+		.insert(f.schema.organizations)
+		.values({ name: 'MimeOrg', slug: randomUUID(), status: 'active' })
+		.returning();
+	const [member] = await f.db
+		.insert(f.schema.memberships)
+		.values({ organizationId: org.id, userId: user.id })
+		.returning();
+	const [inc] = await f.db
+		.insert(f.schema.incidents)
+		.values({
+			organizationId: org.id,
+			incidentNumber: 1,
+			title: 'Mime Test',
+			description: 'Desc',
+			client: 'Client',
+			createdByUserId: user.id,
+			clientUserId: user.id
+		})
+		.returning();
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:view_requested'
+	});
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:add_comment'
+	});
+
+	const route = await f.server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/attachments/+server.ts'
+	);
+	function uploadEvent(file) {
+		const url = new URL(
+			`http://localhost/api/incidents/${inc.id}/attachments?organizationId=${org.id}`
+		);
+		const body = new FormData();
+		body.append('file', file);
+		const request = new Request(url, { method: 'POST', headers: session.headers, body });
+		return { request, url, params: { id: inc.id } };
+	}
+
+	// 1. Valid files of all supported formats (PDF, JPG, JPEG, PNG, WebP)
+	const validFiles = [
+		new File([pdf], 'document.pdf', { type: 'application/pdf' }),
+		new File([jpg], 'photo.jpg', { type: 'image/jpeg' }),
+		new File([jpg], 'photo.jpeg', { type: 'image/jpeg' }),
+		new File([png], 'diagram.png', { type: 'image/png' }),
+		new File([webp], 'graphic.webp', { type: 'image/webp' })
+	];
+	for (const file of validFiles) {
+		await f.db
+			.delete(f.schema.incidentAttachments)
+			.where(eq(f.schema.incidentAttachments.incidentId, inc.id));
+		const res = await route.POST(uploadEvent(file));
+		assert.equal(res.status, 201, `uploading ${file.name} should return 201`);
+	}
+
+	// 2. Disallowed extensions (.exe, .sh, .txt, .html)
+	for (const [name, type, bytes] of [
+		['malicious.exe', 'application/x-msdownload', Buffer.from('MZ...')],
+		['script.sh', 'text/x-shellscript', Buffer.from('#!/bin/sh\necho hi')],
+		['notes.txt', 'text/plain', Buffer.from('plain text')],
+		['page.html', 'text/html', Buffer.from('<html></html>')]
+	]) {
+		const res = await route.POST(uploadEvent(new File([bytes], name, { type })));
+		assert.equal(res.status, 400, `disallowed extension "${name}" must be rejected`);
+		const body = await res.json();
+		assert.equal(body.error.code, 'INVALID_FILE');
+	}
+
+	// 3. MIME declared allowed, but content is incompatible (application/pdf with PNG bytes)
+	const fakePdf = new File([png], 'fake.pdf', { type: 'application/pdf' });
+	const resFakePdf = await route.POST(uploadEvent(fakePdf));
+	assert.equal(resFakePdf.status, 400);
+	assert.equal((await resFakePdf.json()).error.code, 'INVALID_FILE_CONTENT');
+
+	// 4. Extension allowed (JPG), declared MIME image/jpeg, but content is PNG
+	const disguisedJpg = new File([png], 'disguised.jpg', { type: 'image/jpeg' });
+	const resDisguised = await route.POST(uploadEvent(disguisedJpg));
+	assert.equal(resDisguised.status, 400);
+	assert.equal((await resDisguised.json()).error.code, 'INVALID_FILE_CONTENT');
+
+	// 5. Arbitrary text content renamed to .jpg with image/jpeg
+	const textJpg = new File(
+		[Buffer.from('Not an image at all, just plain text string.')],
+		'test.jpg',
+		{
+			type: 'image/jpeg'
+		}
+	);
+	const resTextJpg = await route.POST(uploadEvent(textJpg));
+	assert.equal(resTextJpg.status, 400);
+	assert.equal((await resTextJpg.json()).error.code, 'INVALID_FILE_CONTENT');
+
+	// 6. Empty 0-byte file
+	const emptyFile = new File([Buffer.alloc(0)], 'empty.pdf', { type: 'application/pdf' });
+	const resEmpty = await route.POST(uploadEvent(emptyFile));
+	assert.equal(resEmpty.status, 400);
+	assert.equal((await resEmpty.json()).error.code, 'INVALID_FILE');
+});
+
+test('audit 5: filename security - traversal, separators, length, double extensions rejected; unicode/spaces metadata and UUID storage', async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), 'sf-audit5-name-'));
+	const prev = process.env.ATTACHMENT_DEV_ROOT;
+	process.env.ATTACHMENT_DEV_ROOT = root;
+	t.after(async () => {
+		if (prev === undefined) delete process.env.ATTACHMENT_DEV_ROOT;
+		else process.env.ATTACHMENT_DEV_ROOT = prev;
+		await rm(root, { recursive: true, force: true });
+	});
+	const f = await fixture(t);
+	const user = await identity(f);
+	const session = await createSession(f, user.id);
+	const [org] = await f.db
+		.insert(f.schema.organizations)
+		.values({ name: 'NameOrg', slug: randomUUID(), status: 'active' })
+		.returning();
+	const [member] = await f.db
+		.insert(f.schema.memberships)
+		.values({ organizationId: org.id, userId: user.id })
+		.returning();
+	const [inc] = await f.db
+		.insert(f.schema.incidents)
+		.values({
+			organizationId: org.id,
+			incidentNumber: 1,
+			title: 'Name Test',
+			description: 'Desc',
+			client: 'Client',
+			createdByUserId: user.id,
+			clientUserId: user.id
+		})
+		.returning();
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:view_requested'
+	});
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:add_comment'
+	});
+
+	const route = await f.server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/attachments/+server.ts'
+	);
+	function uploadEvent(file) {
+		const url = new URL(
+			`http://localhost/api/incidents/${inc.id}/attachments?organizationId=${org.id}`
+		);
+		const body = new FormData();
+		body.append('file', file);
+		const request = new Request(url, { method: 'POST', headers: session.headers, body });
+		return { request, url, params: { id: inc.id } };
+	}
+
+	// 1. Problematic filenames rejected:
+	const maliciousNames = [
+		'../../archivo.jpg',
+		'..\\..\\archivo.jpg',
+		'sub/archivo.jpg',
+		'sub\\archivo.jpg',
+		'archivo.jpg\0',
+		'archivo.jpg\r\n',
+		'a'.repeat(177) + '.jpg', // 181 chars > 180
+		'archivo.jpg.exe'
+	];
+	for (const badName of maliciousNames) {
+		const file = new File([jpg], badName, { type: 'image/jpeg' });
+		const res = await route.POST(uploadEvent(file));
+		assert.equal(res.status, 400, `malicious filename "${badName}" must return 400`);
+		const body = await res.json();
+		assert.equal(body.error.code, 'INVALID_FILE');
+	}
+
+	// 2. Valid filenames with spaces and Spanish Unicode characters:
+	const safeUnicodeName = 'captura de pantalla (sede ñandú).png';
+	const safeSpaceName = 'death standing.JPG';
+
+	const resUnicode = await route.POST(
+		uploadEvent(new File([png], safeUnicodeName, { type: 'image/png' }))
+	);
+	assert.equal(resUnicode.status, 201);
+	const { item: itemUnicode } = await resUnicode.json();
+	assert.equal(itemUnicode.originalName, safeUnicodeName);
+
+	const resSpace = await route.POST(
+		uploadEvent(new File([jpg], safeSpaceName, { type: 'image/jpeg' }))
+	);
+	assert.equal(resSpace.status, 201);
+	const { item: itemSpace } = await resSpace.json();
+	assert.equal(itemSpace.originalName, safeSpaceName);
+
+	// 3. Verify that physical files on disk use internal UUIDs, NEVER the original user-supplied name
+	const filesOnDisk = await readdir(root);
+	assert.equal(filesOnDisk.length, 2);
+	const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+	for (const filename of filesOnDisk) {
+		assert.match(filename, uuidRegex, `disk filename "${filename}" must be a UUID`);
+		assert.equal(filename.includes('captura'), false);
+		assert.equal(filename.includes('death'), false);
+	}
+});
+
+test('audit 6: storage security - private root, DTO privacy, download headers, no public access', async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), 'sf-audit6-sec-'));
+	const prev = process.env.ATTACHMENT_DEV_ROOT;
+	process.env.ATTACHMENT_DEV_ROOT = root;
+	t.after(async () => {
+		if (prev === undefined) delete process.env.ATTACHMENT_DEV_ROOT;
+		else process.env.ATTACHMENT_DEV_ROOT = prev;
+		await rm(root, { recursive: true, force: true });
+	});
+	const f = await fixture(t);
+	const user = await identity(f);
+	const session = await createSession(f, user.id);
+	const [org] = await f.db
+		.insert(f.schema.organizations)
+		.values({ name: 'SecOrg', slug: randomUUID(), status: 'active' })
+		.returning();
+	const [member] = await f.db
+		.insert(f.schema.memberships)
+		.values({ organizationId: org.id, userId: user.id })
+		.returning();
+	const [inc] = await f.db
+		.insert(f.schema.incidents)
+		.values({
+			organizationId: org.id,
+			incidentNumber: 1,
+			title: 'Sec Test',
+			description: 'Desc',
+			client: 'Client',
+			createdByUserId: user.id,
+			clientUserId: user.id
+		})
+		.returning();
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:view_requested'
+	});
+	await grantPermission(f, {
+		organizationId: org.id,
+		membershipId: member.id,
+		permissionId: 'incidents:add_comment'
+	});
+
+	const route = await f.server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/attachments/+server.ts'
+	);
+	const download = await f.server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/attachments/[attachmentId]/download/+server.ts'
+	);
+
+	// 1. Storage cannot be inside repository or relative
+	assert.throws(() => localAttachmentStorage(process.cwd()));
+	assert.throws(() => localAttachmentStorage('./static'));
+
+	// 2. Upload file and check DTO
+	const url = new URL(
+		`http://localhost/api/incidents/${inc.id}/attachments?organizationId=${org.id}`
+	);
+	const form = new FormData();
+	form.append('file', new File([pdf], 'report.pdf', { type: 'application/pdf' }));
+	const postRes = await route.POST({
+		request: new Request(url, { method: 'POST', headers: session.headers, body: form }),
+		url,
+		params: { id: inc.id }
+	});
+	assert.equal(postRes.status, 201);
+	const { item } = await postRes.json();
+
+	// Verify DTO fields: only safe public fields exposed, never storageKey or actorId
+	assert.equal(typeof item.id, 'string');
+	assert.equal(item.originalName, 'report.pdf');
+	assert.equal(item.mimeType, 'application/pdf');
+	assert.equal(item.size, pdf.length);
+	assert.equal(typeof item.createdAt, 'string');
+	assert.equal('storageKey' in item, false);
+	assert.equal('actorId' in item, false);
+
+	// Verify list DTO
+	const listRes = await route.GET({
+		request: new Request(url, { method: 'GET', headers: session.headers }),
+		url,
+		params: { id: inc.id }
+	});
+	assert.equal(listRes.status, 200);
+	const { items } = await listRes.json();
+	assert.equal(items.length, 1);
+	assert.equal('storageKey' in items[0], false);
+	assert.equal('actorId' in items[0], false);
+
+	// 3. Download requires authentication
+	const dlUrl = new URL(
+		`http://localhost/api/incidents/${inc.id}/attachments/${item.id}/download?organizationId=${org.id}`
+	);
+	const unauthRes = await download.GET({
+		request: new Request(dlUrl, { method: 'GET' }),
+		url: dlUrl,
+		params: { id: inc.id, attachmentId: item.id }
+	});
+	assert.equal(unauthRes.status, 401);
+
+	// 4. Download with non-existent attachmentId -> 404
+	const notFoundRes = await download.GET({
+		request: new Request(dlUrl, { method: 'GET', headers: session.headers }),
+		url: dlUrl,
+		params: { id: inc.id, attachmentId: randomUUID() }
+	});
+	assert.equal(notFoundRes.status, 404);
+
+	// 5. Download with invalid non-UUID attachmentId -> 400
+	const badIdRes = await download.GET({
+		request: new Request(dlUrl, { method: 'GET', headers: session.headers }),
+		url: dlUrl,
+		params: { id: inc.id, attachmentId: 'not-a-uuid' }
+	});
+	assert.equal(badIdRes.status, 400);
+
+	// 6. Authenticated download headers
+	const dlRes = await download.GET({
+		request: new Request(dlUrl, { method: 'GET', headers: session.headers }),
+		url: dlUrl,
+		params: { id: inc.id, attachmentId: item.id }
+	});
+	assert.equal(dlRes.status, 200);
+	assert.equal(dlRes.headers.get('x-content-type-options'), 'nosniff');
+	assert.equal(dlRes.headers.get('cache-control'), 'private, no-store');
+	assert.match(dlRes.headers.get('content-disposition'), /^attachment;\s*filename="attachment"/);
+	assert.deepEqual(Buffer.from(await dlRes.arrayBuffer()), pdf);
+});
+
+test('audit 7 & 8: multi-tenant isolation and IDOR/BOLA protection (Org A vs Org B, tampering and scope)', async (t) => {
+	const root = await mkdtemp(path.join(os.tmpdir(), 'sf-audit78-tenant-'));
+	const prev = process.env.ATTACHMENT_DEV_ROOT;
+	process.env.ATTACHMENT_DEV_ROOT = root;
+	t.after(async () => {
+		if (prev === undefined) delete process.env.ATTACHMENT_DEV_ROOT;
+		else process.env.ATTACHMENT_DEV_ROOT = prev;
+		await rm(root, { recursive: true, force: true });
+	});
+	const f = await fixture(t);
+	const route = await f.server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/attachments/+server.ts'
+	);
+	const download = await f.server.ssrLoadModule(
+		'/src/routes/api/incidents/[id]/attachments/[attachmentId]/download/+server.ts'
+	);
+
+	// Create Tenant A: Org A, User A, Inc A
+	const userA = await identity(f);
+	const sessionA = await createSession(f, userA.id);
+	const [orgA] = await f.db
+		.insert(f.schema.organizations)
+		.values({ name: 'Tenant A', slug: randomUUID(), status: 'active' })
+		.returning();
+	const [memberA] = await f.db
+		.insert(f.schema.memberships)
+		.values({ organizationId: orgA.id, userId: userA.id })
+		.returning();
+	const [incA] = await f.db
+		.insert(f.schema.incidents)
+		.values({
+			organizationId: orgA.id,
+			incidentNumber: 1,
+			title: 'Inc A',
+			description: 'Desc A',
+			client: 'Client A',
+			createdByUserId: userA.id,
+			clientUserId: userA.id
+		})
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memberA.id,
+		permissionId: 'incidents:view_requested'
+	});
+	await grantPermission(f, {
+		organizationId: orgA.id,
+		membershipId: memberA.id,
+		permissionId: 'incidents:add_comment'
+	});
+
+	// Create Tenant B: Org B, User B, Inc B
+	const userB = await identity(f);
+	const sessionB = await createSession(f, userB.id);
+	const [orgB] = await f.db
+		.insert(f.schema.organizations)
+		.values({ name: 'Tenant B', slug: randomUUID(), status: 'active' })
+		.returning();
+	const [memberB] = await f.db
+		.insert(f.schema.memberships)
+		.values({ organizationId: orgB.id, userId: userB.id })
+		.returning();
+	const [incB] = await f.db
+		.insert(f.schema.incidents)
+		.values({
+			organizationId: orgB.id,
+			incidentNumber: 1,
+			title: 'Inc B',
+			description: 'Desc B',
+			client: 'Client B',
+			createdByUserId: userB.id,
+			clientUserId: userB.id
+		})
+		.returning();
+	await grantPermission(f, {
+		organizationId: orgB.id,
+		membershipId: memberB.id,
+		permissionId: 'incidents:view_requested'
+	});
+	await grantPermission(f, {
+		organizationId: orgB.id,
+		membershipId: memberB.id,
+		permissionId: 'incidents:add_comment'
+	});
+
+	// Helper to send HTTP requests
+	function req(method, session, orgId, incId, attId = undefined, file = null) {
+		const base = attId
+			? `http://localhost/api/incidents/${incId}/attachments/${attId}/download?organizationId=${orgId}`
+			: `http://localhost/api/incidents/${incId}/attachments?organizationId=${orgId}`;
+		const url = new URL(base);
+		const form = file ? new FormData() : undefined;
+		if (file) form.append('file', file);
+		const request = new Request(url, {
+			method,
+			headers: session ? session.headers : {},
+			...(method === 'POST' ? { body: form } : {})
+		});
+		return { request, url, params: { id: incId, attachmentId: attId } };
+	}
+
+	// 1. Upload Attachment A to Inc A (by User A)
+	const upA = await route.POST(
+		req(
+			'POST',
+			sessionA,
+			orgA.id,
+			incA.id,
+			undefined,
+			new File([pdf], 'docA.pdf', { type: 'application/pdf' })
+		)
+	);
+	assert.equal(upA.status, 201);
+	const { item: attA } = await upA.json();
+
+	// 2. Upload Attachment B to Inc B (by User B)
+	const upB = await route.POST(
+		req(
+			'POST',
+			sessionB,
+			orgB.id,
+			incB.id,
+			undefined,
+			new File([png], 'imageB.png', { type: 'image/png' })
+		)
+	);
+	assert.equal(upB.status, 201);
+	const { item: attB } = await upB.json();
+
+	// 3. User A lists Inc A -> sees Att A
+	const listA = await route.GET(req('GET', sessionA, orgA.id, incA.id));
+	assert.equal(listA.status, 200);
+	const itemsA = (await listA.json()).items;
+	assert.equal(itemsA.length, 1);
+	assert.equal(itemsA[0].id, attA.id);
+
+	// 4. User B lists Inc B -> sees Att B
+	const listB = await route.GET(req('GET', sessionB, orgB.id, incB.id));
+	assert.equal(listB.status, 200);
+	const itemsB = (await listB.json()).items;
+	assert.equal(itemsB.length, 1);
+	assert.equal(itemsB[0].id, attB.id);
+
+	// 5. Cross-tenant listing attempts by User A:
+	// a) Querying Inc B using Org A -> 404 (incident B does not exist in Org A)
+	assert.equal((await route.GET(req('GET', sessionA, orgA.id, incB.id))).status, 404);
+	// b) Querying Inc B using Org B -> 403 (User A is not a member of Org B)
+	assert.equal((await route.GET(req('GET', sessionA, orgB.id, incB.id))).status, 403);
+	// c) Querying Inc A using Org B -> 403 (User A is not a member of Org B)
+	assert.equal((await route.GET(req('GET', sessionA, orgB.id, incA.id))).status, 403);
+
+	// 6. Cross-tenant download attempts by User A:
+	// a) Att B under Inc B with Org A -> 404
+	assert.equal((await download.GET(req('GET', sessionA, orgA.id, incB.id, attB.id))).status, 404);
+	// b) Att B under Inc B with Org B -> 403 (User A not in Org B)
+	assert.equal((await download.GET(req('GET', sessionA, orgB.id, incB.id, attB.id))).status, 403);
+	// c) Att B under Inc A with Org A (IDOR tampering) -> 404 (attB not in incA)
+	assert.equal((await download.GET(req('GET', sessionA, orgA.id, incA.id, attB.id))).status, 404);
+
+	// 7. Cross-tenant download attempts by User B:
+	// a) Att A under Inc A with Org B -> 404
+	assert.equal((await download.GET(req('GET', sessionB, orgB.id, incA.id, attA.id))).status, 404);
+	// b) Att A under Inc A with Org A -> 403 (User B not in Org A)
+	assert.equal((await download.GET(req('GET', sessionB, orgA.id, incA.id, attA.id))).status, 403);
+	// c) Att A under Inc B with Org B (IDOR tampering) -> 404 (attA not in incB)
+	assert.equal((await download.GET(req('GET', sessionB, orgB.id, incB.id, attA.id))).status, 404);
+
+	// 8. Cross-tenant upload attempts by User A:
+	// a) Uploading to Inc B with Org A -> 404
+	assert.equal(
+		(
+			await route.POST(
+				req(
+					'POST',
+					sessionA,
+					orgA.id,
+					incB.id,
+					undefined,
+					new File([pdf], 'hack.pdf', { type: 'application/pdf' })
+				)
+			)
+		).status,
+		404
+	);
+	// b) Uploading to Inc B with Org B -> 403
+	assert.equal(
+		(
+			await route.POST(
+				req(
+					'POST',
+					sessionA,
+					orgB.id,
+					incB.id,
+					undefined,
+					new File([pdf], 'hack.pdf', { type: 'application/pdf' })
+				)
+			)
+		).status,
+		403
+	);
+
+	// 9. Input tampering: multiple organizationId or invalid UUIDs
+	const dupOrgUrl = new URL(
+		`http://localhost/api/incidents/${incA.id}/attachments?organizationId=${orgA.id}&organizationId=${orgB.id}`
+	);
+	assert.equal(
+		(
+			await route.GET({
+				request: new Request(dupOrgUrl, { method: 'GET', headers: sessionA.headers }),
+				url: dupOrgUrl,
+				params: { id: incA.id }
+			})
+		).status,
+		400
+	);
+
+	const extraParamUrl = new URL(
+		`http://localhost/api/incidents/${incA.id}/attachments?organizationId=${orgA.id}&extra=1`
+	);
+	assert.equal(
+		(
+			await route.GET({
+				request: new Request(extraParamUrl, { method: 'GET', headers: sessionA.headers }),
+				url: extraParamUrl,
+				params: { id: incA.id }
+			})
+		).status,
+		400
+	);
+
+	const badOrgUrl = new URL(
+		`http://localhost/api/incidents/${incA.id}/attachments?organizationId=not-a-uuid`
+	);
+	assert.equal(
+		(
+			await route.GET({
+				request: new Request(badOrgUrl, { method: 'GET', headers: sessionA.headers }),
+				url: badOrgUrl,
+				params: { id: incA.id }
+			})
+		).status,
+		400
 	);
 });
