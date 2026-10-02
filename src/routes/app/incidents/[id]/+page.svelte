@@ -390,20 +390,18 @@
 						</div>
 					{/if}
 					<IncidentDescription description={shown.description} />
-					{#key shown.id + (identity ? `${identity.userId}:${identity.organizationId}:${identity.generation}` : '')}
-						<IncidentAttachments
-							{identity}
-							incidentId={shown.id}
-							{capabilities}
-							closed={shown.status === 'closed'}
-							onSessionExpiry={expireSession}
-						/>
-					{/key}
 					<IncidentActivity
 						incident={shown}
 						{identity}
 						{capabilities}
 						detailController={detail}
+						onSessionExpiry={expireSession}
+					/>
+					<IncidentAttachments
+						{identity}
+						incidentId={shown.id}
+						{capabilities}
+						closed={shown.status === 'closed'}
 						onSessionExpiry={expireSession}
 					/>
 				</div>

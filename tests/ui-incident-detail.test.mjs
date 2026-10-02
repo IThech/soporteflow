@@ -248,6 +248,7 @@ export function unauthenticatedError() { return null; }`;
 		);
 		assert.match(html, /aria-current="page"[^>]*>#1042</);
 		assert.match(html, /data-audience="staff"/);
+		assert.match(html, /Adjuntos/);
 		for (const text of ['Etiqueta interna Cliente SL', 'Luis Técnico', 'Redes', 'N2', 'En plazo'])
 			assert.ok(html.includes(text), text);
 		assert.match(html, /Primera respuesta[\s\S]*?Cumplido/);
@@ -369,6 +370,17 @@ export function unauthenticatedError() { return null; }`;
 			'utf8'
 		);
 		assert.match(header, /overflow-wrap: anywhere/);
+	});
+
+	await t.test('UI-2D-C — adjuntos visibles en el detalle, posicionados tras la actividad', () => {
+		const html = renderPage({ detail: detailState({ status: 'ready', detail: staffDetail() }) });
+		assert.match(html, /Adjuntos/);
+		assert.match(html, /attachments/);
+		assert.match(
+			html,
+			/sf-description[\s\S]*?sf-activity-section[\s\S]*?attachments/,
+			'adjuntos deben figurar después de la actividad/conversación y antes del final del contenido principal'
+		);
 	});
 
 	await t.test('contexto staff: nombres solo desde catálogos legibles, nunca UUID', () => {
