@@ -42,6 +42,7 @@
 	import IncidentHeader from '$lib/components/incidents/IncidentHeader.svelte';
 	import IncidentDescription from '$lib/components/incidents/IncidentDescription.svelte';
 	import IncidentActivity from '$lib/components/incidents/IncidentActivity.svelte';
+	import IncidentAttachments from '$lib/components/incidents/IncidentAttachments.svelte';
 	import IncidentStaffContext from '$lib/components/incidents/IncidentStaffContext.svelte';
 	import IncidentRequesterContext from '$lib/components/incidents/IncidentRequesterContext.svelte';
 	import IncidentActionToolbar from '$lib/components/incidents/IncidentActionToolbar.svelte';
@@ -389,6 +390,15 @@
 						</div>
 					{/if}
 					<IncidentDescription description={shown.description} />
+					{#key shown.id + (identity ? `${identity.userId}:${identity.organizationId}:${identity.generation}` : '')}
+						<IncidentAttachments
+							{identity}
+							incidentId={shown.id}
+							{capabilities}
+							closed={shown.status === 'closed'}
+							onSessionExpiry={expireSession}
+						/>
+					{/key}
 					<IncidentActivity
 						incident={shown}
 						{identity}

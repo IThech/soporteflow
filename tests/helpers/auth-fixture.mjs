@@ -39,7 +39,8 @@ export const expectedMigrations = [
 	'0026_audit_events.sql',
 	'0027_invitation_deliveries.sql',
 	'0028_growth_indexes.sql',
-	'0029_clients.sql'
+	'0029_clients.sql',
+	'0030_incident_attachments.sql'
 ];
 
 export const TEST_SECRET = 'synthetic-phase-b-only-secret-123456789';

@@ -1,6 +1,7 @@
 import type { RequestEvent, ResolveOptions } from '@sveltejs/kit';
 
 export const MAX_JSON_BYTES = 64 * 1024;
+export const MAX_ATTACHMENT_BODY_BYTES = 5 * 1024 * 1024 + 16 * 1024;
 const mutations = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const methods = new Set(['GET', 'HEAD', 'OPTIONS', ...mutations]);
 export interface WebPolicy {
@@ -139,9 +140,12 @@ function rejected(
 }
 
 /** Read a bounded stream, without trusting Content-Length or buffering an unbounded clone. */
-async function boundedBody(request: Request): Promise<Uint8Array<ArrayBuffer> | Response> {
+async function boundedBody(
+	request: Request,
+	maximum = MAX_JSON_BYTES
+): Promise<Uint8Array<ArrayBuffer> | Response> {
 	const length = request.headers.get('content-length');
-	if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_JSON_BYTES))
+	if (length !== null && (!/^\d+$/.test(length) || Number(length) > maximum))
 		return failure(413, 'PAYLOAD_TOO_LARGE');
 	const reader = request.body?.getReader();
 	if (!reader) return new Uint8Array();
@@ -152,7 +156,7 @@ async function boundedBody(request: Request): Promise<Uint8Array<ArrayBuffer> | 
 			const { value, done } = await reader.read();
 			if (done) break;
 			size += value.byteLength;
-			if (size > MAX_JSON_BYTES) {
+			if (size > maximum) {
 				void reader.cancel().catch(() => {});
 				return failure(413, 'PAYLOAD_TOO_LARGE');
 			}
@@ -195,7 +199,12 @@ export async function validateApiRequest(
 	if (!allowsMutation(request, url, policy)) return reject('ORIGIN_REJECTED', 403, 'FORBIDDEN');
 	if (request.headers.has('content-encoding'))
 		return reject('CONTENT_ENCODING', 415, 'UNSUPPORTED_MEDIA_TYPE');
-	const bytes = await boundedBody(request);
+	const attachmentUpload =
+		request.method === 'POST' && routePath(event) === '/api/incidents/[id]/attachments';
+	const bytes = await boundedBody(
+		request,
+		attachmentUpload ? MAX_ATTACHMENT_BODY_BYTES : MAX_JSON_BYTES
+	);
 	if (bytes instanceof Response)
 		return rejected(
 			event,
@@ -204,6 +213,21 @@ export async function validateApiRequest(
 			bytes
 		);
 	const type = request.headers.get('content-type');
+	if (attachmentUpload) {
+		if (
+			!/^multipart\/form-data;\s*boundary=(?:[A-Za-z0-9'()+_,./:=?-]{1,70}|"[A-Za-z0-9'()+_,./:=?-]{1,70}")$/i.test(
+				type ?? ''
+			)
+		)
+			return reject('UNSUPPORTED_MEDIA_TYPE', 415, 'UNSUPPORTED_MEDIA_TYPE');
+		event.request = new Request(request.url, {
+			method: request.method,
+			headers: request.headers,
+			signal: request.signal,
+			body: bytes
+		});
+		return null;
+	}
 	if (
 		(bytes.length > 0 || type !== null) &&
 		!/^application\/json(?:\s*;\s*charset=utf-8)?\s*$/i.test(type ?? '')

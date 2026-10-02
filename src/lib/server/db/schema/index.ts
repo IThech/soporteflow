@@ -14,3 +14,4 @@ export * from './automation-rules';
 
 export * from './audit';
 export * from './invitation-deliveries';
+export * from './incident-attachments';
