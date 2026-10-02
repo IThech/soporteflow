@@ -3,6 +3,7 @@ import {
 	boolean,
 	check,
 	foreignKey,
+	index,
 	pgTable,
 	text,
 	timestamp,
@@ -49,6 +50,11 @@ export const sites = pgTable(
 			.notNull()
 			.references(() => organizations.id, { onDelete: 'cascade' }),
 		name: varchar('name', { length: 255 }).notNull(),
+		code: varchar('code', { length: 50 }),
+		address: varchar('address', { length: 255 }),
+		city: varchar('city', { length: 100 }),
+		postalCode: varchar('postal_code', { length: 20 }),
+		country: varchar('country', { length: 100 }),
 		description: text('description'),
 		active: boolean('active').default(true).notNull(),
 		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
@@ -60,7 +66,8 @@ export const sites = pgTable(
 		uniqueIndex('sites_org_normalized_name_unique_idx').on(
 			table.organizationId,
 			sql`lower(regexp_replace(btrim(${table.name}), '\\s+', ' ', 'g'))`
-		)
+		),
+		index('sites_org_code_idx').on(table.organizationId, table.code)
 	]
 );
 

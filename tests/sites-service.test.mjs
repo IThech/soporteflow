@@ -12,7 +12,8 @@ test('SoporteFlow — Etapa 5.4O-A: servicio Core de sedes', async (t) => {
 	const f = await fixture(t);
 	const { db, schema: s, pg, server } = f;
 	const sitesService = await server.ssrLoadModule('/src/lib/server/services/sites.ts');
-	const { listSites, createSite, updateSite, setSiteActive, normalizeSiteName } = sitesService;
+	const { listSites, createSite, getSite, updateSite, setSiteActive, normalizeSiteName } =
+		sitesService;
 	const { IncidentServiceError, createIncidentRecord, getIncidentById } =
 		await server.ssrLoadModule('/src/lib/server/services/incidents.ts');
 
@@ -37,7 +38,19 @@ test('SoporteFlow — Etapa 5.4O-A: servicio Core de sedes', async (t) => {
 	const [creatorA] = await db.insert(s.users).values({ name: 'Creador A' }).returning();
 	await db.insert(s.memberships).values({ organizationId: orgA.id, userId: creatorA.id });
 
-	const DTO_KEYS = ['active', 'createdAt', 'id', 'name', 'updatedAt'];
+	const DTO_KEYS = [
+		'active',
+		'address',
+		'city',
+		'code',
+		'country',
+		'createdAt',
+		'description',
+		'id',
+		'name',
+		'postalCode',
+		'updatedAt'
+	];
 
 	await t.test('1. lista vacía', async () => {
 		assert.deepEqual(await listSites(db, orgA.id), []);
@@ -147,6 +160,7 @@ test('SoporteFlow — Etapa 5.4O-A: servicio Core de sedes', async (t) => {
 				[
 					'canonicalSiteName',
 					'createSite',
+					'getSite',
 					'listSites',
 					'normalizeSiteName',
 					'setSiteActive',
@@ -327,6 +341,45 @@ test('SoporteFlow — Etapa 5.4O-A: servicio Core de sedes', async (t) => {
 			assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1);
 			const rejected = results.find((r) => r.status === 'rejected');
 			assert.equal(rejected.reason.code, 'SITE_NAME_DUPLICATE');
+		}
+	);
+
+	await t.test(
+		'31. campos extendidos (code, address, city, postalCode, country) y getSite',
+		async () => {
+			const bilbao = await createSite(db, orgA.id, {
+				name: 'Bilbao Central',
+				code: 'BIO',
+				address: 'Gran Vía 1',
+				city: 'Bilbao',
+				postalCode: '48001',
+				country: 'España',
+				description: 'Sede principal norte'
+			});
+			assert.equal(bilbao.name, 'Bilbao Central');
+			assert.equal(bilbao.code, 'BIO');
+			assert.equal(bilbao.address, 'Gran Vía 1');
+			assert.equal(bilbao.city, 'Bilbao');
+			assert.equal(bilbao.postalCode, '48001');
+			assert.equal(bilbao.country, 'España');
+			assert.equal(bilbao.description, 'Sede principal norte');
+
+			// getSite en la misma organización
+			const fetched = await getSite(db, orgA.id, bilbao.id);
+			assert.deepEqual(fetched, bilbao);
+
+			// getSite cross-tenant -> SITE_NOT_FOUND
+			await rejectsWith(getSite(db, orgB.id, bilbao.id), 'SITE_NOT_FOUND');
+
+			// updateSite con campos extendidos
+			const updated = await updateSite(db, orgA.id, bilbao.id, {
+				address: 'Gran Vía 25, Planta 4',
+				postalCode: '48002'
+			});
+			assert.equal(updated.address, 'Gran Vía 25, Planta 4');
+			assert.equal(updated.postalCode, '48002');
+			assert.equal(updated.name, 'Bilbao Central');
+			assert.equal(updated.code, 'BIO');
 		}
 	);
 });

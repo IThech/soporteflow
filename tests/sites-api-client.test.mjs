@@ -6,6 +6,7 @@ import {
 	listSites,
 	createSite,
 	renameSite,
+	updateSite,
 	setSiteActive,
 	SiteApiError
 } from '../src/lib/api/sites.ts';
@@ -109,12 +110,19 @@ test('SoporteFlow — Etapa 5.4O-C: cliente API de sedes', async (t) => {
 		});
 		await setSiteActive({ organizationId: ORG, siteId: SITE, active: false, customFetch: fetchFn });
 		await setSiteActive({ organizationId: ORG, siteId: SITE, active: true, customFetch: fetchFn });
-		const [create, rename, off, on] = calls;
+		await updateSite({
+			organizationId: ORG,
+			siteId: SITE,
+			name: 'Madrid Centro',
+			code: 'MAD-01',
+			customFetch: fetchFn
+		});
+		const [create, rename, off, on, edit] = calls;
 		assert.equal(create.url, `/api/sites?organizationId=${ORG}`);
 		assert.equal(create.init.method, 'POST');
 		assert.deepEqual(create.init.headers, { 'Content-Type': 'application/json' });
 		assert.equal(create.init.body, JSON.stringify({ name: ' Valencia ' }));
-		for (const call of [rename, off, on]) {
+		for (const call of [rename, off, on, edit]) {
 			assert.equal(call.url, `/api/sites/${SITE}?organizationId=${ORG}`);
 			assert.equal(call.init.method, 'PATCH');
 			assert.deepEqual(call.init.headers, { 'Content-Type': 'application/json' });
@@ -122,6 +130,10 @@ test('SoporteFlow — Etapa 5.4O-C: cliente API de sedes', async (t) => {
 		assert.equal(rename.init.body, JSON.stringify({ action: 'rename', name: 'Madrid Norte' }));
 		assert.equal(off.init.body, JSON.stringify({ action: 'set_active', active: false }));
 		assert.equal(on.init.body, JSON.stringify({ action: 'set_active', active: true }));
+		assert.equal(
+			edit.init.body,
+			JSON.stringify({ action: 'edit', name: 'Madrid Centro', code: 'MAD-01' })
+		);
 		for (const call of calls) {
 			const body = call.init.body ?? '';
 			for (const field of ['organizationId', 'visibility', 'actorUserId', 'userId', 'description'])
@@ -439,6 +451,23 @@ test('SoporteFlow — Etapa 5.4O-C: cliente API de sedes', async (t) => {
 			status: 404,
 			code: 'SITE_NOT_FOUND'
 		});
+
+		const bilbao = await createSite({
+			...base,
+			name: 'Bilbao',
+			code: 'BIO-01',
+			city: 'Bilbao'
+		});
+		assert.equal(bilbao.code, 'BIO-01');
+		assert.equal(bilbao.city, 'Bilbao');
+		const updatedBilbao = await updateSite({
+			...base,
+			siteId: bilbao.id,
+			code: 'BIO-CENTRO',
+			country: 'ES'
+		});
+		assert.equal(updatedBilbao.code, 'BIO-CENTRO');
+		assert.equal(updatedBilbao.country, 'ES');
 
 		const { incident } = await createIncidentRecord(
 			db,

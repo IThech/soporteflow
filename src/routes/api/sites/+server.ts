@@ -74,11 +74,22 @@ export const POST: RequestHandler = async (event) => {
 
 		const payload = await readJsonObject(event.request);
 		if (payload instanceof Response) return payload;
+		const allowedKeys = ['name', 'code', 'address', 'city', 'postalCode', 'country'];
 		for (const key of Object.keys(payload)) {
-			if (key !== 'name') return failure(400, 'INVALID_INPUT', `Unknown property '${key}'.`);
+			if (!allowedKeys.includes(key))
+				return failure(400, 'INVALID_INPUT', `Unknown property '${key}'.`);
 		}
 		if (typeof payload.name !== 'string')
 			return failure(400, 'INVALID_INPUT', 'name must be a string.');
+		for (const field of ['code', 'address', 'city', 'postalCode', 'country'] as const) {
+			if (
+				payload[field] !== undefined &&
+				payload[field] !== null &&
+				typeof payload[field] !== 'string'
+			) {
+				return failure(400, 'INVALID_INPUT', `${field} must be a string.`);
+			}
+		}
 
 		// 5.4W-A (H1): re-validated inside the transaction after the organization lock.
 		const name = payload.name;
@@ -95,7 +106,15 @@ export const POST: RequestHandler = async (event) => {
 					tx,
 					organizationId,
 					principal.userId,
-					() => createSite(tx, organizationId, { name }),
+					() =>
+						createSite(tx, organizationId, {
+							name,
+							code: payload.code,
+							address: payload.address,
+							city: payload.city,
+							postalCode: payload.postalCode,
+							country: payload.country
+						}),
 					(created) => ({ action: 'site.created', entityType: 'site', entityId: created.id })
 				)
 		);

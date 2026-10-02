@@ -11,6 +11,12 @@ export type SiteDatabase = PgDatabase<any, any>;
 export interface SiteRecord {
 	id: string;
 	name: string;
+	code: string | null;
+	address: string | null;
+	city: string | null;
+	postalCode: string | null;
+	country: string | null;
+	description: string | null;
 	active: boolean;
 	createdAt: Date;
 	updatedAt: Date;
@@ -27,6 +33,12 @@ function isValidUuid(value: unknown): value is string {
 const siteColumns = {
 	id: sites.id,
 	name: sites.name,
+	code: sites.code,
+	address: sites.address,
+	city: sites.city,
+	postalCode: sites.postalCode,
+	country: sites.country,
+	description: sites.description,
 	active: sites.active,
 	createdAt: sites.createdAt,
 	updatedAt: sites.updatedAt
@@ -63,6 +75,28 @@ function validateName(name: unknown): string {
 		throw new IncidentServiceError('INVALID_INPUT', 'name contains invalid characters');
 	}
 	return canonical;
+}
+
+function validateOptionalString(
+	value: unknown,
+	fieldName: string,
+	maxLength: number
+): string | null {
+	if (value === undefined || value === null) return null;
+	if (typeof value !== 'string') {
+		throw new IncidentServiceError('INVALID_INPUT', `${fieldName} must be a string`);
+	}
+	const trimmed = value.trim();
+	if (trimmed.length > maxLength) {
+		throw new IncidentServiceError(
+			'INVALID_INPUT',
+			`${fieldName} must not exceed ${maxLength} characters`
+		);
+	}
+	if (trimmed.includes('\u0000')) {
+		throw new IncidentServiceError('INVALID_INPUT', `${fieldName} contains invalid characters`);
+	}
+	return trimmed || null;
 }
 
 function validateIds(organizationId: unknown, siteId?: unknown): void {
@@ -157,40 +191,114 @@ export async function listSites(
 }
 
 /**
+ * Gets a single site by id and organizationId.
+ * Missing and cross-tenant sites both return SITE_NOT_FOUND.
+ */
+export async function getSite(
+	db: SiteDatabase,
+	organizationId: string,
+	siteId: string
+): Promise<SiteRecord> {
+	validateIds(organizationId, siteId);
+	const [site] = await db
+		.select(siteColumns)
+		.from(sites)
+		.where(and(eq(sites.id, siteId), eq(sites.organizationId, organizationId)))
+		.limit(1);
+	if (!site) throw siteNotFound();
+	return site;
+}
+
+/**
  * Creates an active site. Duplicate names (case and spacing insensitive) within the same
  * organization are rejected by the unique index, which also covers concurrent creations.
  */
 export async function createSite(
 	dbOrTx: SiteDatabase,
 	organizationId: string,
-	input: { name: unknown }
+	input: {
+		name: unknown;
+		code?: unknown;
+		address?: unknown;
+		city?: unknown;
+		postalCode?: unknown;
+		country?: unknown;
+		description?: unknown;
+	}
 ): Promise<SiteRecord> {
 	validateIds(organizationId);
 	const name = validateName(input?.name);
+	const code = validateOptionalString(input?.code, 'code', 50);
+	const address = validateOptionalString(input?.address, 'address', 255);
+	const city = validateOptionalString(input?.city, 'city', 100);
+	const postalCode = validateOptionalString(input?.postalCode, 'postalCode', 20);
+	const country = validateOptionalString(input?.country, 'country', 100);
+	const description = validateOptionalString(input?.description, 'description', 2000);
 	return inTransaction(dbOrTx, async (tx) => {
 		await assertOperationalOrganization(tx, organizationId);
 		const [site] = await tx
 			.insert(sites)
-			.values({ organizationId, name, active: true })
+			.values({
+				organizationId,
+				name,
+				code,
+				address,
+				city,
+				postalCode,
+				country,
+				description,
+				active: true
+			})
 			.returning(siteColumns);
 		return site;
 	});
 }
 
-/** Renames a site of the organization. Does not change its active state. */
+/** Updates a site of the organization. Does not change its active state. */
 export async function updateSite(
 	dbOrTx: SiteDatabase,
 	organizationId: string,
 	siteId: string,
-	input: { name: unknown }
+	input: {
+		name?: unknown;
+		code?: unknown;
+		address?: unknown;
+		city?: unknown;
+		postalCode?: unknown;
+		country?: unknown;
+		description?: unknown;
+	}
 ): Promise<SiteRecord> {
 	validateIds(organizationId, siteId);
-	const name = validateName(input?.name);
+	const updates: Record<string, unknown> = {
+		updatedAt: new Date()
+	};
+	if (input?.name !== undefined) {
+		updates.name = validateName(input.name);
+	}
+	if (input?.code !== undefined) {
+		updates.code = validateOptionalString(input.code, 'code', 50);
+	}
+	if (input?.address !== undefined) {
+		updates.address = validateOptionalString(input.address, 'address', 255);
+	}
+	if (input?.city !== undefined) {
+		updates.city = validateOptionalString(input.city, 'city', 100);
+	}
+	if (input?.postalCode !== undefined) {
+		updates.postalCode = validateOptionalString(input.postalCode, 'postalCode', 20);
+	}
+	if (input?.country !== undefined) {
+		updates.country = validateOptionalString(input.country, 'country', 100);
+	}
+	if (input?.description !== undefined) {
+		updates.description = validateOptionalString(input.description, 'description', 2000);
+	}
 	return inTransaction(dbOrTx, async (tx) => {
 		await assertOperationalOrganization(tx, organizationId);
 		const [site] = await tx
 			.update(sites)
-			.set({ name, updatedAt: new Date() })
+			.set(updates)
 			.where(and(eq(sites.id, siteId), eq(sites.organizationId, organizationId)))
 			.returning(siteColumns);
 		if (!site) throw siteNotFound();

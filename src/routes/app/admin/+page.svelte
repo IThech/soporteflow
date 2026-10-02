@@ -24,7 +24,9 @@
 	const ready = $derived($context.status === 'ready');
 	const capabilities = $derived(ready ? $context.capabilities : []);
 	const activeOrg = $derived(ready ? $context.activeOrganization : null);
-	const canManage = $derived(capabilities.includes('clients:manage'));
+	const canManage = $derived(
+		capabilities.includes('clients:manage') || capabilities.includes('sites:manage')
+	);
 
 	function expireSession() {
 		session.clearSession();
@@ -72,6 +74,12 @@
 			: resolve('/app/admin/clients')
 	);
 
+	const sitesHref = $derived(
+		activeOrg
+			? `${resolve('/app/admin/sites')}?organizationId=${encodeURIComponent(activeOrg.id)}`
+			: resolve('/app/admin/sites')
+	);
+
 	interface AdminModule {
 		title: string;
 		description: string;
@@ -93,7 +101,9 @@
 			title: 'Sedes',
 			description:
 				'Ubicaciones físicas, centros de trabajo y delegaciones asociadas a las incidencias.',
-			active: false
+			active: true,
+			href: sitesHref,
+			actionLabel: 'Gestionar sedes'
 		},
 		{
 			title: 'Usuarios y miembros',

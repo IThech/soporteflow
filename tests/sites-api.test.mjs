@@ -513,4 +513,42 @@ test('SoporteFlow — Etapa 5.4O-B: API HTTP de sedes', async (t) => {
 		}
 		assert.equal((await rowOf(valencia.id)).name, 'Valencia Puerto');
 	});
+
+	await t.test(
+		'49-51. creación y edición con atributos extendidos (code, address, city, postalCode, country)',
+		async () => {
+			const res = await create({
+				body: {
+					name: 'Oficina Central',
+					code: 'VLC-01',
+					address: 'Calle Mayor 1',
+					city: 'Valencia',
+					postalCode: '46001',
+					country: 'ES'
+				}
+			});
+			assert.equal(res.status, 201);
+			assert.equal(res.json.site.name, 'Oficina Central');
+			assert.equal(res.json.site.code, 'VLC-01');
+			assert.equal(res.json.site.address, 'Calle Mayor 1');
+			assert.equal(res.json.site.city, 'Valencia');
+			assert.equal(res.json.site.postalCode, '46001');
+			assert.equal(res.json.site.country, 'ES');
+
+			const updated = await patch({
+				id: res.json.site.id,
+				body: {
+					action: 'edit',
+					name: 'Sede Central VLC',
+					code: 'VLC-CENTRAL',
+					city: 'Valencia Capital'
+				}
+			});
+			assert.equal(updated.status, 200);
+			assert.equal(updated.json.site.name, 'Sede Central VLC');
+			assert.equal(updated.json.site.code, 'VLC-CENTRAL');
+			assert.equal(updated.json.site.address, 'Calle Mayor 1');
+			assert.equal(updated.json.site.city, 'Valencia Capital');
+		}
+	);
 });

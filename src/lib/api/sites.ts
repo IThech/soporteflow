@@ -9,6 +9,11 @@ export interface Site {
 	id: string;
 	name: string;
 	active: boolean;
+	code?: string | null;
+	address?: string | null;
+	city?: string | null;
+	postalCode?: string | null;
+	country?: string | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -34,12 +39,28 @@ export interface ListSitesInput extends SiteRequestOptions {
 export interface CreateSiteInput extends SiteRequestOptions {
 	organizationId: string;
 	name: string;
+	code?: string | null;
+	address?: string | null;
+	city?: string | null;
+	postalCode?: string | null;
+	country?: string | null;
 }
 
 export interface RenameSiteInput extends SiteRequestOptions {
 	organizationId: string;
 	siteId: string;
 	name: string;
+}
+
+export interface UpdateSiteInput extends SiteRequestOptions {
+	organizationId: string;
+	siteId: string;
+	name?: string;
+	code?: string | null;
+	address?: string | null;
+	city?: string | null;
+	postalCode?: string | null;
+	country?: string | null;
 }
 
 export interface SetSiteActiveInput extends SiteRequestOptions {
@@ -52,12 +73,13 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 const NAME_MAX_LENGTH = 255;
 
-type Action = 'list' | 'create' | 'rename' | 'set_active';
+type Action = 'list' | 'create' | 'rename' | 'update' | 'set_active';
 
 const FAILURE_TEXT: Record<Action, string> = {
 	list: 'No se pudieron cargar las sedes. Inténtalo de nuevo.',
 	create: 'No se pudo crear la sede. Inténtalo de nuevo.',
 	rename: 'No se pudo renombrar la sede. Inténtalo de nuevo.',
+	update: 'No se pudo actualizar la sede. Inténtalo de nuevo.',
 	set_active: 'No se pudo cambiar el estado de la sede. Inténtalo de nuevo.'
 };
 
@@ -181,13 +203,39 @@ function parseSite(raw: unknown, status: number): Site {
 	) {
 		throw invalidPayload(status);
 	}
-	return {
+	const result: Site = {
 		id: site.id,
 		name: site.name,
 		active: site.active,
 		createdAt: site.createdAt,
 		updatedAt: site.updatedAt
 	};
+	if (typeof site.code === 'string' || site.code === null) {
+		result.code = site.code;
+	} else if (site.code !== undefined) {
+		throw invalidPayload(status);
+	}
+	if (typeof site.address === 'string' || site.address === null) {
+		result.address = site.address;
+	} else if (site.address !== undefined) {
+		throw invalidPayload(status);
+	}
+	if (typeof site.city === 'string' || site.city === null) {
+		result.city = site.city;
+	} else if (site.city !== undefined) {
+		throw invalidPayload(status);
+	}
+	if (typeof site.postalCode === 'string' || site.postalCode === null) {
+		result.postalCode = site.postalCode;
+	} else if (site.postalCode !== undefined) {
+		throw invalidPayload(status);
+	}
+	if (typeof site.country === 'string' || site.country === null) {
+		result.country = site.country;
+	} else if (site.country !== undefined) {
+		throw invalidPayload(status);
+	}
+	return result;
 }
 
 async function mutate(
@@ -223,14 +271,21 @@ export async function listSites(input: ListSitesInput): Promise<Site[]> {
 	return sites;
 }
 
-/** POST /api/sites?organizationId=<UUID> with body exactly { name }. */
+/** POST /api/sites?organizationId=<UUID> */
 export async function createSite(input: CreateSiteInput): Promise<Site> {
 	assertUuid(input?.organizationId, 'organización');
 	assertName(input.name);
-	return mutate(siteUrl(input.organizationId), 'POST', { name: input.name }, 'create', input);
+	const body: Record<string, unknown> = { name: input.name };
+	if (input.code !== undefined && input.code !== null) body.code = input.code;
+	if (input.address !== undefined && input.address !== null) body.address = input.address;
+	if (input.city !== undefined && input.city !== null) body.city = input.city;
+	if (input.postalCode !== undefined && input.postalCode !== null)
+		body.postalCode = input.postalCode;
+	if (input.country !== undefined && input.country !== null) body.country = input.country;
+	return mutate(siteUrl(input.organizationId), 'POST', body, 'create', input);
 }
 
-/** PATCH /api/sites/<id>?organizationId=<UUID> with body exactly { action: 'rename', name }. */
+/** PATCH /api/sites/<id>?organizationId=<UUID> with body { action: 'rename', name }. */
 export async function renameSite(input: RenameSiteInput): Promise<Site> {
 	assertUuid(input?.organizationId, 'organización');
 	assertUuid(input.siteId, 'sede');
@@ -242,6 +297,23 @@ export async function renameSite(input: RenameSiteInput): Promise<Site> {
 		'rename',
 		input
 	);
+}
+
+/** PATCH /api/sites/<id>?organizationId=<UUID> with body { action: 'edit', ... }. */
+export async function updateSite(input: UpdateSiteInput): Promise<Site> {
+	assertUuid(input?.organizationId, 'organización');
+	assertUuid(input.siteId, 'sede');
+	const body: Record<string, unknown> = { action: 'edit' };
+	if (input.name !== undefined) {
+		assertName(input.name);
+		body.name = input.name;
+	}
+	if (input.code !== undefined) body.code = input.code;
+	if (input.address !== undefined) body.address = input.address;
+	if (input.city !== undefined) body.city = input.city;
+	if (input.postalCode !== undefined) body.postalCode = input.postalCode;
+	if (input.country !== undefined) body.country = input.country;
+	return mutate(siteUrl(input.organizationId, input.siteId), 'PATCH', body, 'update', input);
 }
 
 /** PATCH /api/sites/<id>?organizationId=<UUID> with body exactly { action: 'set_active', active }. */

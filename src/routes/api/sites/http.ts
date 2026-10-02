@@ -18,13 +18,19 @@ export function success(body: unknown, status = 200) {
 
 /** Explicit allowlist: never organizationId or description. */
 export function toSiteDto(site: SiteRecord) {
-	return {
+	const dto: Record<string, unknown> = {
 		id: site.id,
 		name: site.name,
 		active: site.active,
 		createdAt: site.createdAt,
 		updatedAt: site.updatedAt
 	};
+	if (site.code !== null && site.code !== undefined) dto.code = site.code;
+	if (site.address !== null && site.address !== undefined) dto.address = site.address;
+	if (site.city !== null && site.city !== undefined) dto.city = site.city;
+	if (site.postalCode !== null && site.postalCode !== undefined) dto.postalCode = site.postalCode;
+	if (site.country !== null && site.country !== undefined) dto.country = site.country;
+	return dto;
 }
 
 /** Rejects unknown or repeated query parameters. */

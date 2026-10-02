@@ -18,6 +18,7 @@ import { withAudit } from '$lib/server/services/audit-events';
 /**
  * PATCH /api/sites/<id>?organizationId=<UUID> with a discriminated body:
  *   { "action": "rename", "name": "..." }
+ *   { "action": "edit", ... }
  *   { "action": "set_active", "active": true | false }
  * Operations are never mixed. Requires sites:manage. A site of another tenant behaves
  * exactly like a missing site (404).
@@ -74,6 +75,56 @@ export const PATCH: RequestHandler = async (event) => {
 			);
 			return success({ site: toSiteDto(site) });
 		}
+		if (payload.action === 'edit') {
+			const allowed = ['action', 'name', 'code', 'address', 'city', 'postalCode', 'country'];
+			for (const key of Object.keys(payload)) {
+				if (!allowed.includes(key)) {
+					return failure(400, 'INVALID_INPUT', `Unknown property '${key}'.`);
+				}
+			}
+			if (payload.name !== undefined && typeof payload.name !== 'string') {
+				return failure(400, 'INVALID_INPUT', 'name must be a string.');
+			}
+			for (const field of ['code', 'address', 'city', 'postalCode', 'country'] as const) {
+				if (
+					payload[field] !== undefined &&
+					payload[field] !== null &&
+					typeof payload[field] !== 'string'
+				) {
+					return failure(400, 'INVALID_INPUT', `${field} must be a string.`);
+				}
+			}
+			const site = await withActorAuthorization(
+				db,
+				{
+					userId: principal.userId,
+					organizationId,
+					permissionIds: ['sites:manage'],
+					lock: 'share'
+				},
+				(tx) =>
+					withAudit(
+						tx,
+						organizationId,
+						principal.userId,
+						() =>
+							updateSite(tx, organizationId, siteId, {
+								name: payload.name,
+								code: payload.code,
+								address: payload.address,
+								city: payload.city,
+								postalCode: payload.postalCode,
+								country: payload.country
+							}),
+						() => ({
+							action: 'site.updated',
+							entityType: 'site',
+							entityId: siteId
+						})
+					)
+			);
+			return success({ site: toSiteDto(site) });
+		}
 		if (payload.action === 'set_active') {
 			if (keys !== 'action,active' || typeof payload.active !== 'boolean')
 				return failure(400, 'INVALID_INPUT', 'set_active requires exactly { action, active }.');
@@ -101,7 +152,7 @@ export const PATCH: RequestHandler = async (event) => {
 			);
 			return success({ site: toSiteDto(site) });
 		}
-		return failure(400, 'INVALID_INPUT', "action must be 'rename' or 'set_active'.");
+		return failure(400, 'INVALID_INPUT', "action must be 'rename', 'edit' or 'set_active'.");
 	} catch (error) {
 		return siteServiceFailure(error);
 	}
