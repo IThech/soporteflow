@@ -470,6 +470,29 @@ test('HTTP: authenticated upload/list/download, no capability, foreign tenant/id
 	assert.equal(file.headers.get('x-content-type-options'), 'nosniff');
 	assert.match(file.headers.get('content-disposition'), /^attachment;/);
 	assert.deepEqual(Buffer.from(await file.arrayBuffer()), pdf);
+
+	// DEPLOYMENT_ENV=dev allows DEV storage even when NODE_ENV=production
+	const prevNodeEnv = process.env.NODE_ENV;
+	const prevDeployEnv = process.env.DEPLOYMENT_ENV;
+	try {
+		process.env.NODE_ENV = 'production';
+		process.env.DEPLOYMENT_ENV = 'dev';
+		const devUploaded = await route.POST(event('POST'));
+		assert.equal(devUploaded.status, 201, 'upload allowed in DEV with NODE_ENV=production');
+
+		// DEPLOYMENT_ENV=production rejects DEV storage
+		process.env.DEPLOYMENT_ENV = 'production';
+		const prodBlocked = await route.POST(event('POST'));
+		assert.equal(prodBlocked.status, 503, 'upload blocked in production deployment');
+		const prodBody = await prodBlocked.json();
+		assert.equal(prodBody.error.code, 'STORAGE_NOT_CONFIGURED');
+	} finally {
+		if (prevNodeEnv === undefined) delete process.env.NODE_ENV;
+		else process.env.NODE_ENV = prevNodeEnv;
+		if (prevDeployEnv === undefined) delete process.env.DEPLOYMENT_ENV;
+		else process.env.DEPLOYMENT_ENV = prevDeployEnv;
+	}
+
 	assert.equal((await download.GET(event('GET', org.id, inc.id, randomUUID()))).status, 404);
 	assert.equal((await route.GET(event('GET', org.id, randomUUID()))).status, 404);
 	assert.equal((await download.GET(event('GET', randomUUID(), inc.id, item.id))).status, 403);
@@ -508,4 +531,82 @@ test('real attachment UI: read-only without capability, selector with capability
 	assert.match(editable, /type="file"/);
 	assert.match(editable, /5 MB/);
 	assert.match(editable, /Subir adjunto/);
+});
+
+test('storage selection: NODE_ENV=production + DEPLOYMENT_ENV=dev allows DEV storage; production environment blocks it', async () => {
+	const { isDevStorageAllowed } = await import('../src/lib/server/attachments/environment.ts');
+
+	// 1. NODE_ENV=production + entorno SoporteFlow DEV + ATTACHMENT_DEV_ROOT configurado → storage DEV permitido
+	assert.equal(
+		isDevStorageAllowed({
+			NODE_ENV: 'production',
+			DEPLOYMENT_ENV: 'dev',
+			ATTACHMENT_DEV_ROOT: '/var/lib/soporteflow/attachments'
+		}),
+		true
+	);
+	assert.equal(
+		isDevStorageAllowed({
+			NODE_ENV: 'production',
+			DEPLOYMENT_ENV: 'development',
+			ATTACHMENT_DEV_ROOT: '/var/lib/soporteflow/attachments'
+		}),
+		true
+	);
+
+	// 2. entorno SoporteFlow production + ATTACHMENT_DEV_ROOT → storage DEV rechazado
+	assert.equal(
+		isDevStorageAllowed({
+			NODE_ENV: 'production',
+			DEPLOYMENT_ENV: 'production',
+			ATTACHMENT_DEV_ROOT: '/var/lib/soporteflow/attachments'
+		}),
+		false
+	);
+	assert.equal(
+		isDevStorageAllowed({
+			NODE_ENV: 'development',
+			DEPLOYMENT_ENV: 'production',
+			ATTACHMENT_DEV_ROOT: '/var/lib/soporteflow/attachments'
+		}),
+		false
+	);
+
+	// 3. Fallbacks de seguridad: sin DEPLOYMENT_ENV en producción → rechazado por defecto
+	assert.equal(
+		isDevStorageAllowed({
+			NODE_ENV: 'production',
+			DEPLOYMENT_ENV: undefined,
+			ATTACHMENT_DEV_ROOT: '/var/lib/soporteflow/attachments'
+		}),
+		false
+	);
+
+	// 4. Desarrollo local / test sin DEPLOYMENT_ENV ni NODE_ENV=production → permitido
+	assert.equal(
+		isDevStorageAllowed({
+			NODE_ENV: 'test',
+			DEPLOYMENT_ENV: undefined,
+			ATTACHMENT_DEV_ROOT: '/tmp/test'
+		}),
+		true
+	);
+
+	// 5. Sin ATTACHMENT_DEV_ROOT → siempre rechazado
+	assert.equal(
+		isDevStorageAllowed({
+			NODE_ENV: 'production',
+			DEPLOYMENT_ENV: 'dev',
+			ATTACHMENT_DEV_ROOT: undefined
+		}),
+		false
+	);
+	assert.equal(
+		isDevStorageAllowed({
+			NODE_ENV: 'production',
+			DEPLOYMENT_ENV: 'dev',
+			ATTACHMENT_DEV_ROOT: '   '
+		}),
+		false
+	);
 });

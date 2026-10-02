@@ -51,9 +51,11 @@ independientes. No se ha conectado a PostgreSQL real.
 ## Storage DEV y recuperación
 
 `AttachmentStorage` separa put/read/limpieza de una subida fallida. `ATTACHMENT_DEV_ROOT` debe ser
-una ruta absoluta privada fuera del repositorio y de cualquier raíz servida por HTTP. Sin ruta,
-o en NODE_ENV=production, subida/descarga responden 503. No hay fallback a static ni almacenamiento
-externo. No se inicializa storage ni PostgreSQL durante imports/build.
+una ruta absoluta privada fuera del repositorio y de cualquier raíz servida por HTTP. En entorno
+DEV (`DEPLOYMENT_ENV=dev`), se permite el storage local privado incluso con `NODE_ENV=production`.
+En producción (`DEPLOYMENT_ENV=production`), o sin ruta configurada, subida/descarga responden 503.
+No hay fallback a static ni almacenamiento externo. No se inicializa storage ni PostgreSQL durante
+imports/build.
 
 El adaptador local usa archivos exclusivos, permisos restrictivos donde el SO los soporta,
 rechaza symlinks y valida las claves. La carpeta debe ser controlada exclusivamente por el proceso

@@ -19,9 +19,20 @@ import { AttachmentError, validateAttachment } from './validation';
 import { localAttachmentStorage, type AttachmentStorage } from './storage';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const headers = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
+import { isDevStorageAllowed } from './environment';
+export { isDevStorageAllowed };
 function storage(): AttachmentStorage {
 	const root = env.ATTACHMENT_DEV_ROOT || process.env.ATTACHMENT_DEV_ROOT;
-	if (env.NODE_ENV === 'production' || process.env.NODE_ENV === 'production' || !root)
+	const deploymentEnv = env.DEPLOYMENT_ENV || process.env.DEPLOYMENT_ENV;
+	const nodeEnv = env.NODE_ENV || process.env.NODE_ENV;
+	if (
+		!isDevStorageAllowed({
+			DEPLOYMENT_ENV: deploymentEnv,
+			NODE_ENV: nodeEnv,
+			ATTACHMENT_DEV_ROOT: root
+		}) ||
+		!root
+	)
 		throw new AttachmentError(503, 'STORAGE_NOT_CONFIGURED');
 	return localAttachmentStorage(root);
 }
