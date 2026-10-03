@@ -3,7 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { signOut } from '$lib/api/auth';
-	import { attemptSignOut, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
+	import { attemptSignOut, SESSION_EXPIRED_PATH, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
 	import { navigationModel } from '$lib/app/capabilities';
 	import { useOrganizationContext } from '$lib/app/context';
 	import { session } from '$lib/stores/session';
@@ -31,7 +31,7 @@
 		const state = $context;
 		if (state.status === 'unauthenticated') {
 			session.clearSession();
-			void goto(resolve('/login?expired=true'));
+			void goto(resolve(SESSION_EXPIRED_PATH));
 			return;
 		}
 		if (

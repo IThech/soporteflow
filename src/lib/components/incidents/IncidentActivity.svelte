@@ -311,6 +311,8 @@
 	}
 	.sf-activity-tabs {
 		display: flex;
+		/* phones: tabs wrap instead of widening the page */
+		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-2);
 	}

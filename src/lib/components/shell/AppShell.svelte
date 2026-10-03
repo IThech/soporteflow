@@ -167,7 +167,7 @@
 		outline: none;
 	}
 	.sf-content {
-		max-width: 80rem;
+		max-width: var(--content-max-width);
 		margin: 0 auto;
 	}
 	.sf-backdrop {

@@ -43,57 +43,59 @@
 
 <!-- eslint-disable svelte/no-navigation-without-resolve -- adminHref is resolved in parent -->
 <header class="sf-topbar">
-	<button
-		type="button"
-		class="sf-nav-toggle"
-		aria-controls={navId}
-		aria-expanded={navOpen}
-		onclick={onToggleNav}
-	>
-		<Icon name="menu" size={20} />
-		<span class="sf-sr-only">{navOpen ? 'Cerrar navegación' : 'Abrir navegación'}</span>
-	</button>
-	<p class="sf-context-title">{title}</p>
-	<div class="sf-topbar-actions">
-		{#if actions}<div class="sf-page-actions">{@render actions()}</div>{/if}
-		<ThemeSelector />
-		{#if adminHref}
-			<a
-				href={adminHref}
-				class="sf-topbar-admin-btn"
-				title="Administración"
-				aria-label="Administración"
-			>
-				<Icon name="building" size={16} />
-				<span class="sf-topbar-admin-label">Administración</span>
-			</a>
-		{/if}
-		{#if userName || userEmail}
-			<details class="sf-user-menu">
-				<summary>
-					<span class="sf-sr-only">Menú de usuario:</span>
-					<span class="sf-avatar" aria-hidden="true">{initials}</span>
-					<span class="sf-user-name">{displayName}</span>
-					<span class="sf-user-chevron"><Icon name="chevron-down" size={14} /></span>
-				</summary>
-				<div class="sf-user-panel">
-					<div class="sf-user-identity">
-						<span class="sf-avatar sf-avatar-lg" aria-hidden="true">{initials}</span>
-						<div>
-							<p class="sf-user-panel-name">{displayName}</p>
-							{#if userEmail}<p class="sf-user-panel-email">{userEmail}</p>{/if}
+	<div class="sf-topbar-inner">
+		<button
+			type="button"
+			class="sf-nav-toggle"
+			aria-controls={navId}
+			aria-expanded={navOpen}
+			onclick={onToggleNav}
+		>
+			<Icon name="menu" size={20} />
+			<span class="sf-sr-only">{navOpen ? 'Cerrar navegación' : 'Abrir navegación'}</span>
+		</button>
+		<p class="sf-context-title">{title}</p>
+		<div class="sf-topbar-actions">
+			{#if actions}<div class="sf-page-actions">{@render actions()}</div>{/if}
+			<ThemeSelector />
+			{#if adminHref}
+				<a
+					href={adminHref}
+					class="sf-topbar-admin-btn"
+					title="Administración"
+					aria-label="Administración"
+				>
+					<Icon name="building" size={16} />
+					<span class="sf-topbar-admin-label">Administración</span>
+				</a>
+			{/if}
+			{#if userName || userEmail}
+				<details class="sf-user-menu">
+					<summary>
+						<span class="sf-sr-only">Menú de usuario:</span>
+						<span class="sf-avatar" aria-hidden="true">{initials}</span>
+						<span class="sf-user-name">{displayName}</span>
+						<span class="sf-user-chevron"><Icon name="chevron-down" size={14} /></span>
+					</summary>
+					<div class="sf-user-panel">
+						<div class="sf-user-identity">
+							<span class="sf-avatar sf-avatar-lg" aria-hidden="true">{initials}</span>
+							<div>
+								<p class="sf-user-panel-name">{displayName}</p>
+								{#if userEmail}<p class="sf-user-panel-email">{userEmail}</p>{/if}
+							</div>
 						</div>
+						{#if signOutError}
+							<p class="sf-sign-out-error" role="alert">{signOutError}</p>
+						{/if}
+						<button type="button" onclick={onSignOut} disabled={signingOut} aria-busy={signingOut}>
+							<Icon name="log-out" size={16} />
+							{signingOut ? 'Cerrando sesión…' : 'Cerrar sesión'}
+						</button>
 					</div>
-					{#if signOutError}
-						<p class="sf-sign-out-error" role="alert">{signOutError}</p>
-					{/if}
-					<button type="button" onclick={onSignOut} disabled={signingOut} aria-busy={signingOut}>
-						<Icon name="log-out" size={16} />
-						{signingOut ? 'Cerrando sesión…' : 'Cerrar sesión'}
-					</button>
-				</div>
-			</details>
-		{/if}
+				</details>
+			{/if}
+		</div>
 	</div>
 </header>
 
@@ -103,13 +105,21 @@
 		top: 0;
 		z-index: 20;
 		display: flex;
-		align-items: center;
-		gap: var(--space-3);
 		min-height: 3.75rem;
 		padding: var(--space-2) var(--space-6);
 		background: color-mix(in srgb, var(--surface) 82%, transparent);
 		backdrop-filter: saturate(1.4) blur(10px);
 		border-bottom: 1px solid var(--border);
+	}
+	/* Same container as the page content (AppShell .sf-content): the actions end exactly where the
+	   content ends, at every viewport width (the bar itself stays full width). */
+	.sf-topbar-inner {
+		display: flex;
+		align-items: center;
+		gap: var(--space-3);
+		width: 100%;
+		max-width: var(--content-max-width);
+		margin: 0 auto;
 	}
 	.sf-nav-toggle {
 		display: none;
@@ -136,9 +146,10 @@
 	.sf-topbar-actions {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2-5, 0.625rem);
+		gap: var(--space-3);
+		flex-shrink: 0;
 	}
-	@media (min-width: 641px) {
+	@media (min-width: 640px) {
 		.sf-topbar-actions {
 			gap: var(--space-4);
 		}
@@ -148,13 +159,15 @@
 		align-items: center;
 		gap: var(--space-2);
 		margin-right: var(--space-1);
+		flex-shrink: 0;
 	}
 	.sf-topbar-admin-btn {
 		display: inline-flex;
 		align-items: center;
-		gap: var(--space-1-5);
+		justify-content: center;
+		gap: var(--space-2);
 		height: 2.25rem;
-		padding: 0 var(--space-2-5);
+		padding: 0 var(--space-3-5);
 		border-radius: var(--radius);
 		border: 1px solid var(--border);
 		background: var(--surface);
@@ -163,6 +176,8 @@
 		font-weight: 500;
 		text-decoration: none;
 		line-height: 1;
+		flex-shrink: 0;
+		white-space: nowrap;
 		transition:
 			background-color var(--duration) var(--ease),
 			border-color var(--duration) var(--ease),
@@ -177,16 +192,20 @@
 		outline: 2px solid var(--sf-cyan-500);
 		outline-offset: 2px;
 	}
-	@media (max-width: 640px) {
+	@media (max-width: 639px) {
 		.sf-topbar-admin-label {
 			display: none;
 		}
 		.sf-topbar-admin-btn {
-			padding: 0 var(--space-2);
+			width: 2.25rem;
+			height: 2.25rem;
+			padding: 0;
+			justify-content: center;
 		}
 	}
 	.sf-user-menu {
 		position: relative;
+		flex-shrink: 0;
 	}
 	.sf-user-menu summary {
 		list-style: none;
@@ -338,17 +357,19 @@
 	/* Existing appearance control (styled for the legacy app only): token-based look here. */
 	.sf-topbar-actions :global(.appearance-control) {
 		position: relative;
+		flex-shrink: 0;
 	}
 	.sf-topbar-actions :global(.appearance-control summary) {
 		list-style: none;
 		display: inline-grid;
 		place-items: center;
-		width: 2.375rem;
-		height: 2.375rem;
+		width: 2.25rem;
+		height: 2.25rem;
 		border-radius: var(--radius);
 		border: 1px solid transparent;
 		color: var(--text-muted);
 		cursor: pointer;
+		flex-shrink: 0;
 		transition:
 			background-color var(--duration) var(--ease),
 			color var(--duration) var(--ease);

@@ -8,6 +8,9 @@ import { isApiError, networkApiError, type ApiError } from '../api/errors.ts';
  */
 export type SignOutResult = { ok: true } | { ok: false; error: ApiError };
 
+/** Where every /app page sends a user whose session expired (a current 401). */
+export const SESSION_EXPIRED_PATH = '/login?expired=true';
+
 export const SIGN_OUT_FAILED_MESSAGE =
 	'No se pudo cerrar la sesión. Comprueba tu conexión e inténtalo de nuevo.';
 

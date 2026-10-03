@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { focusTrap } from '$lib/ui/focus-trap';
 	import Button from '$lib/ui/Button.svelte';
 	import Spinner from '$lib/ui/Spinner.svelte';
 
@@ -52,6 +53,7 @@
 			aria-labelledby="{uid}-title"
 			aria-describedby="{uid}-desc"
 			tabindex="-1"
+			use:focusTrap
 		>
 			<header class="sf-modal-header">
 				<h2 id="{uid}-title" class="sf-modal-title">{title}</h2>

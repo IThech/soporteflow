@@ -13,7 +13,8 @@ import type { IncidentCreateState } from './incident-create-controller.ts';
 export const DISCARD_DRAFT_PROMPT =
 	'Tienes cambios sin guardar en la nueva incidencia. Si sales, se descartarán. ¿Quieres continuar?';
 
-export const SESSION_EXPIRED_PATH = '/login?expired=true';
+// Defined with the rest of the session lifecycle; re-exported for the UI-2B contract.
+export { SESSION_EXPIRED_PATH } from './sign-out.ts';
 
 const q = (organizationId: string) => `organizationId=${encodeURIComponent(organizationId)}`;
 
