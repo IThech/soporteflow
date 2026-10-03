@@ -100,8 +100,9 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
-	// 2.1 Strict shape: unknown properties (categoryName, subcategoryId, classification,
-	// routing, defaultTeamId, demo fields...) are rejected instead of silently ignored.
+	// 2.1 Strict shape: unknown properties (categoryName, classification, routing, defaultTeamId,
+	// demo fields...) are rejected instead of silently ignored. subcategoryId IS accepted: an
+	// optional UUID (or null) that requires categoryId and must belong to it (checked below).
 	// clientUserId is NOT part of this contract: a manual creation's requester is always the
 	// authenticated principal (derived below). Sending it is rejected (400), never honored.
 	const allowedKeys = new Set([
@@ -113,6 +114,7 @@ export const POST: RequestHandler = async (event) => {
 		'priority',
 		'siteId',
 		'categoryId',
+		'subcategoryId',
 		'slaPolicyId'
 	]);
 	for (const key of Object.keys(body)) {
@@ -206,6 +208,25 @@ export const POST: RequestHandler = async (event) => {
 		);
 	}
 
+	const subcategoryId = body.subcategoryId;
+	if (subcategoryId !== undefined && subcategoryId !== null && !isValidUuid(subcategoryId)) {
+		return json(
+			{ error: { code: 'INVALID_INPUT', message: 'subcategoryId must be a valid UUID or null.' } },
+			{ status: 400 }
+		);
+	}
+	if (subcategoryId && !body.categoryId) {
+		return json(
+			{
+				error: {
+					code: 'INVALID_INPUT',
+					message: 'categoryId is required when subcategoryId is provided.'
+				}
+			},
+			{ status: 400 }
+		);
+	}
+
 	// 5. Execute service. 5.4W-B: the checks above are pre-checks; inside the creation transaction
 	// (organization FOR SHARE) the capabilities are re-read and every decision that depended on
 	// them (create, choosing the SLA) is re-validated. The requester is always the principal.
@@ -231,6 +252,7 @@ export const POST: RequestHandler = async (event) => {
 						clientUserId,
 						siteId: body.siteId as string | null | undefined,
 						categoryId: body.categoryId as string | null | undefined,
+						subcategoryId: subcategoryId as string | null | undefined,
 						slaPolicyId: slaPolicyId as string | null | undefined
 					}
 				);
@@ -277,6 +299,7 @@ export const POST: RequestHandler = async (event) => {
 					);
 				case 'SITE_NOT_FOUND':
 				case 'CATEGORY_NOT_FOUND':
+				case 'SUBCATEGORY_NOT_FOUND':
 				case 'CLIENT_NOT_FOUND':
 				case 'CLIENT_USER_MEMBERSHIP_NOT_FOUND':
 					return json(
@@ -290,6 +313,7 @@ export const POST: RequestHandler = async (event) => {
 					);
 				case 'SITE_INACTIVE':
 				case 'CATEGORY_INACTIVE':
+				case 'SUBCATEGORY_INACTIVE':
 				case 'CLIENT_INACTIVE':
 				case 'CLIENT_USER_INACTIVE':
 					return json(

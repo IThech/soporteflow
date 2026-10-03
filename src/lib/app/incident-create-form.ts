@@ -20,7 +20,8 @@ import { tenantKey, type TenantIdentity } from './tenant-identity.ts';
  *   server sets as clientUserId (the form has no requester state and never sends it);
  * - SLA 'auto' -> slaPolicyId OMITTED (server default policy); 'none' -> null (explicit "no SLA");
  *   a policy -> its UUID. Choosing 'none'/a policy is only offered with the right capabilities;
- * - empty site/category -> omitted.
+ * - empty site/category -> omitted; with a category, subcategoryId is sent explicitly (its UUID, or
+ *   null = "Sin subcategoría"); never a subcategory without its category.
  * Which optional sections exist depends ONLY on real capabilities (never roles):
  * - site: sites:view;   category: categories:view;
  * - SLA: sla:assign (else Automático only); naming a policy also needs sla:view.
@@ -44,6 +45,8 @@ export interface CreateIncidentDraft {
 	siteId: string;
 	/** '' = none. */
 	categoryId: string;
+	/** '' = none. Only meaningful under categoryId (the form drops it when the category changes). */
+	subcategoryId: string;
 	/** 'auto' | 'none' | policy UUID (select value). */
 	sla: string;
 }
@@ -60,6 +63,7 @@ export function emptyCreateDraft(): CreateIncidentDraft {
 		priority: 'medium',
 		siteId: '',
 		categoryId: '',
+		subcategoryId: '',
 		sla: SLA_AUTO
 	};
 }
@@ -108,6 +112,7 @@ export const CREATE_FIELD_ORDER: readonly CreateIncidentField[] = [
 	'priority',
 	'siteId',
 	'categoryId',
+	'subcategoryId',
 	'slaPolicyId'
 ];
 
@@ -148,7 +153,10 @@ export function toCreateRequest(
 		request.client = draft.client;
 	}
 	if (sections.site && draft.siteId) request.siteId = draft.siteId;
-	if (sections.category && draft.categoryId) request.categoryId = draft.categoryId;
+	if (sections.category && draft.categoryId) {
+		request.categoryId = draft.categoryId;
+		request.subcategoryId = draft.subcategoryId || null;
+	}
 	if (sections.sla) {
 		if (draft.sla === SLA_NONE) request.slaPolicyId = null;
 		else if (draft.sla !== SLA_AUTO && sections.slaPolicies) request.slaPolicyId = draft.sla;
@@ -180,6 +188,11 @@ const FIELD_ERRORS: Readonly<Record<string, [CreateIncidentField, string]>> = {
 	SITE_INACTIVE: ['siteId', 'La sede seleccionada está inactiva.'],
 	CATEGORY_NOT_FOUND: ['categoryId', 'La categoría seleccionada ya no está disponible.'],
 	CATEGORY_INACTIVE: ['categoryId', 'La categoría seleccionada está inactiva.'],
+	SUBCATEGORY_NOT_FOUND: [
+		'subcategoryId',
+		'La subcategoría seleccionada ya no está disponible para esa categoría.'
+	],
+	SUBCATEGORY_INACTIVE: ['subcategoryId', 'La subcategoría seleccionada está inactiva.'],
 	SLA_POLICY_NOT_FOUND: ['slaPolicyId', 'La política SLA seleccionada ya no está disponible.'],
 	SLA_POLICY_INACTIVE: ['slaPolicyId', 'La política SLA seleccionada está inactiva.']
 };

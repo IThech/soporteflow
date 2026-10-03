@@ -4,11 +4,18 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { signOut } from '$lib/api/auth';
-	import { listCategories } from '$lib/api/categories';
+	import { getCategoryTree } from '$lib/api/subcategories';
 	import { getIncidentDetail } from '$lib/api/incident-detail';
-	import { assignIncident, listAssignees, listTeams, updateIncident } from '$lib/api/incidents';
+	import {
+		assignIncident,
+		listAssignees,
+		listTeams,
+		updateIncident,
+		updateIncidentCategory
+	} from '$lib/api/incidents';
 	import { listMemberships } from '$lib/api/memberships';
 	import { listSites } from '$lib/api/sites';
+	import { classificationChoices } from '$lib/app/classification';
 	import { useOrganizationContext } from '$lib/app/context';
 	import {
 		presentApiError,
@@ -48,6 +55,7 @@
 	import IncidentActionToolbar from '$lib/components/incidents/IncidentActionToolbar.svelte';
 	import IncidentAssignModal from '$lib/components/incidents/IncidentAssignModal.svelte';
 	import IncidentConfirmModal from '$lib/components/incidents/IncidentConfirmModal.svelte';
+	import IncidentClassificationModal from '$lib/components/incidents/IncidentClassificationModal.svelte';
 	import type { IncidentPriority, IncidentStatus } from '$lib/api/incident-views';
 	import Alert from '$lib/ui/Alert.svelte';
 	import Button from '$lib/ui/Button.svelte';
@@ -74,7 +82,21 @@
 		items.map(({ id, name }) => ({ id, name }));
 	const catalogs = createIncidentDetailCatalogs({
 		sites: (organizationId, signal) => listSites({ organizationId, signal }).then(named),
-		categories: (organizationId, signal) => listCategories({ organizationId, signal }).then(named),
+		// one request (same endpoint and categories:view): the tree gives the category AND subcategory
+		// names of the detail, and the choices of the classification change
+		categories: (organizationId, signal) =>
+			getCategoryTree({ organizationId, signal }).then((tree) =>
+				tree.map(({ id, name, active, subcategories }) => ({
+					id,
+					name,
+					active,
+					subcategories: subcategories.map((sub) => ({
+						id: sub.id,
+						name: sub.name,
+						active: sub.active
+					}))
+				}))
+			),
 		memberships: (organizationId, signal) =>
 			listMemberships({ organizationId, signal }).then((members) =>
 				members
@@ -96,6 +118,7 @@
 	let signingOut = $state(false);
 	let signOutError = $state<string | null>(null);
 	let assignModalOpen = $state(false);
+	let classificationOpen = $state(false);
 	let confirmModal = $state<{
 		open: boolean;
 		action: 'close' | 'reopen';
@@ -165,6 +188,7 @@
 			catalogs.setIdentity(current);
 			if (target && detail.get().key !== before) {
 				assignModalOpen = false;
+				classificationOpen = false;
 				confirmModal.open = false;
 				actionError = null;
 				void detail.load();
@@ -255,6 +279,41 @@
 		);
 		if (result.status === 'success') {
 			assignModalOpen = false;
+		} else if (result.status === 'error' || result.status === 'unknown') {
+			actionError = presentMutationFailure(result).message;
+		}
+	}
+
+	/** Category + optional subcategory (needs categories:view to list the choices). */
+	const canClassify = $derived(capabilities.includes('categories:view'));
+	const classification = $derived(
+		shown?.audience === 'staff' && $catalogs.categories.status === 'ready'
+			? classificationChoices($catalogs.categories.items, {
+					categoryId: shown.categoryId,
+					subcategoryId: shown.subcategoryId
+				})
+			: []
+	);
+
+	function openClassification() {
+		if (!shown || shown.audience !== 'staff' || !canClassify) return;
+		actionError = null;
+		classificationOpen = true;
+		catalogs.loadNames(['categories']);
+	}
+
+	async function saveClassification(data: {
+		categoryId: string | null;
+		subcategoryId: string | null;
+		reason?: string;
+	}) {
+		if (!shown || shown.audience !== 'staff') return;
+		actionError = null;
+		const result = await detail.mutate('category', (organizationId, id) =>
+			updateIncidentCategory(organizationId, id, data)
+		);
+		if (result.status === 'success') {
+			classificationOpen = false;
 		} else if (result.status === 'error' || result.status === 'unknown') {
 			actionError = presentMutationFailure(result).message;
 		}
@@ -369,6 +428,7 @@
 							onStatusChange={handleStatusChange}
 							onPriorityChange={handlePriorityChange}
 							onOpenAssign={openAssign}
+							onOpenClassification={canClassify ? openClassification : undefined}
 							onRequestClose={requestClose}
 							onRequestReopen={requestReopen}
 						/>
@@ -377,7 +437,8 @@
 			</IncidentHeader>
 			<div class="sf-detail-grid" aria-busy={$detail.status === 'refreshing' || undefined}>
 				<div class="sf-detail-main">
-					{#if actionError}
+					<!-- while the classification modal is open its own alert shows the error (announced once) -->
+					{#if actionError && !classificationOpen}
 						<div class="sf-action-error" role="alert">
 							<Alert tone="danger" title="Error en la acción">
 								<p>{actionError}</p>
@@ -438,6 +499,25 @@
 					onSave={saveAssign}
 					onCancel={() => {
 						assignModalOpen = false;
+						actionError = null;
+					}}
+				/>
+
+				<IncidentClassificationModal
+					open={classificationOpen}
+					currentCategoryId={shown.categoryId}
+					currentSubcategoryId={shown.subcategoryId}
+					choices={classification}
+					loading={$catalogs.categories.status === 'loading' ||
+						$catalogs.categories.status === 'idle'}
+					loadError={$catalogs.categories.error
+						? presentApiError($catalogs.categories.error).message
+						: null}
+					submitting={$detail.mutations.category?.status === 'pending'}
+					error={classificationOpen ? actionError : null}
+					onSave={saveClassification}
+					onCancel={() => {
+						classificationOpen = false;
 						actionError = null;
 					}}
 				/>

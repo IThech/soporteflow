@@ -21,7 +21,9 @@ function failure(status: number, code: string, message: string) {
 
 /**
  * PATCH /api/incidents/<id>/category?organizationId=<UUID>
- * Body exactly { categoryId: UUID | null, reason?: string }.
+ * Body exactly { categoryId: UUID | null, subcategoryId?: UUID | null, reason?: string }.
+ * subcategoryId requires a categoryId and must belong to it (same organization). Omitted, the
+ * current subcategory is kept only when the category does not change; null removes it.
  * Requires incidents:edit plus read access to the incident (view_all / view_own);
  * categories:manage administers the catalog and does not grant incident edits.
  * Route/tenant ids are validated first; authentication and authorization precede body validation.
@@ -60,15 +62,31 @@ export const PATCH: RequestHandler = async (event) => {
 		if (!payload || typeof payload !== 'object' || Array.isArray(payload))
 			return failure(400, 'INVALID_INPUT', 'Body must be a JSON object.');
 		for (const key of Object.keys(payload)) {
-			if (key !== 'categoryId' && key !== 'reason')
+			if (key !== 'categoryId' && key !== 'subcategoryId' && key !== 'reason')
 				return failure(400, 'INVALID_INPUT', `Unknown property '${key}'.`);
 		}
-		const { categoryId, reason } = payload as { categoryId?: unknown; reason?: unknown };
+		const { categoryId, subcategoryId, reason } = payload as {
+			categoryId?: unknown;
+			subcategoryId?: unknown;
+			reason?: unknown;
+		};
 		if (
 			!('categoryId' in payload) ||
 			(categoryId !== null && (typeof categoryId !== 'string' || !uuid.test(categoryId)))
 		)
 			return failure(400, 'INVALID_INPUT', 'categoryId must be a valid UUID or null.');
+		if (
+			subcategoryId !== undefined &&
+			subcategoryId !== null &&
+			(typeof subcategoryId !== 'string' || !uuid.test(subcategoryId))
+		)
+			return failure(400, 'INVALID_INPUT', 'subcategoryId must be a valid UUID or null.');
+		if (subcategoryId && !categoryId)
+			return failure(
+				400,
+				'INVALID_INPUT',
+				'categoryId is required when subcategoryId is provided.'
+			);
 		if (reason !== undefined && typeof reason !== 'string')
 			return failure(400, 'INVALID_INPUT', 'reason must be a string.');
 
@@ -85,7 +103,11 @@ export const PATCH: RequestHandler = async (event) => {
 						readAccess: scope.read ?? undefined
 					},
 					incidentId,
-					{ categoryId: categoryId as string | null, reason: reason as string | undefined }
+					{
+						categoryId: categoryId as string | null,
+						subcategoryId: subcategoryId as string | null | undefined,
+						reason: reason as string | undefined
+					}
 				)
 		);
 		return json(
@@ -102,6 +124,10 @@ export const PATCH: RequestHandler = async (event) => {
 				return failure(404, 'CATEGORY_NOT_FOUND', 'Category not found.');
 			if (error.code === 'CATEGORY_INACTIVE')
 				return failure(409, 'CATEGORY_INACTIVE', 'The selected category is inactive.');
+			if (error.code === 'SUBCATEGORY_NOT_FOUND')
+				return failure(404, 'SUBCATEGORY_NOT_FOUND', 'Subcategory not found.');
+			if (error.code === 'SUBCATEGORY_INACTIVE')
+				return failure(409, 'SUBCATEGORY_INACTIVE', 'The selected subcategory is inactive.');
 			const mapped = incidentMutationFailure(error.code);
 			if (mapped) return mapped;
 		}

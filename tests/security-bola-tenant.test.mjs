@@ -33,6 +33,8 @@ const REQUESTER_KEYS = [
 	'slaOverallStatus',
 	'slaResolutionStatus',
 	'status',
+	// optional subcategory of categoryId: same public classification level as categoryId
+	'subcategoryId',
 	'title',
 	'updatedAt'
 ];

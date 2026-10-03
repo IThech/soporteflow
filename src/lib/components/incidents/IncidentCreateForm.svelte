@@ -2,6 +2,11 @@
 	import { tick } from 'svelte';
 	import type { CreateIncidentField } from '$lib/api/incident-create';
 	import {
+		reconcileSubcategory,
+		subcategoryChoices,
+		subcategoryHint
+	} from '$lib/app/classification';
+	import {
 		CREATE_FIELD_ORDER,
 		PRIORITY_OPTIONS,
 		SLA_AUTO,
@@ -76,6 +81,24 @@
 		{ value: '', label: 'Selecciona un cliente' },
 		...catalogs.clients.options.map((option) => ({ value: option.value, label: option.label }))
 	]);
+	// Subcategories of the CHOSEN category only (from the same categories catalog, no extra request).
+	const subcategories = $derived(subcategoryChoices(catalogs.categories.options, draft.categoryId));
+	const subcategoryOptions = $derived([
+		{ value: '', label: 'Sin subcategoría' },
+		...subcategories.map((option) => ({ value: option.value, label: option.label }))
+	]);
+	/** Changing the category drops a subcategory that does not belong to the new one. */
+	function getCategory() {
+		return draft.categoryId;
+	}
+	function setCategory(categoryId: string) {
+		draft.categoryId = categoryId;
+		draft.subcategoryId = reconcileSubcategory(
+			catalogs.categories.options,
+			categoryId,
+			draft.subcategoryId
+		);
+	}
 	const slaOptions = $derived([
 		{ value: SLA_AUTO, label: 'Automático' },
 		...(sections.slaPolicies
@@ -227,7 +250,7 @@
 							{#snippet children(control)}
 								<Select
 									{control}
-									bind:value={draft.categoryId}
+									bind:value={getCategory, setCategory}
 									bind:element={controls.categoryId}
 									options={withNone('Sin categoría', catalogs.categories)}
 									disabled={submitting || catalogs.categories.status !== 'ready'}
@@ -235,6 +258,23 @@
 							{/snippet}
 						</Field>
 						{@render catalogState('categories', catalogs.categories)}
+					</div>
+					<div>
+						<Field
+							label="Subcategoría"
+							hint={subcategoryHint(draft.categoryId, subcategories)}
+							error={errors.subcategoryId}
+						>
+							{#snippet children(control)}
+								<Select
+									{control}
+									bind:value={draft.subcategoryId}
+									bind:element={controls.subcategoryId}
+									options={subcategoryOptions}
+									disabled={submitting || subcategories.length === 0}
+								/>
+							{/snippet}
+						</Field>
 					</div>
 				{/if}
 				{#if sections.sla}
@@ -345,8 +385,8 @@
 	.sf-catalog-error p {
 		margin: 0;
 	}
-	.sf-ref {
-		margin-top: var(--space-1) !important;
+	.sf-catalog-error .sf-ref {
+		margin-top: var(--space-1);
 		opacity: 0.85;
 	}
 	.sf-link-button {

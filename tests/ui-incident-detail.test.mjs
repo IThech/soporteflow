@@ -71,6 +71,7 @@ function row(overrides = {}) {
 		createdByUserId: CREATOR,
 		siteId: SITE,
 		categoryId: CATEGORY,
+		subcategoryId: null,
 		assignedToUserId: TECH,
 		teamId: TEAM,
 		supportLevel: 'N2',
@@ -404,6 +405,38 @@ export function unauthenticatedError() { return null; }`;
 			render(RequesterContext, { props: { incident: requesterDetail() } }).body
 		);
 		assert.doesNotMatch(requesterHtml, INTERNAL_LABELS);
+	});
+
+	await t.test('contexto staff: categoría + subcategoría opcional, nombres del árbol', () => {
+		const SUBCATEGORY = randomUUID();
+		const names = new Map([
+			[CATEGORY, 'Redes'],
+			[SUBCATEGORY, 'VPN']
+		]);
+		const html = (overrides, categoryNames = names) =>
+			clean(
+				render(StaffContext, {
+					props: {
+						incident: staffDetail(overrides),
+						selfUserId: USER,
+						selfName: 'Ana',
+						siteNames: null,
+						categoryNames,
+						memberNames: null
+					}
+				}).body
+			);
+		const classified = html({ subcategoryId: SUBCATEGORY });
+		assert.match(classified, /Categoría<\/dt>\s*<dd[^>]*>Redes/);
+		assert.match(classified, /Subcategoría<\/dt>\s*<dd[^>]*>VPN/);
+		assert.doesNotMatch(classified, new RegExp(SUBCATEGORY), 'nunca el UUID');
+		assert.match(html({}), /Subcategoría<\/dt>\s*<dd[^>]*>Sin subcategoría/);
+		assert.match(
+			html({ subcategoryId: SUBCATEGORY }, null),
+			/Subcategoría<\/dt>\s*<dd[^>]*>No disponible/
+		);
+		// without a category there is no subcategory row at all
+		assert.doesNotMatch(html({ categoryId: null }), /Subcategoría/);
 	});
 });
 

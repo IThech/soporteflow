@@ -4,7 +4,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { signOut } from '$lib/api/auth';
-	import { listCategories } from '$lib/api/categories';
+	import { getCategoryTree } from '$lib/api/subcategories';
 	import { listClients } from '$lib/api/clients';
 	import { submitIncidentCreation } from '$lib/api/incident-create';
 	import { listSites } from '$lib/api/sites';
@@ -62,8 +62,9 @@
 	const catalogs = createIncidentCreateCatalogs({
 		clients: (organizationId, signal) => listClients({ organizationId, activeOnly: true, signal }),
 		sites: (organizationId, signal) => listSites({ organizationId, activeOnly: true, signal }),
+		// the tree (same endpoint, one request): each category with its own subcategories
 		categories: (organizationId, signal) =>
-			listCategories({ organizationId, activeOnly: true, signal }),
+			getCategoryTree({ organizationId, activeOnly: true, signal }),
 		slaPolicies: (organizationId, signal) =>
 			listSlaPolicies({ organizationId, active: true, signal })
 	});

@@ -37,7 +37,7 @@ const REQUEST_ID = '0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d';
 const NOW = new Date('2026-09-28T10:00:00.000Z');
 const at = (minutes) => new Date(NOW.getTime() + minutes * 60_000);
 
-/** An incident row exactly as the service returns it (25 columns). */
+/** An incident row exactly as the service returns it (26 columns). */
 function row(overrides = {}) {
 	return {
 		id: INCIDENT,
@@ -52,6 +52,7 @@ function row(overrides = {}) {
 		createdByUserId: randomUUID(),
 		siteId: randomUUID(),
 		categoryId: null,
+		subcategoryId: null,
 		assignedToUserId: TECH,
 		teamId: TEAM,
 		supportLevel: 'N2',
@@ -163,7 +164,7 @@ test('UI-2A — modelo discriminado de detalle contra el DTO real del backend', 
 		])
 			assert.equal(internal in detail, false, `${internal} no existe (ni como null)`);
 		assert.equal(detail.slaOverallStatus, 'on_track', 'cumplimiento visible para el cliente');
-		assert.equal(Object.keys(detail).length, 16);
+		assert.equal(Object.keys(detail).length, 17);
 	});
 
 	await t.test('A. requester con datos internos inesperados -> INVALID_PAYLOAD', () => {
@@ -229,7 +230,37 @@ test('UI-2A — modelo discriminado de detalle contra el DTO real del backend', 
 			'requester'
 		);
 	});
+
+	await t.test('A. clasificación: categoría + subcategoría opcional en ambos DTO', () => {
+		const CATEGORY = randomUUID();
+		const SUBCATEGORY = randomUUID();
+		const classified = { categoryId: CATEGORY, subcategoryId: SUBCATEGORY };
+		for (const audience of ['staff', 'requester']) {
+			const dto = (overrides) =>
+				audience === 'staff'
+					? staffDetail(overrides)
+					: wire(toIncidentDto(row(overrides), 'requester', NOW));
+			// the backend sends the subcategory (or null) in both projections
+			const detail = parseIncidentDetail(dto(classified), expect);
+			assert.equal(detail.categoryId, CATEGORY, audience);
+			assert.equal(detail.subcategoryId, SUBCATEGORY, audience);
+			assert.equal(parseIncidentDetail(dto({}), expect).subcategoryId, null, audience);
+			const list = toIncidentView(dto(classified), ORG);
+			assert.equal(list.subcategoryId, SUBCATEGORY, `${audience}: listado`);
+			// the DB invariant (no subcategory without its category) is also a contract invariant
+			const orphan = dto({ categoryId: null, subcategoryId: SUBCATEGORY });
+			assert.throws(() => parseIncidentDetail(orphan, expect), isInvalidPayload, audience);
+			assert.throws(() => toIncidentView(orphan, ORG), isInvalidPayload, `${audience}: listado`);
+			assert.throws(
+				() => parseIncidentDetail({ ...dto(classified), subcategoryId: 'no-uuid' }, expect),
+				isInvalidPayload,
+				audience
+			);
+		}
+	});
 });
+
+const isInvalidPayload = (error) => error instanceof ApiError && error.code === 'INVALID_PAYLOAD';
 
 const jsonResponse = (status, body, headers = {}) =>
 	new Response(JSON.stringify(body), {
@@ -424,6 +455,7 @@ test('UI-2A — contrato de creación: campos reales, nada inventado', async () 
 						clientUserId: REQUESTER,
 						siteId: null,
 						categoryId: null,
+						subcategoryId: null,
 						slaOverallStatus: 'not_applicable',
 						slaFirstResponseStatus: 'not_applicable',
 						slaResolutionStatus: 'not_applicable',

@@ -267,6 +267,7 @@ test('SoporteFlow — Etapa 5.4X-C: contratos API', async (t) => {
 				'slaOverallStatus',
 				'slaResolutionStatus',
 				'status',
+				'subcategoryId',
 				'title',
 				'updatedAt'
 			]);

@@ -1,7 +1,7 @@
 import { boundedRows } from '../security/bounded-read';
 import { and, asc, eq } from 'drizzle-orm';
 import type { PgDatabase } from 'drizzle-orm/pg-core';
-import { categories, organizations } from '../db/schema';
+import { categories, organizations, subcategories } from '../db/schema';
 import { IncidentServiceError } from './incidents';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -275,6 +275,20 @@ export async function setCategoryActive(
 			.set({ active, updatedAt: new Date() })
 			.where(and(eq(categories.id, categoryId), eq(categories.organizationId, organizationId)))
 			.returning(categoryColumns);
+
+		if (!active) {
+			await tx
+				.update(subcategories)
+				.set({ active: false, updatedAt: new Date() })
+				.where(
+					and(
+						eq(subcategories.categoryId, categoryId),
+						eq(subcategories.organizationId, organizationId),
+						eq(subcategories.active, true)
+					)
+				);
+		}
+
 		return updated;
 	});
 }

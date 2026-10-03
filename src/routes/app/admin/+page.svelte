@@ -5,7 +5,7 @@
 	import { page } from '$app/state';
 	import { signOut } from '$lib/api/auth';
 	import { useOrganizationContext } from '$lib/app/context';
-	import { attemptSignOut, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
+	import { attemptSignOut, SESSION_EXPIRED_PATH, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
 	import { session } from '$lib/stores/session';
 	import AppShell from '$lib/components/shell/AppShell.svelte';
 	import OrganizationGate from '$lib/components/shell/OrganizationGate.svelte';
@@ -25,12 +25,14 @@
 	const capabilities = $derived(ready ? $context.capabilities : []);
 	const activeOrg = $derived(ready ? $context.activeOrganization : null);
 	const canManage = $derived(
-		capabilities.includes('clients:manage') || capabilities.includes('sites:manage')
+		capabilities.includes('clients:manage') ||
+			capabilities.includes('sites:manage') ||
+			capabilities.includes('categories:manage')
 	);
 
 	function expireSession() {
 		session.clearSession();
-		void goto(resolve('/login?expired=true'));
+		void goto(resolve(SESSION_EXPIRED_PATH));
 	}
 
 	$effect(() => {
@@ -80,6 +82,12 @@
 			: resolve('/app/admin/sites')
 	);
 
+	const categoriesHref = $derived(
+		activeOrg
+			? `${resolve('/app/admin/categories')}?organizationId=${encodeURIComponent(activeOrg.id)}`
+			: resolve('/app/admin/categories')
+	);
+
 	interface AdminModule {
 		title: string;
 		description: string;
@@ -119,7 +127,9 @@
 		{
 			title: 'Categorías',
 			description: 'Taxonomía de soporte, árbol de subcategorías y clasificación de incidencias.',
-			active: false
+			active: true,
+			href: categoriesHref,
+			actionLabel: 'Gestionar categorías'
 		},
 		{
 			title: 'Políticas SLA',
@@ -220,6 +230,8 @@
 	.sf-modules-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+		/* every row as tall as the tallest card: footers line up across the whole grid */
+		grid-auto-rows: 1fr;
 		gap: var(--space-4);
 	}
 
@@ -292,6 +304,10 @@
 	}
 
 	.sf-card-inactive-label {
+		/* same box as the small Button of active cards (min-height 2rem): equal footers */
+		display: inline-flex;
+		align-items: center;
+		min-height: 2rem;
 		font-size: var(--text-xs);
 		color: var(--text-subtle);
 		font-style: italic;

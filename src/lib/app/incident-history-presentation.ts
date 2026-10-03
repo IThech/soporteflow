@@ -28,7 +28,8 @@ export function historyEventTitle(type: SafeIncidentHistoryType): string {
 		case 'site_changed':
 			return 'Sede modificada';
 		case 'category_changed':
-			return 'Categoría modificada';
+			// the same event records category and/or subcategory changes: one wording for both
+			return 'Clasificación modificada';
 		case 'sla_applied':
 			return 'Compromiso SLA aplicado';
 		case 'sla_changed':
@@ -113,7 +114,7 @@ export function describeHistoryChanges(item: IncidentHistoryItem): {
 		return { note: 'Se ha actualizado la sede de la incidencia.' };
 	}
 	if (item.changes?.categoryChanged) {
-		return { note: 'Se ha actualizado la categoría de la incidencia.' };
+		return { note: 'Se ha actualizado la clasificación de la incidencia.' };
 	}
 	return {};
 }

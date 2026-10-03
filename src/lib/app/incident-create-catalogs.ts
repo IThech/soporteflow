@@ -1,8 +1,9 @@
 import { ApiError, isApiError, networkApiError } from '../api/errors.ts';
-import type { Category } from '../api/categories.ts';
 import type { Client } from '../api/clients.ts';
 import type { Site } from '../api/sites.ts';
 import type { SlaPolicy } from '../api/sla-policies.ts';
+import type { CategoryWithSubcategories } from '../api/subcategories.ts';
+import { classificationChoices, type ChoiceOption } from './classification.ts';
 import { presentApiError } from './error-presentation.ts';
 import type { CreateFormSections } from './incident-create-form.ts';
 import { isStaleRequest } from './request-scope.ts';
@@ -22,6 +23,7 @@ import { tenantKey, type TenantIdentity } from './tenant-identity.ts';
  * Each catalog has its own state: a failing (or 422 oversized) catalog shows ITS error with a
  * manual retry, never "no options", and never blocks the main fields. Only active entries are
  * offered (the server refuses inactive ones); labels are real names, never UUIDs.
+ * Categories come as the tree (one request): each category option carries ITS subcategories.
  */
 
 export interface CatalogOption {
@@ -29,6 +31,8 @@ export interface CatalogOption {
 	readonly label: string;
 	/** Secondary text (e.g. the member's email, "predeterminada"). */
 	readonly hint?: string;
+	/** Category options only: the subcategories of this category. */
+	readonly subcategories?: readonly ChoiceOption[];
 }
 
 export type CreateCatalogName = 'clients' | 'sites' | 'categories' | 'slaPolicies';
@@ -46,7 +50,7 @@ export type CreateCatalogsState = Readonly<Record<CreateCatalogName, CatalogView
 export interface CreateCatalogLoaders {
 	clients: (organizationId: string, signal: AbortSignal) => Promise<Client[]>;
 	sites: (organizationId: string, signal: AbortSignal) => Promise<Site[]>;
-	categories: (organizationId: string, signal: AbortSignal) => Promise<Category[]>;
+	categories: (organizationId: string, signal: AbortSignal) => Promise<CategoryWithSubcategories[]>;
 	slaPolicies: (organizationId: string, signal: AbortSignal) => Promise<SlaPolicy[]>;
 }
 
@@ -66,11 +70,8 @@ export function siteOptions(sites: readonly Site[]): CatalogOption[] {
 		.sort(byLabel);
 }
 
-export function categoryOptions(categories: readonly Category[]): CatalogOption[] {
-	return categories
-		.filter((category) => category.active)
-		.map((category) => ({ value: category.id, label: category.name }))
-		.sort(byLabel);
+export function categoryOptions(tree: readonly CategoryWithSubcategories[]): CatalogOption[] {
+	return classificationChoices(tree);
 }
 
 export function slaPolicyOptions(policies: readonly SlaPolicy[]): CatalogOption[] {
@@ -116,7 +117,7 @@ const CACHE_NAME: Record<CreateCatalogName, CatalogName> = {
 const CACHE_FILTERS: Record<CreateCatalogName, Readonly<Record<string, boolean>>> = {
 	clients: { activeOnly: true },
 	sites: { activeOnly: true },
-	categories: { activeOnly: true },
+	categories: { activeOnly: true, tree: true },
 	slaPolicies: { active: true }
 };
 
@@ -159,7 +160,7 @@ export function createIncidentCreateCatalogs(
 			case 'sites':
 				return siteOptions(raw as Site[]);
 			case 'categories':
-				return categoryOptions(raw as Category[]);
+				return categoryOptions(raw as CategoryWithSubcategories[]);
 			case 'slaPolicies':
 				return slaPolicyOptions(raw as SlaPolicy[]);
 		}

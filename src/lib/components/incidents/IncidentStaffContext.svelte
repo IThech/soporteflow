@@ -72,6 +72,12 @@
 			<dt>Categoría</dt>
 			<dd>{catalogName(incident.categoryId, categoryNames, 'Sin categoría')}</dd>
 		</div>
+		{#if incident.categoryId}
+			<div>
+				<dt>Subcategoría</dt>
+				<dd>{catalogName(incident.subcategoryId, categoryNames, 'Sin subcategoría')}</dd>
+			</div>
+		{/if}
 	</InfoGroup>
 
 	<InfoGroup title="Asignación">

@@ -13,13 +13,16 @@ import type { IncidentPriority, IncidentStatus } from './incident-views.ts';
  * UI-2A — Incident detail contract (GET /api/incidents/:id and the incident payload of the
  * mutations). Mirrors the backend projections EXACTLY (the server's incident-dto service):
  *
- * - requester (`audience: 'requester'`): the customer allowlist, 16 keys. The view type has NO
+ * - requester (`audience: 'requester'`): the customer allowlist, 17 keys. The view type has NO
  *   internal property at all: reading `client`, `teamName`… on it is a type error, and a payload
  *   carrying any internal key is rejected as INVALID_PAYLOAD (never silently accepted).
- * - staff (no `audience` key on the wire): the full incident row (25 columns) + the 3 derived SLA
+ * - staff (no `audience` key on the wire): the full incident row (26 columns) + the 3 derived SLA
  *   compliance statuses. GET /api/incidents/:id adds `assignedToUserName` and `teamName` (joined);
  *   mutation responses (PATCH / assign / site / category / support-level / sla) and POST do not:
  *   they are StaffIncidentRecordView, and a UI must reload the detail instead of inventing names.
+ *
+ * Classification is a category plus an OPTIONAL subcategory of that category: a payload with a
+ * subcategoryId but no categoryId breaks the backend invariant and is rejected.
  *
  * Every value is kept as sent (no renaming, no reinterpretation of SLA, no derived countdown).
  * Returned objects are frozen. This module never imports server code.
@@ -39,6 +42,8 @@ interface IncidentDetailCommon {
 	readonly clientUserId: string | null;
 	readonly siteId: string | null;
 	readonly categoryId: string | null;
+	/** Optional subcategory of categoryId (never set without a category). */
+	readonly subcategoryId: string | null;
 	readonly slaOverallStatus: SlaOverallStatus;
 	readonly slaFirstResponseStatus: SlaObjectiveStatus;
 	readonly slaResolutionStatus: SlaObjectiveStatus;
@@ -105,6 +110,7 @@ const COMMON_KEYS = [
 	'clientUserId',
 	'siteId',
 	'categoryId',
+	'subcategoryId',
 	'slaOverallStatus',
 	'slaFirstResponseStatus',
 	'slaResolutionStatus',
@@ -167,6 +173,9 @@ function common(item: Record<string, unknown>, expect: DetailExpectation): Incid
 		fail();
 	if (typeof item.title !== 'string' || typeof item.description !== 'string') fail();
 	if (!isTimestamp(item.createdAt) || !isTimestamp(item.updatedAt)) fail();
+	const categoryId = nullableUuid(item.categoryId) as string | null;
+	const subcategoryId = nullableUuid(item.subcategoryId) as string | null;
+	if (subcategoryId !== null && categoryId === null) fail();
 	return {
 		id: item.id as string,
 		organizationId: item.organizationId as string,
@@ -177,7 +186,8 @@ function common(item: Record<string, unknown>, expect: DetailExpectation): Incid
 		priority: oneOf(item.priority, PRIORITIES) as IncidentPriority,
 		clientUserId: nullableUuid(item.clientUserId) as string | null,
 		siteId: nullableUuid(item.siteId) as string | null,
-		categoryId: nullableUuid(item.categoryId) as string | null,
+		categoryId,
+		subcategoryId,
 		slaOverallStatus: oneOf(item.slaOverallStatus, SLA_OVERALL) as SlaOverallStatus,
 		slaFirstResponseStatus: oneOf(item.slaFirstResponseStatus, SLA_OBJECTIVE) as SlaObjectiveStatus,
 		slaResolutionStatus: oneOf(item.slaResolutionStatus, SLA_OBJECTIVE) as SlaObjectiveStatus,

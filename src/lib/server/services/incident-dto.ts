@@ -33,6 +33,7 @@ export interface RequesterIncidentDto {
 	clientUserId: string | null;
 	siteId: string | null;
 	categoryId: string | null;
+	subcategoryId: string | null;
 	slaOverallStatus: SlaCompliance['slaOverallStatus'];
 	slaFirstResponseStatus: SlaCompliance['slaFirstResponseStatus'];
 	slaResolutionStatus: SlaCompliance['slaResolutionStatus'];
@@ -52,6 +53,7 @@ export interface IncidentDtoSource extends SlaComplianceInput {
 	clientId?: string | null;
 	siteId: string | null;
 	categoryId?: string | null;
+	subcategoryId?: string | null;
 	createdAt: Date | string;
 	updatedAt: Date | string;
 }
@@ -73,6 +75,7 @@ export function toRequesterIncidentDto(
 		clientUserId: incident.clientUserId,
 		siteId: incident.siteId,
 		categoryId: incident.categoryId ?? null,
+		subcategoryId: incident.subcategoryId ?? null,
 		slaOverallStatus: compliance.slaOverallStatus,
 		slaFirstResponseStatus: compliance.slaFirstResponseStatus,
 		slaResolutionStatus: compliance.slaResolutionStatus,

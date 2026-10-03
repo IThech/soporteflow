@@ -38,6 +38,8 @@ interface IncidentViewBase {
 	clientUserId: string | null;
 	siteId: string | null;
 	categoryId: string | null;
+	/** Optional subcategory of categoryId. */
+	subcategoryId: string | null;
 	slaOverallStatus: SlaOverallStatus;
 	slaFirstResponseStatus: SlaObjectiveStatus;
 	slaResolutionStatus: SlaObjectiveStatus;
@@ -78,6 +80,7 @@ function baseOf(item: IncidentListItem): IncidentViewBase {
 		clientUserId: item.clientUserId,
 		siteId: item.siteId,
 		categoryId: item.categoryId,
+		subcategoryId: item.subcategoryId,
 		slaOverallStatus: item.slaOverallStatus,
 		slaFirstResponseStatus: item.slaFirstResponseStatus,
 		slaResolutionStatus: item.slaResolutionStatus,

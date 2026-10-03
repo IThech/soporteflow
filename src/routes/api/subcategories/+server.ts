@@ -3,8 +3,7 @@ import { db } from '$lib/server/db';
 import { withActorAuthorization } from '$lib/server/auth/transactional-authorization';
 import { resolvePrincipal } from '$lib/server/auth/principal';
 import { authorizeAction } from '$lib/server/auth/authorization';
-import { createCategory, listCategories } from '$lib/server/services/categories';
-import { getCategoryTree } from '$lib/server/services/subcategories';
+import { createSubcategory, listSubcategories } from '$lib/server/services/subcategories';
 import {
 	categoryServiceFailure,
 	failure,
@@ -12,16 +11,14 @@ import {
 	onlyKeys,
 	readJsonObject,
 	success,
-	toCategoryDto,
-	toCategoryTreeDto,
+	toSubcategoryDto,
 	uuid
-} from './http';
+} from '../categories/http';
 import { withAudit } from '$lib/server/services/audit-events';
 
 /**
- * GET /api/categories?organizationId=<UUID>[&activeOnly=true|false][&tree=true|false]
- * Requires categories:view. Inactive categories are included unless activeOnly=true.
- * Authentication and authorization precede query validation beyond organizationId.
+ * GET /api/subcategories?organizationId=<UUID>[&categoryId=<UUID>][&activeOnly=true|false]
+ * Requires categories:view. Inactive subcategories are included unless activeOnly=true.
  */
 export const GET: RequestHandler = async (event) => {
 	const params = event.url.searchParams;
@@ -40,33 +37,27 @@ export const GET: RequestHandler = async (event) => {
 			return failure(403, 'FORBIDDEN', 'Permission denied.');
 
 		const activeOnly = params.get('activeOnly');
-		const tree = params.get('tree');
+		const categoryId = params.get('categoryId');
 		if (
-			!onlyKeys(params, ['organizationId', 'activeOnly', 'tree']) ||
+			!onlyKeys(params, ['organizationId', 'categoryId', 'activeOnly']) ||
 			(activeOnly !== null && activeOnly !== 'true' && activeOnly !== 'false') ||
-			(tree !== null && tree !== 'true' && tree !== 'false')
+			(categoryId !== null && !uuid.test(categoryId))
 		)
-			return failure(400, 'INVALID_INPUT', 'Invalid categories query.');
+			return failure(400, 'INVALID_INPUT', 'Invalid subcategories query.');
 
-		if (tree === 'true') {
-			const categoryTree = await getCategoryTree(db, organizationId, {
-				activeOnly: activeOnly === 'true'
-			});
-			return success({ categories: categoryTree.map(toCategoryTreeDto) });
-		}
-
-		const categories = await listCategories(db, organizationId, {
+		const subcategories = await listSubcategories(db, organizationId, {
+			...(categoryId ? { categoryId } : {}),
 			activeOnly: activeOnly === 'true'
 		});
-		return success({ categories: categories.map(toCategoryDto) });
+		return success({ subcategories: subcategories.map(toSubcategoryDto) });
 	} catch (error) {
 		return categoryServiceFailure(error);
 	}
 };
 
 /**
- * POST /api/categories?organizationId=<UUID> with body exactly { name, description? }.
- * Requires categories:manage. Tenant comes only from the query; identity only from the session.
+ * POST /api/subcategories?organizationId=<UUID> with body { categoryId, name, description? }.
+ * Requires categories:manage. Tenant comes only from query; identity only from session.
  */
 export const POST: RequestHandler = async (event) => {
 	const params = event.url.searchParams;
@@ -74,7 +65,7 @@ export const POST: RequestHandler = async (event) => {
 	if (!organizationId || !uuid.test(organizationId))
 		return failure(400, 'INVALID_INPUT', 'organizationId must be a valid UUID.');
 	if (!onlyKeys(params, ['organizationId']))
-		return failure(400, 'INVALID_INPUT', 'Invalid categories query.');
+		return failure(400, 'INVALID_INPUT', 'Invalid subcategories query.');
 	try {
 		const principal = await resolvePrincipal(event.request.headers);
 		if (!principal) return failure(401, 'UNAUTHORIZED', 'Authentication required.');
@@ -89,16 +80,17 @@ export const POST: RequestHandler = async (event) => {
 		const payload = await readJsonObject(event.request);
 		if (payload instanceof Response) return payload;
 		for (const key of Object.keys(payload)) {
-			if (key !== 'name' && key !== 'description')
+			if (key !== 'categoryId' && key !== 'name' && key !== 'description')
 				return failure(400, 'INVALID_INPUT', `Unknown property '${key}'.`);
 		}
+		if (typeof payload.categoryId !== 'string' || !uuid.test(payload.categoryId))
+			return failure(400, 'INVALID_INPUT', 'categoryId must be a valid UUID.');
 		if (typeof payload.name !== 'string')
 			return failure(400, 'INVALID_INPUT', 'name must be a string.');
 		if ('description' in payload && !isDescription(payload.description))
 			return failure(400, 'INVALID_INPUT', 'description must be a string or null.');
 
-		// 5.4W-A (H1): re-validated inside the transaction after the organization lock.
-		const category = await withActorAuthorization(
+		const subcategory = await withActorAuthorization(
 			db,
 			{
 				userId: principal.userId,
@@ -112,18 +104,21 @@ export const POST: RequestHandler = async (event) => {
 					organizationId,
 					principal.userId,
 					() =>
-						createCategory(tx, organizationId, {
-							name: payload.name,
-							...('description' in payload ? { description: payload.description } : {})
+						createSubcategory(tx, organizationId, payload.categoryId as string, {
+							name: payload.name as string,
+							...('description' in payload
+								? { description: payload.description as string | null }
+								: {})
 						}),
 					(created) => ({
-						action: 'category.created',
-						entityType: 'category',
-						entityId: created.id
+						action: 'subcategory.created',
+						entityType: 'subcategory',
+						entityId: created.id,
+						metadata: { categoryId: created.categoryId }
 					})
 				)
 		);
-		return success({ category: toCategoryDto(category) }, 201);
+		return success({ subcategory: toSubcategoryDto(subcategory) }, 201);
 	} catch (error) {
 		return categoryServiceFailure(error);
 	}

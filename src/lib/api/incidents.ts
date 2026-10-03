@@ -42,6 +42,8 @@ export interface IncidentListItem {
 	teamName?: string | null;
 	/** Core category id (5.4P). Names are resolved from the categories catalog client-side. */
 	categoryId: string | null;
+	/** Optional subcategory of categoryId (never set without a category). */
+	subcategoryId: string | null;
 	/**
 	 * SLA snapshot (5.4T-B, 24x7). All null when the incident has no SLA. Deadlines never change
 	 * when the policy is edited later. firstResponseAt is set on the first support reply.
@@ -64,7 +66,7 @@ export interface IncidentListItem {
 
 const CATEGORY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** categoryId in incident payloads: absent (legacy) or null -> null; otherwise a UUID. */
+/** categoryId / subcategoryId in incident payloads: absent (legacy) or null -> null; otherwise a UUID. */
 function isValidIncidentCategoryId(value: unknown): boolean {
 	return (
 		value === undefined ||
@@ -247,7 +249,12 @@ export async function listIncidents(
 				'No se pudo interpretar la respuesta del servidor.'
 			);
 		}
-		if (item.organizationId !== organizationId || !isValidIncidentCategoryId(item.categoryId)) {
+		if (
+			item.organizationId !== organizationId ||
+			!isValidIncidentCategoryId(item.categoryId) ||
+			!isValidIncidentCategoryId(item.subcategoryId) ||
+			(item.subcategoryId != null && item.categoryId == null)
+		) {
 			throw new IncidentApiError(
 				res.status,
 				'INVALID_PAYLOAD',
@@ -256,6 +263,9 @@ export async function listIncidents(
 		}
 		if (item.categoryId === undefined) {
 			item.categoryId = null;
+		}
+		if (item.subcategoryId === undefined) {
+			item.subcategoryId = null;
 		}
 		if (!normalizeSlaFields(item)) {
 			throw new IncidentApiError(
@@ -422,6 +432,7 @@ const REQUESTER_KEYS = new Set([
 	'clientUserId',
 	'siteId',
 	'categoryId',
+	'subcategoryId',
 	'slaOverallStatus',
 	'slaFirstResponseStatus',
 	'slaResolutionStatus',
@@ -459,6 +470,8 @@ function parseRequesterIncident(
 		!(item.clientUserId === null || typeof item.clientUserId === 'string') ||
 		!(item.siteId === null || typeof item.siteId === 'string') ||
 		!isValidIncidentCategoryId(item.categoryId) ||
+		!isValidIncidentCategoryId(item.subcategoryId) ||
+		(item.subcategoryId != null && item.categoryId == null) ||
 		!SLA_OVERALL_STATUSES.includes(item.slaOverallStatus as SlaOverallStatus) ||
 		!SLA_OBJECTIVE_STATUSES.includes(item.slaFirstResponseStatus as SlaObjectiveStatus) ||
 		!SLA_OBJECTIVE_STATUSES.includes(item.slaResolutionStatus as SlaObjectiveStatus) ||
@@ -485,6 +498,7 @@ function parseRequesterIncident(
 		teamId: null,
 		teamName: null,
 		categoryId: (item.categoryId as string | null | undefined) ?? null,
+		subcategoryId: (item.subcategoryId as string | null | undefined) ?? null,
 		slaPolicyId: null,
 		slaFirstResponseMinutes: null,
 		slaResolutionMinutes: null,
@@ -573,6 +587,8 @@ export function parseAndValidateIncident(
 		!isValidTeamId ||
 		!isValidTeamName ||
 		!isValidIncidentCategoryId(item.categoryId) ||
+		!isValidIncidentCategoryId(item.subcategoryId) ||
+		(item.subcategoryId != null && item.categoryId == null) ||
 		typeof item.createdAt !== 'string' ||
 		typeof item.updatedAt !== 'string'
 	) {
@@ -594,6 +610,9 @@ export function parseAndValidateIncident(
 	}
 	if (item.categoryId === undefined) {
 		item.categoryId = null;
+	}
+	if (item.subcategoryId === undefined) {
+		item.subcategoryId = null;
 	}
 	if (!normalizeSlaFields(item)) {
 		throw new IncidentApiError(
@@ -1426,6 +1445,11 @@ export async function updateIncidentSite(
 export interface UpdateIncidentCategoryInput {
 	/** Target category UUID, or null to remove the category. */
 	categoryId: string | null;
+	/**
+	 * Optional subcategory of categoryId: a UUID, or null for "no subcategory". Omitted, the server
+	 * keeps the current one only when the category does not change. Never without a category.
+	 */
+	subcategoryId?: string | null;
 	/** Required by the server when replacing or removing an existing category. */
 	reason?: string;
 }
@@ -1438,7 +1462,7 @@ export interface UpdateIncidentCategoryOptions {
 /**
  * Changes or removes the category of an incident.
  * Invokes PATCH /api/incidents/<id>/category?organizationId=<UUID> with body
- * { categoryId, reason? }. When the reason is required is decided by the server.
+ * { categoryId, subcategoryId?, reason? }. When the reason is required is decided by the server.
  */
 export async function updateIncidentCategory(
 	organizationId: string,
@@ -1450,6 +1474,10 @@ export async function updateIncidentCategory(
 		!CATEGORY_UUID.test(organizationId) ||
 		!CATEGORY_UUID.test(incidentId) ||
 		(input?.categoryId !== null && !CATEGORY_UUID.test(String(input?.categoryId))) ||
+		(input.subcategoryId !== undefined &&
+			input.subcategoryId !== null &&
+			!CATEGORY_UUID.test(String(input.subcategoryId))) ||
+		(input.subcategoryId != null && input.categoryId === null) ||
 		(input.reason !== undefined && typeof input.reason !== 'string')
 	) {
 		throw new IncidentApiError(
@@ -1461,6 +1489,7 @@ export async function updateIncidentCategory(
 	const fetchFn = options?.customFetch ?? fetch;
 	const url = `/api/incidents/${encodeURIComponent(incidentId)}/category?${new URLSearchParams({ organizationId }).toString()}`;
 	const payload: Record<string, unknown> = { categoryId: input.categoryId };
+	if (input.subcategoryId !== undefined) payload.subcategoryId = input.subcategoryId;
 	if (input.reason !== undefined) payload.reason = input.reason;
 
 	let res: Response;
@@ -1503,6 +1532,9 @@ export async function updateIncidentCategory(
 			if (backendCode === 'CATEGORY_NOT_FOUND') {
 				message = 'La categoría seleccionada no está disponible.';
 				code = 'CATEGORY_NOT_FOUND';
+			} else if (backendCode === 'SUBCATEGORY_NOT_FOUND') {
+				message = 'La subcategoría seleccionada no está disponible para esa categoría.';
+				code = 'SUBCATEGORY_NOT_FOUND';
 			} else {
 				message = 'La incidencia no está disponible.';
 				code = 'NOT_FOUND';
@@ -1511,6 +1543,9 @@ export async function updateIncidentCategory(
 			if (backendCode === 'CATEGORY_INACTIVE') {
 				message = 'La categoría seleccionada está inactiva.';
 				code = 'CATEGORY_INACTIVE';
+			} else if (backendCode === 'SUBCATEGORY_INACTIVE') {
+				message = 'La subcategoría seleccionada está inactiva.';
+				code = 'SUBCATEGORY_INACTIVE';
 			} else if (backendCode === 'INCIDENT_CLOSED') {
 				message = 'La incidencia está cerrada y no admite cambios.';
 				code = 'INCIDENT_CLOSED';

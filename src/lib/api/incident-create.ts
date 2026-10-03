@@ -13,13 +13,15 @@ import type { IncidentPriority } from './incident-views.ts';
 /**
  * UI-2A — POST /api/incidents contract (frontend side). Exactly the properties the strict server
  * allowlist accepts (organizationId travels separately):
- *   title, description, client, priority, siteId, categoryId, slaPolicyId.
+ *   title, description, client, clientId, priority, siteId, categoryId, subcategoryId, slaPolicyId.
  * Never sent: status (the server sets 'open'), supportLevel (server sets 'N1'), team/assignee,
  * attachments, and the requester: a manual creation is always requested by the authenticated
  * user, whom the SERVER sets as clientUserId (the endpoint rejects the property). `client` is a
  * free-text label (a company/customer name), unrelated to the requester user.
  *
  * Optional ids follow the server semantics:
+ * - subcategoryId: only together with its categoryId (null = no subcategory); the server checks
+ *   that it belongs to that category and organization;
  * - slaPolicyId: omitted -> the organization's default policy; null -> no SLA; UUID -> that
  *   policy. Sending it at all requires sla:assign (403 otherwise).
  * Validation mirrors only the real server rules (trimmed non-empty title/description/client,
@@ -34,6 +36,8 @@ export interface CreateIncidentRequest {
 	priority: IncidentPriority;
 	siteId?: string | null;
 	categoryId?: string | null;
+	/** Optional subcategory of categoryId (never without it). */
+	subcategoryId?: string | null;
 	slaPolicyId?: string | null;
 }
 
@@ -45,6 +49,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 	'priority',
 	'siteId',
 	'categoryId',
+	'subcategoryId',
 	'slaPolicyId'
 ]);
 const PRIORITIES: readonly string[] = ['low', 'medium', 'high', 'urgent'];
@@ -112,8 +117,14 @@ export function buildCreateIncidentPayload(
 	const ids: [CreateIncidentField, string][] = [
 		['siteId', 'La sede'],
 		['categoryId', 'La categoría'],
+		['subcategoryId', 'La subcategoría'],
 		['slaPolicyId', 'La política SLA']
 	];
+	if (input.subcategoryId && !input.categoryId)
+		throw new CreateIncidentInputError(
+			'subcategoryId',
+			'Elige una categoría antes de indicar la subcategoría.'
+		);
 	for (const [field, label] of ids) {
 		const value = optionalId(input[field], field, label);
 		if (value !== undefined) payload[field] = value;

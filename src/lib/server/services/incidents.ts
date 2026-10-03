@@ -11,6 +11,7 @@ import {
 	users,
 	sites,
 	categories,
+	subcategories,
 	teams,
 	teamMemberships,
 	roles,
@@ -68,6 +69,9 @@ export type IncidentServiceErrorCode =
 	| 'CATEGORY_NOT_FOUND'
 	| 'CATEGORY_NAME_DUPLICATE'
 	| 'CATEGORY_INACTIVE'
+	| 'SUBCATEGORY_NOT_FOUND'
+	| 'SUBCATEGORY_NAME_DUPLICATE'
+	| 'SUBCATEGORY_INACTIVE'
 	| 'CLIENT_NOT_FOUND'
 	| 'CLIENT_INACTIVE'
 	| 'CLIENT_NAME_DUPLICATE'
@@ -429,6 +433,33 @@ export async function lockActiveCategory(
 	}
 }
 
+/**
+ * Locks the subcategory FOR SHARE during incident mutations; prevents concurrent
+ * UPDATE subcategories SET active = false. Missing, cross-tenant or mismatched categories
+ * are indistinguishable (SUBCATEGORY_NOT_FOUND); inactive ones raise SUBCATEGORY_INACTIVE.
+ */
+export async function lockActiveSubcategory(
+	tx: IncidentDatabase,
+	organizationId: string,
+	categoryId: string,
+	subcategoryId: string
+): Promise<void> {
+	const [subcat] = await tx
+		.select({ active: subcategories.active, categoryId: subcategories.categoryId })
+		.from(subcategories)
+		.where(
+			and(eq(subcategories.id, subcategoryId), eq(subcategories.organizationId, organizationId))
+		)
+		.limit(1)
+		.for('share');
+	if (!subcat || subcat.categoryId !== categoryId) {
+		throw new IncidentServiceError('SUBCATEGORY_NOT_FOUND', 'Subcategory not found');
+	}
+	if (!subcat.active) {
+		throw new IncidentServiceError('SUBCATEGORY_INACTIVE', 'Subcategory is inactive');
+	}
+}
+
 export async function lockActiveSite(
 	tx: IncidentDatabase,
 	organizationId: string,
@@ -465,6 +496,7 @@ export interface CreateIncidentInput {
 	clientUserId?: string | null;
 	siteId?: string | null;
 	categoryId?: string | null;
+	subcategoryId?: string | null;
 	/**
 	 * 5.4T-B SLA selection (the caller authorizes sla:assign before passing it):
 	 * undefined -> the organization's active default policy, if any; null -> no SLA;
@@ -487,6 +519,8 @@ export interface ListIncidentsFilters {
 	supportLevel?: SupportLevel;
 	/** Filters by incidents.category_id within the tenant; the category may be inactive. */
 	categoryId?: string;
+	/** Filters by incidents.subcategory_id within the tenant; the subcategory may be inactive. */
+	subcategoryId?: string;
 	/** 5.4T-C derived SLA compliance filters, evaluated in SQL against `now`. */
 	slaStatus?: SlaOverallStatus;
 	slaFirstResponseStatus?: SlaObjectiveStatus;
@@ -570,6 +604,21 @@ export async function createIncidentRecord(
 		!isValidUuid(input.categoryId)
 	) {
 		throw new IncidentServiceError('INVALID_INPUT', 'categoryId must be a valid UUID');
+	}
+
+	if (
+		input.subcategoryId !== undefined &&
+		input.subcategoryId !== null &&
+		!isValidUuid(input.subcategoryId)
+	) {
+		throw new IncidentServiceError('INVALID_INPUT', 'subcategoryId must be a valid UUID or null');
+	}
+
+	if (input.subcategoryId && !input.categoryId) {
+		throw new IncidentServiceError(
+			'INVALID_INPUT',
+			'categoryId is required when subcategoryId is provided'
+		);
 	}
 
 	if (
@@ -683,9 +732,17 @@ export async function createIncidentRecord(
 			await lockActiveSite(tx, context.organizationId, input.siteId);
 		}
 
-		// D.2 Validate optional categoryId (tenant-scoped, active), locked until commit
+		// D.2 Validate optional categoryId and subcategoryId (tenant-scoped, active), locked until commit
 		if (input.categoryId) {
 			await lockActiveCategory(tx, context.organizationId, input.categoryId);
+			if (input.subcategoryId) {
+				await lockActiveSubcategory(
+					tx,
+					context.organizationId,
+					input.categoryId,
+					input.subcategoryId
+				);
+			}
 		}
 
 		// D.3 SLA (5.4T-B): explicit policy, else the active default, else none; snapshot below
@@ -727,6 +784,7 @@ export async function createIncidentRecord(
 				createdByUserId: context.creatorUserId,
 				siteId: input.siteId ?? null,
 				categoryId: input.categoryId ?? null,
+				subcategoryId: input.subcategoryId ?? null,
 				...slaSnapshot(sla, now),
 				createdAt: now,
 				updatedAt: now
@@ -749,7 +807,8 @@ export async function createIncidentRecord(
 					priority: incident.priority,
 					client: incident.client,
 					clientUserId: incident.clientUserId,
-					siteId: incident.siteId
+					siteId: incident.siteId,
+					...(incident.subcategoryId ? { subcategoryId: incident.subcategoryId } : {})
 				}
 			})
 			.returning();
@@ -958,6 +1017,13 @@ function incidentListConditions(
 		conditions.push(eq(incidents.categoryId, filters.categoryId));
 	}
 
+	if (filters?.subcategoryId !== undefined) {
+		if (!isValidUuid(filters.subcategoryId)) {
+			throw new IncidentServiceError('INVALID_INPUT', 'subcategoryId filter must be a valid UUID');
+		}
+		conditions.push(eq(incidents.subcategoryId, filters.subcategoryId));
+	}
+
 	if (filters?.queue !== undefined) {
 		if (!VALID_QUEUES.has(filters.queue)) {
 			throw new IncidentServiceError(
@@ -1068,6 +1134,7 @@ export async function getIncidentById(
 			createdByUserId: incidents.createdByUserId,
 			siteId: incidents.siteId,
 			categoryId: incidents.categoryId,
+			subcategoryId: incidents.subcategoryId,
 			assignedToUserId: incidents.assignedToUserId,
 			teamId: incidents.teamId,
 			supportLevel: incidents.supportLevel,
@@ -2306,6 +2373,8 @@ export interface ChangeIncidentCategoryContext {
 export interface ChangeIncidentCategoryInput {
 	/** Target category UUID, or null to remove the category. */
 	categoryId: string | null;
+	/** Optional target subcategory UUID, or null to remove the subcategory. */
+	subcategoryId?: string | null;
 	reason?: string;
 }
 
@@ -2346,6 +2415,19 @@ export async function changeIncidentCategory(
 	}
 	if (!input || (input.categoryId !== null && !isValidUuid(input.categoryId))) {
 		throw new IncidentServiceError('INVALID_INPUT', 'categoryId must be a valid UUID or null');
+	}
+	if (
+		input.subcategoryId !== undefined &&
+		input.subcategoryId !== null &&
+		!isValidUuid(input.subcategoryId)
+	) {
+		throw new IncidentServiceError('INVALID_INPUT', 'subcategoryId must be a valid UUID or null');
+	}
+	if (input.subcategoryId && !input.categoryId) {
+		throw new IncidentServiceError(
+			'INVALID_INPUT',
+			'categoryId is required when subcategoryId is provided'
+		);
 	}
 	validateReasonInput(input.reason);
 	const targetCategoryId = input.categoryId;
@@ -2408,30 +2490,55 @@ export async function changeIncidentCategory(
 			context.readAccess
 		);
 
-		// D. No-op: same category (or null -> null)
 		const fromCategoryId = currentIncident.categoryId ?? null;
-		if (fromCategoryId === targetCategoryId) {
+		const fromSubcategoryId = currentIncident.subcategoryId ?? null;
+
+		let targetSubcategoryId: string | null = null;
+		if (targetCategoryId !== null) {
+			if (input.subcategoryId !== undefined) {
+				targetSubcategoryId = input.subcategoryId;
+			} else if (fromCategoryId === targetCategoryId) {
+				targetSubcategoryId = fromSubcategoryId;
+			} else {
+				targetSubcategoryId = null;
+			}
+		}
+
+		// D. No-op: same category and subcategory
+		if (fromCategoryId === targetCategoryId && fromSubcategoryId === targetSubcategoryId) {
 			return { incident: currentIncident };
 		}
 
 		// E. Reason rule
 		const cleanReason = input.reason?.trim() || null;
-		if (fromCategoryId !== null && cleanReason === null) {
+		if ((fromCategoryId !== null || fromSubcategoryId !== null) && cleanReason === null) {
 			throw new IncidentServiceError(
 				'INVALID_INPUT',
 				'Reason is required when changing or removing the category of an incident'
 			);
 		}
 
-		// F. Validate and lock the target category
+		// F. Validate and lock the target category & subcategory
 		if (targetCategoryId !== null) {
 			await lockActiveCategory(tx, context.organizationId, targetCategoryId);
+			if (targetSubcategoryId !== null) {
+				await lockActiveSubcategory(
+					tx,
+					context.organizationId,
+					targetCategoryId,
+					targetSubcategoryId
+				);
+			}
 		}
 
 		// G. Update incident
 		const [updatedIncident] = await tx
 			.update(incidents)
-			.set({ categoryId: targetCategoryId, updatedAt: new Date() })
+			.set({
+				categoryId: targetCategoryId,
+				subcategoryId: targetSubcategoryId,
+				updatedAt: new Date()
+			})
 			.where(
 				and(eq(incidents.id, incidentId), eq(incidents.organizationId, context.organizationId))
 			)
@@ -2451,24 +2558,29 @@ export async function changeIncidentCategory(
 				payload: {
 					...(system ? automationHistoryMetadata(tx, context.organizationId) : {}),
 					fromCategoryId,
-					toCategoryId: targetCategoryId
+					toCategoryId: targetCategoryId,
+					...(fromSubcategoryId !== null || targetSubcategoryId !== null
+						? { fromSubcategoryId, toSubcategoryId: targetSubcategoryId }
+						: {})
 				}
 			})
 			.returning();
 
-		await recordIncidentAutomationEvents(tx, {
-			organizationId: context.organizationId,
-			incidentId,
-			actorUserId: context.actorUserId,
-			occurredAt: updatedIncident.updatedAt,
-			facts: [
-				{
-					eventType: 'incident.category_changed',
-					previousCategoryId: fromCategoryId,
-					newCategoryId: targetCategoryId
-				}
-			]
-		});
+		if (fromCategoryId !== targetCategoryId) {
+			await recordIncidentAutomationEvents(tx, {
+				organizationId: context.organizationId,
+				incidentId,
+				actorUserId: context.actorUserId,
+				occurredAt: updatedIncident.updatedAt,
+				facts: [
+					{
+						eventType: 'incident.category_changed',
+						previousCategoryId: fromCategoryId,
+						newCategoryId: targetCategoryId
+					}
+				]
+			});
+		}
 
 		return { incident: updatedIncident, history: historyRecord };
 	};

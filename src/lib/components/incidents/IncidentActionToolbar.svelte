@@ -12,6 +12,8 @@
 		onStatusChange: (status: IncidentStatus) => void;
 		onPriorityChange: (priority: IncidentPriority) => void;
 		onOpenAssign: () => void;
+		/** Category + subcategory change; omitted when the categories catalog cannot be read. */
+		onOpenClassification?: () => void;
 		onRequestClose: () => void;
 		onRequestReopen: () => void;
 	}
@@ -23,6 +25,7 @@
 		onStatusChange,
 		onPriorityChange,
 		onOpenAssign,
+		onOpenClassification,
 		onRequestClose,
 		onRequestReopen
 	}: Props = $props();
@@ -80,6 +83,13 @@
 			<Button variant="secondary" size="sm" disabled={mutating} onclick={onOpenAssign}>
 				<Icon name={wasAssigned ? 'users' : 'user'} size={14} />
 				<span>{wasAssigned ? 'Reasignar' : 'Asignar'}</span>
+			</Button>
+		{/if}
+
+		<!-- Clasificación: categoría + subcategoría -->
+		{#if available.changeCategory.available && onOpenClassification}
+			<Button variant="secondary" size="sm" disabled={mutating} onclick={onOpenClassification}>
+				<span>Clasificar</span>
 			</Button>
 		{/if}
 

@@ -13,7 +13,7 @@ import {
 	varchar
 } from 'drizzle-orm/pg-core';
 import { organizations, memberships } from './identity';
-import { categories, clients, sites, teams } from './structure';
+import { categories, clients, sites, subcategories, teams } from './structure';
 import { slaPolicies } from './sla';
 
 /**
@@ -56,6 +56,8 @@ export const incidents = pgTable(
 		supportLevel: varchar('support_level', { length: 10 }).default('N1').notNull(),
 		/** Optional flat Core category (5.4P). Nullable: incidents may have no category. */
 		categoryId: uuid('category_id'),
+		/** Optional subcategory within categoryId (V1). Nullable. */
+		subcategoryId: uuid('subcategory_id'),
 		/**
 		 * SLA (5.4T-B, 24x7 elapsed minutes). Snapshot taken when the policy is applied: later edits or
 		 * deactivation of the policy never change it. Either all SLA snapshot/deadline fields are set
@@ -119,6 +121,15 @@ export const incidents = pgTable(
 			columns: [table.categoryId, table.organizationId],
 			foreignColumns: [categories.id, categories.organizationId]
 		}).onDelete('restrict'),
+		foreignKey({
+			name: 'incidents_subcategory_cat_org_fk',
+			columns: [table.subcategoryId, table.categoryId, table.organizationId],
+			foreignColumns: [subcategories.id, subcategories.categoryId, subcategories.organizationId]
+		}).onDelete('restrict'),
+		check(
+			'incidents_subcategory_requires_category_check',
+			sql`${table.subcategoryId} IS NULL OR ${table.categoryId} IS NOT NULL`
+		),
 		check('incidents_title_check', sql`btrim(${table.title}) <> ''`),
 		check('incidents_client_check', sql`btrim(${table.client}) <> ''`),
 		check('incidents_description_check', sql`btrim(${table.description}) <> ''`),
@@ -146,6 +157,7 @@ export const incidents = pgTable(
 		index('incidents_org_team_idx').on(table.organizationId, table.teamId),
 		index('incidents_org_support_level_idx').on(table.organizationId, table.supportLevel),
 		index('incidents_org_category_idx').on(table.organizationId, table.categoryId),
+		index('incidents_org_subcategory_id_idx').on(table.organizationId, table.subcategoryId),
 		// Deadline lookups (overdue queries arrive in 5.4T-C).
 		index('incidents_org_first_response_due_idx').on(
 			table.organizationId,

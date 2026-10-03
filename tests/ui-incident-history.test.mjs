@@ -277,6 +277,9 @@ test('UI-2D Historial SSR: renderizado de eventos, empty state, tabs y accesibil
 			historyItem('h3', 'assigned', '2026-09-30T10:10:00.000Z', {
 				changes: { assignmentChanged: true }
 			}),
+			historyItem('h3b', 'category_changed', '2026-09-30T10:05:00.000Z', {
+				changes: { categoryChanged: true }
+			}),
 			historyItem('h4', 'created', '2026-09-30T10:00:00.000Z')
 		];
 
@@ -324,6 +327,28 @@ test('UI-2D Historial SSR: renderizado de eventos, empty state, tabs y accesibil
 		assert.ok(staffHtml.includes('Estado modificado'), 'evento de cambio de estado');
 		assert.ok(staffHtml.includes('Prioridad modificada'), 'evento de cambio de prioridad');
 		assert.ok(staffHtml.includes('Incidencia asignada'), 'evento de asignación');
+		assert.ok(staffHtml.includes('Clasificación modificada'), 'evento de clasificación');
+		assert.ok(
+			staffHtml.includes('Se ha actualizado la clasificación de la incidencia.'),
+			'descripción de clasificación'
+		);
+		assert.equal(staffHtml.includes('Categoría modificada'), false, 'sin el texto antiguo');
+
+		// The same technical event covers a category change and a subcategory-only change
+		// (Redes / VPN -> Redes / Wi-Fi): the wording must be true for both.
+		const { describeHistoryChanges, historyEventTitle } = await server.ssrLoadModule(
+			'/src/lib/app/incident-history-presentation.ts'
+		);
+		assert.equal(historyEventTitle('category_changed'), 'Clasificación modificada');
+		assert.deepEqual(
+			describeHistoryChanges(
+				historyItem('h', 'category_changed', '2026-09-30T10:00:00.000Z', {
+					changes: { categoryChanged: true }
+				})
+			),
+			{ note: 'Se ha actualizado la clasificación de la incidencia.' }
+		);
+		assert.equal(historyEventTitle('site_changed'), 'Sede modificada', 'el resto no cambia');
 		assert.ok(staffHtml.includes('Cargar eventos anteriores'), 'botón de paginación por cursor');
 
 		// 2. Render Requester con Historial (sin notas internas)

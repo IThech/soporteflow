@@ -1542,6 +1542,7 @@ test('SoporteFlow — Etapa 5.2B: Endpoint HTTP GET /api/incidents', async (t) =
 				'teamId',
 				'supportLevel',
 				'categoryId',
+				'subcategoryId',
 				// SLA snapshot (5.4T-B)
 				'slaPolicyId',
 				'slaFirstResponseMinutes',
@@ -2015,6 +2016,7 @@ test('SoporteFlow — Etapa 5.2C: Endpoint HTTP GET /api/incidents/[id]', async 
 			'teamName',
 			'supportLevel',
 			'categoryId',
+			'subcategoryId',
 			// SLA snapshot (5.4T-B)
 			'slaPolicyId',
 			'slaFirstResponseMinutes',

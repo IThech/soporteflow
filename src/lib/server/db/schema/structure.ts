@@ -103,6 +103,45 @@ export const categories = pgTable(
 );
 
 /**
+ * Support subcategories per category and organization (V1):
+ * Must belong to a parent category in the same organization, enforced by composite FK
+ * (category_id, organization_id) -> categories(id, organization_id).
+ * Names are unique per category ignoring case and redundant whitespace.
+ * (id, category_id, organization_id) is unique to allow tenant-safe and hierarchy-safe composite FKs in incidents.
+ */
+export const subcategories = pgTable(
+	'subcategories',
+	{
+		id: uuid('id').defaultRandom().primaryKey(),
+		organizationId: uuid('organization_id')
+			.notNull()
+			.references(() => organizations.id, { onDelete: 'restrict' }),
+		categoryId: uuid('category_id').notNull(),
+		name: varchar('name', { length: 100 }).notNull(),
+		description: text('description'),
+		active: boolean('active').default(true).notNull(),
+		createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+		updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull()
+	},
+	(table) => [
+		foreignKey({
+			name: 'subcategories_category_org_fk',
+			columns: [table.categoryId, table.organizationId],
+			foreignColumns: [categories.id, categories.organizationId]
+		}).onDelete('restrict'),
+		unique('subcategories_cat_name_unique').on(table.categoryId, table.name),
+		unique('subcategories_id_org_unique').on(table.id, table.organizationId),
+		unique('subcategories_id_cat_org_unique').on(table.id, table.categoryId, table.organizationId),
+		uniqueIndex('subcategories_cat_normalized_name_unique_idx').on(
+			table.categoryId,
+			sql`lower(regexp_replace(btrim(${table.name}), '\\s+', ' ', 'g'))`
+		),
+		check('subcategories_name_check', sql`btrim(${table.name}) <> ''`),
+		index('subcategories_org_cat_idx').on(table.organizationId, table.categoryId)
+	]
+);
+
+/**
  * Customer organizations/companies serviced by the tenant (e.g. Nodhouses, ColorNou).
  * Names are unique per organization ignoring case and redundant whitespace, enforced by
  * clients_org_normalized_name_unique_idx so concurrent writes cannot create duplicates.

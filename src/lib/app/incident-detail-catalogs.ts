@@ -21,6 +21,10 @@ import { tenantKey, type TenantIdentity } from './tenant-identity.ts';
 export interface NamedItem {
 	id: string;
 	name: string;
+	/** Categories only (the tree): activity, used to offer choices (absent = active). */
+	active?: boolean;
+	/** Categories only: this category's subcategories (their names resolve like any other id). */
+	subcategories?: readonly NamedItem[];
 }
 
 export interface DetailCatalogView {
@@ -83,9 +87,14 @@ export function nameCatalogsFor(
 	return names;
 }
 
-/** id -> name map of a ready catalog (null while loading or failed: callers show "No disponible"). */
+/**
+ * id -> name map of a ready catalog (null while loading or failed: callers show "No disponible").
+ * Subcategories of a category tree are included (their ids are unique UUIDs).
+ */
 export function namesOf(view: DetailCatalogView): ReadonlyMap<string, string> | null {
-	return view.status === 'ready' ? new Map(view.items.map((item) => [item.id, item.name])) : null;
+	if (view.status !== 'ready') return null;
+	const all = view.items.flatMap((item) => [item, ...(item.subcategories ?? [])]);
+	return new Map(all.map((item) => [item.id, item.name]));
 }
 
 /** A 401 of the CURRENT identity in any detail catalog (stale answers never reach the state). */

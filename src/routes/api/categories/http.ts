@@ -3,6 +3,7 @@ import { json } from '@sveltejs/kit';
 import { IncidentServiceError } from '$lib/server/services/incidents';
 import { isActorAuthorizationError } from '$lib/server/auth/transactional-authorization';
 import type { CategoryRecord } from '$lib/server/services/categories';
+import type { CategoryTreeRecord, SubcategoryRecord } from '$lib/server/services/subcategories';
 import { logUnexpectedError } from '$lib/server/logging/logger';
 
 export const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -25,6 +26,25 @@ export function toCategoryDto(category: CategoryRecord) {
 		active: category.active,
 		createdAt: category.createdAt,
 		updatedAt: category.updatedAt
+	};
+}
+
+export function toSubcategoryDto(subcategory: SubcategoryRecord) {
+	return {
+		id: subcategory.id,
+		categoryId: subcategory.categoryId,
+		name: subcategory.name,
+		description: subcategory.description,
+		active: subcategory.active,
+		createdAt: subcategory.createdAt,
+		updatedAt: subcategory.updatedAt
+	};
+}
+
+export function toCategoryTreeDto(node: CategoryTreeRecord) {
+	return {
+		...toCategoryDto(node),
+		subcategories: node.subcategories.map(toSubcategoryDto)
 	};
 }
 
@@ -72,6 +92,18 @@ export function categoryServiceFailure(error: unknown) {
 				'CATEGORY_NAME_DUPLICATE',
 				'A category with this name already exists in the organization.'
 			);
+		if (error.code === 'CATEGORY_INACTIVE')
+			return failure(409, 'CATEGORY_INACTIVE', 'Category is inactive.');
+		if (error.code === 'SUBCATEGORY_NOT_FOUND')
+			return failure(404, 'SUBCATEGORY_NOT_FOUND', 'Subcategory not found.');
+		if (error.code === 'SUBCATEGORY_NAME_DUPLICATE')
+			return failure(
+				409,
+				'SUBCATEGORY_NAME_DUPLICATE',
+				'A subcategory with this name already exists in this category.'
+			);
+		if (error.code === 'SUBCATEGORY_INACTIVE')
+			return failure(409, 'SUBCATEGORY_INACTIVE', 'Subcategory is inactive.');
 		// Organization state only changes between authorization and write: treat as denied.
 		if (error.code === 'ORGANIZATION_NOT_FOUND' || error.code === 'ORGANIZATION_NOT_OPERATIONAL')
 			return failure(403, 'FORBIDDEN', 'Permission denied.');
