@@ -26,7 +26,7 @@ function walk(dir, out = []) {
 }
 
 const read = (rel) => fs.readFileSync(path.resolve(rel), 'utf8');
-const ADMIN_PAGES = ['sites', 'clients', 'categories'].map((name) => ({
+const ADMIN_PAGES = ['sites', 'clients', 'categories', 'sla-policies'].map((name) => ({
 	name,
 	file: `src/routes/app/admin/${name}/+page.svelte`
 }));
@@ -96,7 +96,8 @@ test('admin: toda mutación ignora resultados, errores y 401 de otro usuario/org
 			'handleDialogSubmit',
 			'handleToggleCategoryActive',
 			'handleToggleSubcategoryActive'
-		]
+		],
+		'sla-policies': ['handleSave', 'handleToggleActive']
 	};
 	for (const { name, file } of ADMIN_PAGES) {
 		const source = read(file);
@@ -138,7 +139,8 @@ test('admin: sin doble envío; Escape/fondo no abandonan una escritura en curso'
 	const submit = {
 		sites: 'handleSaveSite',
 		clients: 'handleSaveClient',
-		categories: 'handleDialogSubmit'
+		categories: 'handleDialogSubmit',
+		'sla-policies': 'handleSave'
 	};
 	for (const { name, file } of ADMIN_PAGES) {
 		const source = read(file);
@@ -202,7 +204,9 @@ test('fecha corta de catálogo: un único formateador, igual que antes y sin "In
 	for (const { name, file } of ADMIN_PAGES) {
 		const source = read(file);
 		assert.doesNotMatch(source, /function formatDate\(/, `${name}: sin copia local`);
-		assert.match(source, /import \{ formatShortDate \} from '\$lib\/app\/date-presentation';/);
+		// pages with a date column use the shared formatter (SLA policies show no dates)
+		if (name !== 'sla-policies')
+			assert.match(source, /import \{ formatShortDate \} from '\$lib\/app\/date-presentation';/);
 	}
 });
 
@@ -263,6 +267,50 @@ test('admin hub: cuadrícula uniforme (filas iguales y pies de tarjeta del mismo
 		assert.match(source, new RegExp(`href: ${active}`));
 });
 
+test('administración: Topbar y panel usan una única regla, igual a los guards de cada página', async () => {
+	const { ADMIN_MODULE_ACCESS } = await import('../src/lib/app/capabilities.ts');
+	// each module's capabilities are exactly what its own page guard accepts to open it
+	const pages = {
+		clients: 'clients',
+		sites: 'sites',
+		categories: 'categories',
+		slaPolicies: 'sla-policies'
+	};
+	assert.deepEqual(Object.keys(ADMIN_MODULE_ACCESS).sort(), Object.keys(pages).sort());
+	for (const [key, dir] of Object.entries(pages)) {
+		const source = read(`src/routes/app/admin/${dir}/+page.svelte`);
+		const guard = source.match(/const canView = \$derived\(([^;]*)\);/)?.[1];
+		// clients has no read-only guard: canManage opens the page
+		const opens = guard ?? source.match(/const canManage = \$derived\(([^;]*)\);/)?.[1];
+		const accepted = [...opens.matchAll(/'([a-z_]+:[a-z_]+)'/g)].map((m) => m[1]);
+		const viaManage = /canManage \|\|/.test(opens)
+			? [source.match(/const canManage = \$derived\(capabilities\.includes\('([^']+)'\)\);/)[1]]
+			: [];
+		assert.deepEqual(
+			[...accepted, ...viaManage].sort(),
+			[...ADMIN_MODULE_ACCESS[key]].sort(),
+			`${dir}: el mapa coincide con el guard real de la página`
+		);
+	}
+	// no second, divergent list in the shell or the hub
+	const shell = read('src/lib/components/shell/AppShell.svelte');
+	assert.match(shell, /context\.status === 'ready' && hasAdminAccess\(context\.capabilities\)/);
+	assert.doesNotMatch(shell, /capabilities\.includes\('clients:manage'\)/);
+	const hub = read('src/routes/app/admin/+page.svelte');
+	assert.match(hub, /const access = \$derived\(adminModuleAccess\(capabilities\)\);/);
+	assert.match(hub, /const canAccess = \$derived\(canAccessAdmin\(capabilities\)\);/);
+	assert.match(hub, /\{#if !canAccess\}/);
+	assert.doesNotMatch(hub, /capabilities\.includes\('(clients|sites|categories):manage'\)/);
+	// an implemented module this user cannot open is shown without a link (no dead end)
+	for (const module of ['clients', 'sites', 'categories', 'slaPolicies'])
+		assert.match(hub, new RegExp(`module: '${module}'`));
+	assert.match(hub, /\{#if blocked\(mod\)\}\s*<Badge tone="neutral">Sin acceso<\/Badge>/);
+	assert.match(
+		hub,
+		/\{#if blocked\(mod\)\}\s*<span class="sf-card-inactive-label">Sin permisos para este módulo<\/span>\s*\{:else if mod\.active && mod\.href\}/
+	);
+});
+
 test('topbar: comparte el contenedor del contenido (sus bordes quedan alineados)', () => {
 	const tokens = read('src/lib/styles/tokens.css');
 	assert.match(tokens, /--content-max-width: 80rem;/);
@@ -289,6 +337,18 @@ test('admin: el foco vuelve al disparador tras guardar, cancelar o Escape', () =
 		assert.doesNotMatch(success, /dialogMode = 'closed'/, `${name}: éxito sin cerrar a mano`);
 		assert.equal(success.match(/closeDialog\(\);/g)?.length, 2, `${name}: crear y editar`);
 	}
+	// SLA policies: same flow (closing through closeDialog returns focus to the trigger)
+	const sla = read('src/routes/app/admin/sla-policies/+page.svelte');
+	assert.match(sla, /onclick=\{\(e\) => openEditDialog\(policy, e\)\}/);
+	const slaSave = functionBody(sla, 'handleSave');
+	const slaSuccess = slaSave.slice(0, slaSave.indexOf('} catch (err) {'));
+	assert.doesNotMatch(slaSuccess, /dialogMode = 'closed'/, 'sla-policies: éxito sin cerrar a mano');
+	assert.match(slaSuccess, /formSubmitting = false;\s*closeDialog\(\);/);
+	assert.match(
+		sla.slice(sla.indexOf('function closeDialog() {')),
+		/^function closeDialog\(\) \{[\s\S]*?triggerElement\?\.focus\(\);/
+	);
+
 	// categories: Input's bound element IS the <input> (no querySelector on it)
 	const categories = read('src/routes/app/admin/categories/+page.svelte');
 	assert.match(categories, /setTimeout\(\(\) => nameInputElement\?\.focus\(\), 50\)/);

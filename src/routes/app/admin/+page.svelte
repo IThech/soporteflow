@@ -4,6 +4,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { signOut } from '$lib/api/auth';
+	import { adminModuleAccess, canAccessAdmin, type AdminModuleKey } from '$lib/app/capabilities';
 	import { useOrganizationContext } from '$lib/app/context';
 	import { attemptSignOut, SESSION_EXPIRED_PATH, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
 	import { session } from '$lib/stores/session';
@@ -24,11 +25,9 @@
 	const ready = $derived($context.status === 'ready');
 	const capabilities = $derived(ready ? $context.capabilities : []);
 	const activeOrg = $derived(ready ? $context.activeOrganization : null);
-	const canManage = $derived(
-		capabilities.includes('clients:manage') ||
-			capabilities.includes('sites:manage') ||
-			capabilities.includes('categories:manage')
-	);
+	// Same rule as the Topbar entry: the hub is for whoever can open at least one admin page.
+	const access = $derived(adminModuleAccess(capabilities));
+	const canAccess = $derived(canAccessAdmin(capabilities));
 
 	function expireSession() {
 		session.clearSession();
@@ -88,13 +87,24 @@
 			: resolve('/app/admin/categories')
 	);
 
+	const slaPoliciesHref = $derived(
+		activeOrg
+			? `${resolve('/app/admin/sla-policies')}?organizationId=${encodeURIComponent(activeOrg.id)}`
+			: resolve('/app/admin/sla-policies')
+	);
+
 	interface AdminModule {
 		title: string;
 		description: string;
 		active: boolean;
+		/** Implemented module: its page guard (capabilities.ts) decides if this user can open it. */
+		module?: AdminModuleKey;
 		href?: string;
 		actionLabel?: string;
 	}
+
+	/** An implemented module this user cannot open: shown, but without a link to a dead end. */
+	const blocked = (mod: AdminModule) => mod.active && mod.module && !access[mod.module];
 
 	const modules: readonly AdminModule[] = $derived([
 		{
@@ -102,6 +112,7 @@
 			description:
 				'Gestión del catálogo de empresas, cuentas y clientes atendidos por la organización.',
 			active: true,
+			module: 'clients',
 			href: clientsHref,
 			actionLabel: 'Gestionar clientes'
 		},
@@ -110,6 +121,7 @@
 			description:
 				'Ubicaciones físicas, centros de trabajo y delegaciones asociadas a las incidencias.',
 			active: true,
+			module: 'sites',
 			href: sitesHref,
 			actionLabel: 'Gestionar sedes'
 		},
@@ -128,6 +140,7 @@
 			title: 'Categorías',
 			description: 'Taxonomía de soporte, árbol de subcategorías y clasificación de incidencias.',
 			active: true,
+			module: 'categories',
 			href: categoriesHref,
 			actionLabel: 'Gestionar categorías'
 		},
@@ -135,7 +148,13 @@
 			title: 'Políticas SLA',
 			description:
 				'Acuerdos de nivel de servicio, tiempos máximos de primera respuesta y resolución.',
-			active: false
+			active: true,
+			module: 'slaPolicies',
+			href: slaPoliciesHref,
+			// sla:view alone reads the policies; writing needs sla:manage
+			actionLabel: capabilities.includes('sla:manage')
+				? 'Gestionar políticas SLA'
+				: 'Ver políticas SLA'
 		},
 		{
 			title: 'Webhooks',
@@ -174,7 +193,7 @@
 					'la organización'}."
 			/>
 
-			{#if !canManage}
+			{#if !canAccess}
 				<div class="sf-guard-box">
 					<EmptyState
 						title="Acceso restringido"
@@ -189,7 +208,9 @@
 								<div class="sf-card-icon" aria-hidden="true">
 									<Icon name="building" size={20} />
 								</div>
-								{#if mod.active}
+								{#if blocked(mod)}
+									<Badge tone="neutral">Sin acceso</Badge>
+								{:else if mod.active}
 									<Badge tone="success">Activo</Badge>
 								{:else}
 									<Badge tone="neutral">Próximamente</Badge>
@@ -200,7 +221,9 @@
 								<p class="sf-card-description">{mod.description}</p>
 							</div>
 							<div class="sf-card-footer">
-								{#if mod.active && mod.href}
+								{#if blocked(mod)}
+									<span class="sf-card-inactive-label">Sin permisos para este módulo</span>
+								{:else if mod.active && mod.href}
 									<Button variant="secondary" size="sm" href={mod.href}>
 										{mod.actionLabel ?? 'Acceder'}
 									</Button>

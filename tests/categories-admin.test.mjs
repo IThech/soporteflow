@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 test('SoporteFlow — Categorías: Panel de administración y UI', async (t) => {
-	await t.test('1. Tarjeta Categorías en /app/admin/+page.svelte', () => {
+	await t.test('1. Tarjeta Categorías en /app/admin/+page.svelte', async () => {
 		const adminPagePath = path.resolve('src/routes/app/admin/+page.svelte');
 		assert.ok(fs.existsSync(adminPagePath), '/app/admin/+page.svelte debe existir');
 		const content = fs.readFileSync(adminPagePath, 'utf8');
@@ -38,12 +38,17 @@ test('SoporteFlow — Categorías: Panel de administración y UI', async (t) => 
 			'La tarjeta de Categorías debe tener actionLabel "Gestionar categorías"'
 		);
 
-		// Check permissions in canManage
+		// Access comes from the shared admin rule (capabilities.ts), not a local list
 		assert.match(
 			content,
-			/categories:manage/,
-			'canManage debe incluir la capacidad categories:manage'
+			/title:\s*'Categorías'[\s\S]*?module:\s*'categories'/,
+			'La tarjeta de Categorías se abre según el guard real del módulo'
 		);
+		const { ADMIN_MODULE_ACCESS } = await import('../src/lib/app/capabilities.ts');
+		assert.deepEqual([...ADMIN_MODULE_ACCESS.categories].sort(), [
+			'categories:manage',
+			'categories:view'
+		]);
 	});
 
 	await t.test('2. UI de Categorías: tokens de diseño, data-sf-ui y accesibilidad', () => {

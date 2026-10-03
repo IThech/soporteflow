@@ -33,6 +33,36 @@ export const ADMIN_CAPABILITIES = [
 
 const has = (caps: Capabilities, id: string) => caps.includes(id);
 
+/**
+ * Administración (real pages only): the capabilities that OPEN each page, i.e. exactly its page
+ * guard. Mutations stay gated by each page (`*:manage`) and, above all, by the server. One source
+ * for the Topbar entry and the /app/admin hub, so they cannot diverge:
+ * - clients: the page requires clients:manage (it does not read with clients:view);
+ * - sites / categories: view or manage;
+ * - slaPolicies: sla:view (listing needs it on the server too; sla:manage only adds writes).
+ */
+export const ADMIN_MODULE_ACCESS = {
+	clients: ['clients:manage'],
+	sites: ['sites:manage', 'sites:view'],
+	categories: ['categories:manage', 'categories:view'],
+	slaPolicies: ['sla:view']
+} as const satisfies Record<string, readonly string[]>;
+
+export type AdminModuleKey = keyof typeof ADMIN_MODULE_ACCESS;
+
+/** Which existing admin pages these capabilities can open. */
+export function adminModuleAccess(caps: Capabilities): Record<AdminModuleKey, boolean> {
+	const access = {} as Record<AdminModuleKey, boolean>;
+	for (const key of Object.keys(ADMIN_MODULE_ACCESS) as AdminModuleKey[])
+		access[key] = ADMIN_MODULE_ACCESS[key].some((id) => has(caps, id));
+	return access;
+}
+
+/** The "Administración" entry is offered only if at least one admin page can be opened. */
+export function canAccessAdmin(caps: Capabilities): boolean {
+	return Object.values(adminModuleAccess(caps)).some(Boolean);
+}
+
 export interface IncidentReadScope {
 	viewAll: boolean;
 	viewOwn: boolean;

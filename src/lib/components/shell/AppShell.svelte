@@ -2,7 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
 	import type { OrganizationContextState } from '$lib/app/organization-context';
-	import { navigationModel } from '$lib/app/capabilities';
+	import { canAccessAdmin as hasAdminAccess, navigationModel } from '$lib/app/capabilities';
 	import { session } from '$lib/stores/session';
 	import Sidebar from './Sidebar.svelte';
 	import Topbar from './Topbar.svelte';
@@ -52,8 +52,9 @@
 			(context.status === 'ready' || $session.isAuthenticated ? 'Usuario' : null)
 	);
 	const resolvedEmail = $derived(currentUser?.email?.trim() ?? null);
+	// Any admin page this user can open (same rule as the /app/admin hub), not one module.
 	const canAccessAdmin = $derived(
-		context.status === 'ready' && context.capabilities.includes('clients:manage')
+		context.status === 'ready' && hasAdminAccess(context.capabilities)
 	);
 	const adminHref = $derived(
 		canAccessAdmin && context.activeOrganizationId

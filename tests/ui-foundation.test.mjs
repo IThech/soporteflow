@@ -13,7 +13,9 @@ import { IncidentApiError } from '../src/lib/api/incidents.ts';
 import { AuthApiError } from '../src/lib/api/auth.ts';
 import { createRequestScope, isStaleRequest } from '../src/lib/app/request-scope.ts';
 import {
+	adminModuleAccess,
 	availableQueues,
+	canAccessAdmin,
 	defaultQueue,
 	incidentReadScope,
 	navigationModel,
@@ -219,6 +221,39 @@ function fakeMe(organizations = [ORG_A, ORG_B], caps = {}) {
 		}
 	};
 }
+
+test('administración: se ofrece si alguna página admin se puede abrir (guards reales)', () => {
+	const none = { clients: false, sites: false, categories: false, slaPolicies: false };
+	const cases = [
+		// A-D: each module's managers
+		[['clients:manage'], { ...none, clients: true }],
+		[['sites:manage'], { ...none, sites: true }],
+		[['categories:manage'], { ...none, categories: true }],
+		[['sla:view', 'sla:manage'], { ...none, slaPolicies: true }],
+		// E: readers open their page too (sla:view reads the SLA policies)
+		[['sla:view'], { ...none, slaPolicies: true }],
+		[['sites:view'], { ...none, sites: true }],
+		[['categories:view'], { ...none, categories: true }],
+		// the Clientes page itself requires clients:manage: clients:view opens nothing
+		[['clients:view'], none],
+		// listing SLA policies needs sla:view (server too): sla:manage / sla:assign alone open nothing
+		[['sla:manage'], none],
+		[['sla:assign'], none],
+		// F: no relevant capability, future modules without a page, role names
+		[[], none],
+		[['incidents:view_all', 'incidents:create'], none],
+		[['roles:view', 'memberships:view', 'webhooks:view', 'audit:view', 'automations:view'], none],
+		[['organization_admin', 'technician'], none]
+	];
+	for (const [caps, expected] of cases) {
+		assert.deepEqual(adminModuleAccess(caps), expected, caps.join() || 'ninguna');
+		assert.equal(canAccessAdmin(caps), Object.values(expected).some(Boolean), caps.join());
+	}
+	assert.equal(
+		canAccessAdmin(['clients:manage', 'sites:view', 'categories:view', 'sla:view']),
+		true
+	);
+});
 
 test('contexto: org explícita válida, inválida (sin sustitución), recordada, única y varias', async () => {
 	const me = fakeMe([ORG_A, ORG_B], {

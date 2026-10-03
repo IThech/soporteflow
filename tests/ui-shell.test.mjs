@@ -214,7 +214,7 @@ test('UI-1 shell y workspace (render SSR)', async (t) => {
 	});
 
 	await t.test(
-		'navegación desacoplada: Administración en Topbar solo con clients:manage, Sidebar estrictamente operativo',
+		'navegación desacoplada: Administración en Topbar si abre alguna página admin, Sidebar estrictamente operativo',
 		() => {
 			// 1. Admin with clients:manage has topbar admin button, but sidebar is strictly operational
 			const adminHtml = shell(
@@ -253,6 +253,33 @@ test('UI-1 shell y workspace (render SSR)', async (t) => {
 				/sf-topbar-admin-btn|href="\/app\/admin/,
 				'Requester no ve enlace de administración en topbar'
 			);
+
+			// 4. Any capability that opens an admin page offers the entry (not only clients:manage)
+			const adminLink = new RegExp(
+				`href="/app/admin\\?organizationId=${ORG_A.id}"[^>]*class="sf-topbar-admin-btn`
+			);
+			for (const caps of [
+				['sites:manage'],
+				['sites:view'],
+				['categories:manage'],
+				['categories:view'],
+				['sla:view', 'sla:manage'],
+				['sla:view']
+			])
+				assert.match(shell(readyContext(['incidents:view_all', ...caps])), adminLink, caps.join());
+			// ...and nothing that opens no admin page does (future modules, assignment, roles)
+			for (const caps of [
+				[],
+				['sla:assign'],
+				['sla:manage'],
+				['audit:view', 'roles:view', 'webhooks:view', 'memberships:view'],
+				['organization_admin']
+			])
+				assert.doesNotMatch(
+					shell(readyContext(['incidents:view_all', ...caps])),
+					/sf-topbar-admin-btn|href="\/app\/admin/,
+					`sin administración: ${caps.join() || 'ninguna'}`
+				);
 		}
 	);
 
