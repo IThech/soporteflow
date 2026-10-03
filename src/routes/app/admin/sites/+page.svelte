@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { focusTrap } from '$lib/ui/focus-trap';
 	import { onDestroy, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -13,8 +14,10 @@
 		SiteApiError
 	} from '$lib/api/sites';
 	import { useOrganizationContext } from '$lib/app/context';
+	import { formatShortDate } from '$lib/app/date-presentation';
 	import { presentApiError } from '$lib/app/error-presentation';
-	import { attemptSignOut, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
+	import { sameTenant, tenantIdentityOf } from '$lib/app/tenant-identity';
+	import { attemptSignOut, SESSION_EXPIRED_PATH, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
 	import { session } from '$lib/stores/session';
 	import AppShell from '$lib/components/shell/AppShell.svelte';
 	import OrganizationGate from '$lib/components/shell/OrganizationGate.svelte';
@@ -72,7 +75,20 @@
 
 	function expireSession() {
 		session.clearSession();
-		void goto(resolve('/login?expired=true'));
+		void goto(resolve(SESSION_EXPIRED_PATH));
+	}
+
+	/** A mutation's outcome (data, error or 401) applies only if user/org/generation are unchanged. */
+	function isCurrentTenant(started: ReturnType<typeof tenantIdentityOf>): boolean {
+		return started !== null && sameTenant(started, tenantIdentityOf(context.get()));
+	}
+
+	/** The open dialog belonged to the previous tenant: drop it instead of re-submitting there. */
+	function discardStaleDialog() {
+		dialogMode = 'closed';
+		editingSite = null;
+		formError = null;
+		triggerElement = null;
 	}
 
 	async function loadSites(orgId: string) {
@@ -204,13 +220,14 @@
 
 	async function handleSaveSite(e: SubmitEvent) {
 		e.preventDefault();
-		if (!activeOrg) return;
+		if (!activeOrg || formSubmitting) return;
 		const nameTrimmed = formName.trim();
 		if (!nameTrimmed) {
 			formError = 'El nombre de la sede es obligatorio.';
 			return;
 		}
 
+		const tenant = tenantIdentityOf(context.get());
 		formSubmitting = true;
 		formError = null;
 
@@ -231,8 +248,10 @@
 					postalCode: postalCodeVal,
 					country: countryVal
 				});
+				if (!isCurrentTenant(tenant)) return discardStaleDialog();
 				sites = [...sites, created].sort((a, b) => a.name.localeCompare(b.name));
-				dialogMode = 'closed';
+				formSubmitting = false;
+				closeDialog();
 			} else if (dialogMode === 'edit' && editingSite) {
 				const updated = await updateSite({
 					organizationId: activeOrg.id,
@@ -244,12 +263,15 @@
 					postalCode: postalCodeVal,
 					country: countryVal
 				});
+				if (!isCurrentTenant(tenant)) return discardStaleDialog();
 				sites = sites
 					.map((s) => (s.id === updated.id ? updated : s))
 					.sort((a, b) => a.name.localeCompare(b.name));
-				dialogMode = 'closed';
+				formSubmitting = false;
+				closeDialog();
 			}
 		} catch (err) {
+			if (!isCurrentTenant(tenant)) return discardStaleDialog();
 			if (err instanceof SiteApiError && err.status === 401) {
 				expireSession();
 				return;
@@ -262,6 +284,7 @@
 
 	async function handleToggleActive(site: Site) {
 		if (!activeOrg || !canManage || togglingId) return;
+		const tenant = tenantIdentityOf(context.get());
 		togglingId = site.id;
 		actionError = null;
 
@@ -271,8 +294,10 @@
 				siteId: site.id,
 				active: !site.active
 			});
+			if (!isCurrentTenant(tenant)) return;
 			sites = sites.map((s) => (s.id === updated.id ? updated : s));
 		} catch (err) {
+			if (!isCurrentTenant(tenant)) return;
 			if (err instanceof SiteApiError && err.status === 401) {
 				expireSession();
 				return;
@@ -300,19 +325,6 @@
 		}
 		session.clearSession();
 		await goto(resolve('/login'));
-	}
-
-	function formatDate(iso: string): string {
-		try {
-			const date = new Date(iso);
-			return new Intl.DateTimeFormat('es-ES', {
-				day: 'numeric',
-				month: 'short',
-				year: 'numeric'
-			}).format(date);
-		} catch {
-			return iso;
-		}
 	}
 
 	const adminHref = $derived(
@@ -397,6 +409,7 @@
 							type="button"
 							class="sf-tab-btn"
 							class:active={statusFilter === 'all'}
+							aria-pressed={statusFilter === 'all'}
 							onclick={() => (statusFilter = 'all')}
 						>
 							Todas ({sites.length})
@@ -405,6 +418,7 @@
 							type="button"
 							class="sf-tab-btn"
 							class:active={statusFilter === 'active'}
+							aria-pressed={statusFilter === 'active'}
 							onclick={() => (statusFilter = 'active')}
 						>
 							Activas ({sites.filter((s) => s.active).length})
@@ -413,6 +427,7 @@
 							type="button"
 							class="sf-tab-btn"
 							class:active={statusFilter === 'inactive'}
+							aria-pressed={statusFilter === 'inactive'}
 							onclick={() => (statusFilter = 'inactive')}
 						>
 							Inactivas ({sites.filter((s) => !s.active).length})
@@ -482,10 +497,10 @@
 						<table class="sf-sites-table">
 							<thead>
 								<tr>
-									<th scope="col">Sede</th>
-									<th scope="col">Ubicación</th>
-									<th scope="col">Estado</th>
-									<th scope="col">Fecha de alta</th>
+									<th scope="col" class="sf-col-name">Sede</th>
+									<th scope="col" class="sf-col-location">Ubicación</th>
+									<th scope="col" class="sf-col-status">Estado</th>
+									<th scope="col" class="sf-col-date">Fecha de alta</th>
 									{#if canManage}
 										<th scope="col" class="sf-col-actions">Acciones</th>
 									{/if}
@@ -521,7 +536,7 @@
 											{/if}
 										</td>
 										<td class="sf-cell-date">
-											{formatDate(site.createdAt)}
+											{formatShortDate(site.createdAt)}
 										</td>
 										{#if canManage}
 											<td class="sf-cell-actions">
@@ -529,7 +544,7 @@
 													<Button
 														variant="secondary"
 														size="sm"
-														onclick={() => openEditDialog(site)}
+														onclick={(e) => openEditDialog(site, e)}
 														ariaLabel="Editar {site.name}"
 													>
 														<span>Editar</span>
@@ -574,6 +589,7 @@
 						aria-modal="true"
 						aria-labelledby="site-dialog-title"
 						tabindex="-1"
+						use:focusTrap
 					>
 						<header class="sf-modal-header">
 							<h2 id="site-dialog-title" class="sf-modal-title">
@@ -834,7 +850,7 @@
 		align-items: center;
 		justify-content: center;
 		gap: var(--space-3);
-		padding: var(--space-12) var(--space-4);
+		padding: var(--space-8) var(--space-4);
 		color: var(--text-muted);
 		font-size: var(--text-sm);
 	}
@@ -843,12 +859,15 @@
 		background: var(--surface-card);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-xl);
-		overflow: hidden;
+		overflow-x: auto;
+		-webkit-overflow-scrolling: touch;
 		box-shadow: var(--sf-shadow-card);
 	}
 
 	.sf-sites-table {
 		width: 100%;
+		/* sum of the column min-widths: below it the wrapper scrolls, the page never does */
+		min-width: 850px;
 		border-collapse: collapse;
 		text-align: left;
 		font-size: var(--text-sm);
@@ -861,12 +880,13 @@
 		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		padding: var(--space-3) var(--space-4);
+		padding: var(--space-3-5) var(--space-5);
 		border-bottom: 1px solid var(--border);
+		white-space: nowrap;
 	}
 
 	.sf-sites-table td {
-		padding: var(--space-3-5) var(--space-4);
+		padding: var(--space-4) var(--space-5);
 		border-bottom: 1px solid var(--border-subtle);
 		vertical-align: middle;
 	}
@@ -880,8 +900,20 @@
 	}
 
 	.sf-row-inactive {
-		opacity: 0.75;
 		background: var(--surface-muted);
+	}
+
+	/* dim the data, never the action buttons (their contrast must stay AA) */
+	.sf-row-inactive td:not(.sf-cell-actions) {
+		opacity: 0.75;
+	}
+
+	/* Desktop column split (auto layout: these are shares of the table width, the min-widths keep
+	   columns legible; below them the table scrolls inside .sf-table-wrapper). Actions take the rest. */
+	.sf-col-name,
+	.sf-cell-name {
+		width: 22%;
+		min-width: 180px;
 	}
 
 	.sf-cell-name {
@@ -890,10 +922,20 @@
 	}
 
 	.sf-name-row {
-		display: flex;
+		display: inline-flex;
 		align-items: center;
 		gap: var(--space-2);
 		flex-wrap: wrap;
+	}
+
+	.sf-name-text {
+		overflow-wrap: break-word;
+	}
+
+	.sf-col-location,
+	.sf-cell-location {
+		width: 26%;
+		min-width: 200px;
 	}
 
 	.sf-cell-location {
@@ -914,13 +956,27 @@
 		color: var(--text-subtle);
 	}
 
+	.sf-col-status,
+	.sf-cell-status {
+		width: 14%;
+		min-width: 120px;
+	}
+
+	.sf-col-date,
+	.sf-cell-date {
+		width: 16%;
+		min-width: 140px;
+	}
+
 	.sf-cell-date {
 		color: var(--text-muted);
 		font-size: var(--text-xs);
 		white-space: nowrap;
 	}
 
-	.sf-col-actions {
+	.sf-col-actions,
+	.sf-cell-actions {
+		min-width: 210px;
 		text-align: right;
 	}
 
@@ -929,11 +985,39 @@
 		white-space: nowrap;
 	}
 
+	/* From tablet width the table may scroll inside its card: pin the actions to the visible right
+	   edge (opaque backgrounds mirror the row states). Phones keep plain scrolling so the row name,
+	   which identifies what an action targets, stays readable. */
+	@media (min-width: 640px) {
+		.sf-sites-table th.sf-col-actions,
+		.sf-sites-table td.sf-cell-actions {
+			position: sticky;
+			right: 0;
+			box-shadow: -1px 0 0 var(--border-subtle);
+		}
+
+		.sf-sites-table th.sf-col-actions {
+			background: var(--surface-subtle);
+		}
+
+		.sf-sites-table td.sf-cell-actions {
+			background: var(--surface-card);
+		}
+
+		.sf-sites-table .sf-row-inactive td.sf-cell-actions {
+			background: var(--surface-muted);
+		}
+
+		.sf-sites-table tbody tr:hover td.sf-cell-actions {
+			background: var(--surface-hover);
+		}
+	}
+
 	.sf-actions-group {
 		display: inline-flex;
 		align-items: center;
 		justify-content: flex-end;
-		gap: var(--space-2);
+		gap: var(--space-3);
 	}
 
 	.sf-form-row {

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { focusTrap } from '$lib/ui/focus-trap';
 	import { onDestroy, untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -13,8 +14,10 @@
 		ClientApiError
 	} from '$lib/api/clients';
 	import { useOrganizationContext } from '$lib/app/context';
+	import { formatShortDate } from '$lib/app/date-presentation';
 	import { presentApiError } from '$lib/app/error-presentation';
-	import { attemptSignOut, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
+	import { sameTenant, tenantIdentityOf } from '$lib/app/tenant-identity';
+	import { attemptSignOut, SESSION_EXPIRED_PATH, SIGN_OUT_FAILED_MESSAGE } from '$lib/app/sign-out';
 	import { session } from '$lib/stores/session';
 	import AppShell from '$lib/components/shell/AppShell.svelte';
 	import OrganizationGate from '$lib/components/shell/OrganizationGate.svelte';
@@ -68,7 +71,20 @@
 
 	function expireSession() {
 		session.clearSession();
-		void goto(resolve('/login?expired=true'));
+		void goto(resolve(SESSION_EXPIRED_PATH));
+	}
+
+	/** A mutation's outcome (data, error or 401) applies only if user/org/generation are unchanged. */
+	function isCurrentTenant(started: ReturnType<typeof tenantIdentityOf>): boolean {
+		return started !== null && sameTenant(started, tenantIdentityOf(context.get()));
+	}
+
+	/** The open dialog belonged to the previous tenant: drop it instead of re-submitting there. */
+	function discardStaleDialog() {
+		dialogMode = 'closed';
+		editingClient = null;
+		formError = null;
+		triggerElement = null;
 	}
 
 	async function loadClients(orgId: string) {
@@ -186,13 +202,14 @@
 
 	async function handleSaveClient(e: SubmitEvent) {
 		e.preventDefault();
-		if (!activeOrg) return;
+		if (!activeOrg || formSubmitting) return;
 		const nameTrimmed = formName.trim();
 		if (!nameTrimmed) {
 			formError = 'El nombre del cliente es obligatorio.';
 			return;
 		}
 
+		const tenant = tenantIdentityOf(context.get());
 		formSubmitting = true;
 		formError = null;
 
@@ -203,8 +220,10 @@
 					name: nameTrimmed,
 					description: formDescription.trim() || undefined
 				});
+				if (!isCurrentTenant(tenant)) return discardStaleDialog();
 				clients = [...clients, created].sort((a, b) => a.name.localeCompare(b.name));
-				dialogMode = 'closed';
+				formSubmitting = false;
+				closeDialog();
 			} else if (dialogMode === 'edit' && editingClient) {
 				const updated = await updateClient({
 					organizationId: activeOrg.id,
@@ -212,12 +231,15 @@
 					name: nameTrimmed,
 					description: formDescription.trim() || null
 				});
+				if (!isCurrentTenant(tenant)) return discardStaleDialog();
 				clients = clients
 					.map((c) => (c.id === updated.id ? updated : c))
 					.sort((a, b) => a.name.localeCompare(b.name));
-				dialogMode = 'closed';
+				formSubmitting = false;
+				closeDialog();
 			}
 		} catch (err) {
+			if (!isCurrentTenant(tenant)) return discardStaleDialog();
 			if (err instanceof ClientApiError && err.status === 401) {
 				expireSession();
 				return;
@@ -230,6 +252,7 @@
 
 	async function handleToggleActive(client: Client) {
 		if (!activeOrg || !canManage || togglingId) return;
+		const tenant = tenantIdentityOf(context.get());
 		togglingId = client.id;
 		actionError = null;
 
@@ -239,8 +262,10 @@
 				clientId: client.id,
 				active: !client.active
 			});
+			if (!isCurrentTenant(tenant)) return;
 			clients = clients.map((c) => (c.id === updated.id ? updated : c));
 		} catch (err) {
+			if (!isCurrentTenant(tenant)) return;
 			if (err instanceof ClientApiError && err.status === 401) {
 				expireSession();
 				return;
@@ -268,18 +293,6 @@
 		}
 		session.clearSession();
 		await goto(resolve('/login'));
-	}
-
-	function formatDate(iso: string) {
-		try {
-			return new Date(iso).toLocaleDateString('es-ES', {
-				year: 'numeric',
-				month: 'short',
-				day: 'numeric'
-			});
-		} catch {
-			return iso;
-		}
 	}
 
 	const adminHref = $derived(
@@ -364,6 +377,7 @@
 							type="button"
 							class="sf-tab-btn"
 							class:active={statusFilter === 'all'}
+							aria-pressed={statusFilter === 'all'}
 							onclick={() => (statusFilter = 'all')}
 						>
 							Todos ({clients.length})
@@ -372,6 +386,7 @@
 							type="button"
 							class="sf-tab-btn"
 							class:active={statusFilter === 'active'}
+							aria-pressed={statusFilter === 'active'}
 							onclick={() => (statusFilter = 'active')}
 						>
 							Activos ({clients.filter((c) => c.active).length})
@@ -380,6 +395,7 @@
 							type="button"
 							class="sf-tab-btn"
 							class:active={statusFilter === 'inactive'}
+							aria-pressed={statusFilter === 'inactive'}
 							onclick={() => (statusFilter = 'inactive')}
 						>
 							Inactivos ({clients.filter((c) => !c.active).length})
@@ -483,7 +499,7 @@
 											{/if}
 										</td>
 										<td class="sf-cell-date">
-											{formatDate(client.createdAt)}
+											{formatShortDate(client.createdAt)}
 										</td>
 										{#if canManage}
 											<td class="sf-cell-actions">
@@ -491,7 +507,7 @@
 													<Button
 														variant="secondary"
 														size="sm"
-														onclick={() => openEditDialog(client)}
+														onclick={(e) => openEditDialog(client, e)}
 														ariaLabel="Editar {client.name}"
 													>
 														<span>Editar</span>
@@ -535,6 +551,7 @@
 						aria-modal="true"
 						aria-labelledby="client-dialog-title"
 						tabindex="-1"
+						use:focusTrap
 					>
 						<header class="sf-modal-header">
 							<h2 id="client-dialog-title" class="sf-modal-title">
@@ -745,7 +762,7 @@
 		align-items: center;
 		justify-content: center;
 		gap: var(--space-3);
-		padding: var(--space-12) var(--space-4);
+		padding: var(--space-8) var(--space-4);
 		color: var(--text-muted);
 		font-size: var(--text-sm);
 	}
@@ -754,12 +771,14 @@
 		background: var(--surface-card);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-xl);
-		overflow: hidden;
+		/* scroll inside the card on narrow screens: never clip the actions column */
+		overflow-x: auto;
 		box-shadow: var(--sf-shadow-card);
 	}
 
 	.sf-clients-table {
 		width: 100%;
+		min-width: 680px;
 		border-collapse: collapse;
 		text-align: left;
 		font-size: var(--text-sm);
@@ -772,12 +791,13 @@
 		font-size: var(--text-xs);
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		padding: var(--space-3) var(--space-4);
+		padding: var(--space-3-5) var(--space-5);
 		border-bottom: 1px solid var(--border);
+		white-space: nowrap;
 	}
 
 	.sf-clients-table td {
-		padding: var(--space-3-5) var(--space-4);
+		padding: var(--space-4) var(--space-5);
 		border-bottom: 1px solid var(--border-subtle);
 		vertical-align: middle;
 	}
@@ -791,13 +811,19 @@
 	}
 
 	.sf-row-inactive {
-		opacity: 0.75;
 		background: var(--surface-muted);
 	}
 
+	/* dim the data, never the action buttons (their contrast must stay AA) */
+	.sf-row-inactive td:not(.sf-cell-actions) {
+		opacity: 0.75;
+	}
+
 	.sf-cell-name {
+		min-width: 180px;
 		font-weight: 600;
 		color: var(--text-emphasis);
+		overflow-wrap: break-word;
 	}
 
 	.sf-cell-desc {
@@ -831,6 +857,34 @@
 	.sf-cell-actions {
 		text-align: right;
 		white-space: nowrap;
+	}
+
+	/* From tablet width the table may scroll inside its card: pin the actions to the visible right
+	   edge (opaque backgrounds mirror the row states). Phones keep plain scrolling so the row name,
+	   which identifies what an action targets, stays readable. */
+	@media (min-width: 640px) {
+		.sf-clients-table th.sf-col-actions,
+		.sf-clients-table td.sf-cell-actions {
+			position: sticky;
+			right: 0;
+			box-shadow: -1px 0 0 var(--border-subtle);
+		}
+
+		.sf-clients-table th.sf-col-actions {
+			background: var(--surface-subtle);
+		}
+
+		.sf-clients-table td.sf-cell-actions {
+			background: var(--surface-card);
+		}
+
+		.sf-clients-table .sf-row-inactive td.sf-cell-actions {
+			background: var(--surface-muted);
+		}
+
+		.sf-clients-table tbody tr:hover td.sf-cell-actions {
+			background: var(--surface-hover);
+		}
 	}
 
 	.sf-actions-group {
